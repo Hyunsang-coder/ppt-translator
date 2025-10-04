@@ -163,7 +163,12 @@ def main() -> None:
                 )
 
                 try:
-                    translated_texts = translate_with_progress(chain, batches, progress_tracker)
+                    translated_texts = translate_with_progress(
+                        chain,
+                        batches,
+                        progress_tracker,
+                        max_concurrency=settings.max_concurrency,
+                    )
                 except Exception as exc:  # pylint: disable=broad-except
                     LOGGER.exception("Translation failed: %s", exc)
                     st.error("번역 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.")

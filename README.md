@@ -48,7 +48,7 @@ streamlit run app.py
 
 ## 핵심 로직 설명
 - **LangChain 체인 구성**: `ChatOpenAI(model=model_name)`을 temperature 없이 초기화하고, PPT 컨텍스트/용어집/사용자 프롬프트를 주입한 뒤 번역 결과를 `|||` 구분자로 반환하도록 유도합니다.
-- **배치 처리 흐름**: `helpers.chunk_paragraphs`가 문단을 순차 배치로 나누고, `translate_with_progress`가 각 배치를 재시도 로직과 함께 순차 호출합니다. LangChain의 `.batch()`는 사용하지 않습니다. 전체 문단 수 대비 약 5개 배치가 되도록 동적으로 크기를 조정해 진행률이 자주 업데이트되도록 했습니다.
+- **배치 처리 흐름**: `helpers.chunk_paragraphs`가 문단을 순차 배치로 나누고, `translate_with_progress`가 재시도 로직과 함께 배치를 처리합니다. `TRANSLATION_MAX_CONCURRENCY`(기본 1) 환경변수로 동시에 처리할 배치 수를 조절할 수 있으며, LangChain의 `.batch()` 대신 사용자 정의 파이프라인을 사용합니다. 전체 문단 수 대비 약 5개 배치가 되도록 동적으로 크기를 조정해 진행률이 자주 업데이트되도록 했습니다.
 - **진행률 표시**: `ProgressTracker`가 Streamlit progress bar와 상태 텍스트를 업데이트하며, 경과 시간과 ETA를 함께 제공합니다.
 - **언어 감지 및 추론**: `LanguageDetector`가 langdetect 결과를 UI용 언어명으로 변환하고, 한국어/영어 우선 규칙으로 타겟 언어를 자동 추론합니다.
 - **서식 유지 전략**: `PPTWriter`가 기존 run 길이를 기반으로 번역 텍스트를 분배해 가능한 한 원본 서식을 유지합니다.
