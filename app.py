@@ -8,7 +8,7 @@ import math
 import queue
 from datetime import datetime
 from pathlib import Path
-from typing import Any, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 import streamlit as st
 
@@ -16,6 +16,8 @@ from src.chains.context_manager import ContextManager
 from src.chains.translation_chain import create_translation_chain, translate_with_progress
 from src.core.ppt_parser import PPTParser
 from src.core.ppt_writer import PPTWriter
+from src.core.text_extractor import ExtractionOptions, docs_to_markdown, extract_pptx_to_docs
+from src.ui.extraction_settings import render_extraction_settings
 from src.ui.file_handler import get_cached_upload, handle_upload
 from src.ui.progress_tracker import ProgressTracker
 from src.ui.settings_panel import render_settings
@@ -34,6 +36,7 @@ LOG_QUEUE_KEY = "ui_log_queue"
 LOG_BUFFER_KEY = "ui_log_buffer"
 LOG_DIRTY_KEY = "ui_log_dirty"
 LOG_HANDLER_KEY = "ui_log_handler_attached"
+EXTRACTION_STATE_KEY = "text_extraction_state"
 
 
 class StreamlitLogHandler(logging.Handler):
@@ -113,7 +116,7 @@ def _approximate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
-def _estimate_tokens_for_batch(batch: dict[str, object]) -> int:
+def _estimate_tokens_for_batch(batch: Dict[str, object]) -> int:
     """Estimate total prompt tokens for a single translation batch."""
 
     texts = str(batch.get("texts", ""))
@@ -142,14 +145,7 @@ def _attach_streamlit_log_handler(log_queue: "queue.SimpleQueue[str]") -> None:
 
 
 def _load_glossary(glossary_file) -> Tuple[dict[str, str] | None, str]:
-    """Load glossary data from the uploaded file.
-
-    Args:
-        glossary_file: Streamlit uploaded file containing glossary definitions.
-
-    Returns:
-        Tuple of glossary mapping (or ``None``) and formatted string for prompts.
-    """
+    """Load glossary data from the uploaded file."""
 
     if glossary_file is None:
         return None, "None"
@@ -205,15 +201,121 @@ def _sanitize_for_filename(value: str, fallback: str) -> str:
     return sanitized or fallback
 
 
-def main() -> None:
-    """Render the Streamlit UI and orchestrate the translation workflow."""
+def _get_extraction_state() -> Dict[str, Any]:
+    state = st.session_state.setdefault(EXTRACTION_STATE_KEY, {})
+    state.setdefault("markdown", "")
+    state.setdefault("file_name", None)
+    state.setdefault("options", None)
+    state.setdefault("slides", 0)
+    state.setdefault("blocks", 0)
+    state.setdefault("stale", False)
+    return state
 
-    settings = get_settings()
+
+def _render_text_extraction_page(settings, extraction_options: ExtractionOptions) -> None:
+    """Render PPT text extraction workflow."""
+
+    st.title("🐱 PPT 번역캣")
+    st.header("🧾 PPT 텍스트 추출")
+    st.markdown("PPT 파일에서 텍스트를 추출하여 Markdown 형식으로 정리할 수 있습니다.")
+
+    uploaded_file = st.file_uploader(
+        "PPTX 파일 업로드",
+        type=["ppt", "pptx"],
+        key="text_extraction_uploader",
+        help="최대 %dMB까지 업로드 가능합니다." % settings.max_upload_size_mb,
+    )
+
+    state = _get_extraction_state()
+    current_signature = {
+        "figures": extraction_options.figures,
+        "charts": extraction_options.charts,
+        "with_notes": extraction_options.with_notes,
+    }
+
+    if state["markdown"]:
+        if uploaded_file and uploaded_file.name != state["file_name"]:
+            state["stale"] = True
+        elif state["options"] != current_signature:
+            state["stale"] = True
+        else:
+            state["stale"] = False
+    else:
+        state["stale"] = False
+
+    convert_clicked = st.button(
+        "Markdown 변환",
+        type="primary",
+        disabled=uploaded_file is None,
+    )
+
+    if convert_clicked and uploaded_file is not None:
+        size_mb = uploaded_file.size / (1024 * 1024)
+        if size_mb > settings.max_upload_size_mb:
+            st.error(
+                f"파일 크기가 {settings.max_upload_size_mb}MB를 초과합니다. 더 작은 파일로 다시 시도해주세요."
+            )
+        else:
+            ppt_buffer = io.BytesIO(uploaded_file.getvalue())
+            ppt_buffer.seek(0)
+            try:
+                docs = extract_pptx_to_docs(ppt_buffer, extraction_options)
+            except Exception as exc:  # pylint: disable=broad-except
+                LOGGER.exception("Extraction failed: %s", exc)
+                st.error("텍스트 추출 중 오류가 발생했습니다. 파일을 다시 확인해주세요.")
+            else:
+                markdown_text = docs_to_markdown(docs, extraction_options)
+                total_blocks = sum(len(doc.blocks) for doc in docs)
+                state.update(
+                    {
+                        "markdown": markdown_text,
+                        "file_name": uploaded_file.name,
+                        "options": current_signature,
+                        "slides": len(docs),
+                        "blocks": total_blocks,
+                        "stale": False,
+                    }
+                )
+                st.session_state["markdown_preview"] = markdown_text
+                if markdown_text.strip():
+                    st.success(f"총 {len(docs)}개의 슬라이드에서 {total_blocks}개의 블록을 추출했습니다.")
+                else:
+                    st.warning("추출된 텍스트가 없습니다.")
+
+    if state["stale"]:
+        st.info("옵션이나 파일이 변경되었습니다. 다시 변환을 실행하면 최신 결과를 확인할 수 있습니다.")
+
+    markdown_value = state["markdown"]
+    if st.session_state.get("markdown_preview") != markdown_value:
+        st.session_state["markdown_preview"] = markdown_value
+
+    st.text_area(
+        "Markdown 미리보기",
+        value=st.session_state.get("markdown_preview", markdown_value),
+        height=400,
+        key="markdown_preview",
+    )
+
+    if markdown_value.strip():
+        safe_name = _sanitize_for_filename(Path(state["file_name"] or "presentation").stem, "presentation")
+        download_name = f"{safe_name}_extracted.md"
+        st.download_button(
+            "📥 Markdown 다운로드",
+            data=markdown_value.encode("utf-8"),
+            file_name=download_name,
+            mime="text/markdown",
+        )
+
+
+def _render_translation_page(settings, settings_state: Dict[str, Any]) -> None:
+    """Render PPT translation workflow."""
+
+    st.title("🐱 PPT 번역캣")
+    st.header("🌐 번역된 PPT 생성")
+    st.markdown("원본 PPT의 디자인을 유지하면서 내부 텍스트만 번역한 새 파일을 생성합니다.")
+
     if not settings.openai_api_key:
         st.warning("OPENAI_API_KEY가 설정되지 않았습니다. 번역 실행 시 에러가 발생할 수 있습니다.")
-
-    st.title("📊 PowerPoint 번역기")
-    st.markdown("LangChain + OpenAI GPT-5를 활용한 고품질 PPT 번역")
 
     log_panel = st.expander("📜 실행 로그", expanded=True)
     log_placeholder = log_panel.empty()
@@ -221,173 +323,198 @@ def main() -> None:
     _attach_streamlit_log_handler(log_queue)
     _refresh_ui_logs(log_placeholder, log_buffer)
 
-    uploaded_file = st.file_uploader("PPT 파일 업로드", type=["ppt", "pptx"])
+    uploaded_file = st.file_uploader(
+        "PPT 파일 업로드",
+        type=["ppt", "pptx"],
+        key="translation_uploader",
+        help="최대 %dMB까지 업로드 가능합니다." % settings.max_upload_size_mb,
+    )
 
     ppt_buffer = None
     if uploaded_file:
         ppt_buffer = handle_upload(uploaded_file, max_size_mb=settings.max_upload_size_mb)
         _refresh_ui_logs(log_placeholder, log_buffer)
 
-    if ppt_buffer:
-        settings_state = render_settings()
-        _refresh_ui_logs(log_placeholder, log_buffer)
+    if not ppt_buffer:
+        return
 
-        if st.button("🚀 번역 시작", type="primary"):
-            with st.spinner("번역 진행 중..."):
-                log_buffer.clear()
-                while True:
-                    try:
-                        log_queue.get_nowait()
-                    except queue.Empty:
-                        break
-                st.session_state[LOG_DIRTY_KEY] = True
-                if st.session_state.get(LOG_HANDLER_KEY, False) is False:
-                    _attach_streamlit_log_handler(log_queue)
-                _render_log_panel(log_placeholder, log_buffer)
-
-                cached_buffer = get_cached_upload()
-                if cached_buffer is None:
-                    st.error("업로드된 파일을 찾을 수 없습니다. 다시 업로드해주세요.")
-                    return
-
-                parser = PPTParser()
-                paragraphs, presentation = parser.extract_paragraphs(cached_buffer)
-                _refresh_ui_logs(log_placeholder, log_buffer)
-
-                if not paragraphs:
-                    st.warning("번역할 텍스트를 찾을 수 없습니다.")
-                    return
-
-                if len(presentation.slides) > 100:
-                    st.warning("슬라이드가 100장을 초과합니다. 처리 시간이 길어질 수 있습니다.")
-
-                context_manager = ContextManager(paragraphs)
-                ppt_context = context_manager.build_global_context()
-
-                glossary, glossary_terms = _load_glossary(settings_state.get("glossary_file"))
-                prepared_texts: List[str] = [info.original_text for info in paragraphs]
-                if glossary:
-                    prepared_texts = GlossaryLoader.apply_glossary_to_texts(prepared_texts, glossary)
-
-                detector = LanguageDetector()
-                sample_text = "\n".join(paragraph.original_text for paragraph in paragraphs[:50])
-
-                source_language = settings_state.get("source_lang")
-                target_language = settings_state.get("target_lang")
-
-                if source_language == "Auto":
-                    source_language = detector.detect_language(sample_text)
-                    st.info(f"🔍 소스 언어 감지: {source_language}")
-
-                if target_language == "Auto":
-                    target_language = detector.infer_target_language(source_language)
-                    st.info(f"🔍 타겟 언어 추론: {target_language}")
-
-                batch_size = _determine_batch_size(len(paragraphs), settings)
-
-                batches = chunk_paragraphs(
-                    paragraphs,
-                    batch_size=batch_size,
-                    ppt_context=ppt_context,
-                    glossary_terms=glossary_terms,
-                    prepared_texts=prepared_texts,
-                )
-
-                LOGGER.info(
-                    "Prepared %d batches (batch size %d, total paragraphs %d).",
-                    len(batches),
-                    batch_size,
-                    len(paragraphs),
-                )
-                _refresh_ui_logs(log_placeholder, log_buffer)
-
-                if not batches:
-                    st.warning("번역할 배치를 생성하지 못했습니다.")
-                    return
-
-                estimated_tokens = _estimate_tokens_for_batch(batches[0])
-                safe_concurrency = max(
-                    1,
-                    min(
-                        int(settings.max_concurrency),
-                        max(1, settings.tpm_limit // max(estimated_tokens, 1)),
-                    ),
-                )
-
-                LOGGER.info(
-                    "Estimated %d tokens per batch; using concurrency=%d (config max=%d, TPM limit=%d).",
-                    estimated_tokens,
-                    safe_concurrency,
-                    settings.max_concurrency,
-                    settings.tpm_limit,
-                )
-                _refresh_ui_logs(log_placeholder, log_buffer)
-
-                st.caption(
-                    f"배치 크기: {batch_size} 문장 (총 {len(paragraphs)} 문장) | 동시 실행: {safe_concurrency}"
-                )
-
-                progress_tracker = ProgressTracker(
-                    total_batches=len(batches),
-                    total_sentences=len(paragraphs),
-                    log_update_fn=lambda: _refresh_ui_logs(log_placeholder, log_buffer),
-                )
-
-                chain = create_translation_chain(
-                    model_name=settings_state.get("model", "gpt-5"),
-                    source_lang=source_language,
-                    target_lang=target_language,
-                    user_prompt=settings_state.get("user_prompt"),
-                )
-
+    if st.button("🚀 번역 시작", type="primary"):
+        with st.spinner("번역 진행 중..."):
+            log_buffer.clear()
+            while True:
                 try:
-                    LOGGER.info(
-                        "Starting translation with concurrency=%d and model=%s.",
-                        safe_concurrency,
-                        settings_state.get("model", "gpt-5"),
-                    )
-                    _refresh_ui_logs(log_placeholder, log_buffer)
-                    translated_texts = translate_with_progress(
-                        chain,
-                        batches,
-                        progress_tracker,
-                        max_concurrency=safe_concurrency,
-                    )
-                except Exception as exc:  # pylint: disable=broad-except
-                    LOGGER.exception("Translation failed: %s", exc)
-                    st.error("번역 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.")
-                    return
+                    log_queue.get_nowait()
+                except queue.Empty:
+                    break
+            st.session_state[LOG_DIRTY_KEY] = True
+            if st.session_state.get(LOG_HANDLER_KEY, False) is False:
+                _attach_streamlit_log_handler(log_queue)
+            _render_log_panel(log_placeholder, log_buffer)
 
-                if glossary:
-                    translated_texts = [
-                        GlossaryLoader.apply_glossary_to_translation(text, glossary)
-                        for text in translated_texts
-                    ]
+            cached_buffer = get_cached_upload()
+            if cached_buffer is None:
+                st.error("업로드된 파일을 찾을 수 없습니다. 다시 업로드해주세요.")
+                return
 
-                writer = PPTWriter()
-                output_buffer = writer.apply_translations(paragraphs, translated_texts, presentation)
-                _refresh_ui_logs(log_placeholder, log_buffer)
+            parser = PPTParser()
+            paragraphs, presentation = parser.extract_paragraphs(cached_buffer)
+            _refresh_ui_logs(log_placeholder, log_buffer)
 
-                total_elapsed = progress_tracker.finish()
-                minutes, seconds = divmod(total_elapsed, 60)
-                LOGGER.info("Translation completed in %d분 %.1f초", int(minutes), seconds)
-                _refresh_ui_logs(log_placeholder, log_buffer)
-                st.success(f"✅ 번역 완료! 총 소요 시간: {int(minutes)}분 {seconds:.1f}초")
+            if not paragraphs:
+                st.warning("번역할 텍스트를 찾을 수 없습니다.")
+                return
 
-                original_name = st.session_state.get("uploaded_ppt_name", "presentation")
-                original_stem = Path(original_name).stem or "presentation"
-                original_stem = _sanitize_for_filename(original_stem, "presentation")
-                clean_model = _sanitize_for_filename(settings_state.get("model", "model"), "model")
-                timestamp = datetime.now().strftime("%Y%m%d")
-                safe_target_lang = _sanitize_for_filename(target_language, "target")
-                download_name = f"{safe_target_lang}_{original_stem}_{clean_model}_{timestamp}.pptx"
+            if len(presentation.slides) > 100:
+                st.warning("슬라이드가 100장을 초과합니다. 처리 시간이 길어질 수 있습니다.")
 
-                st.download_button(
-                    label="📥 번역된 PPT 다운로드",
-                    data=output_buffer.getvalue(),
-                    file_name=download_name,
-                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            context_manager = ContextManager(paragraphs)
+            ppt_context = context_manager.build_global_context()
+
+            glossary, glossary_terms = _load_glossary(settings_state.get("glossary_file"))
+            prepared_texts: List[str] = [info.original_text for info in paragraphs]
+            if glossary:
+                prepared_texts = GlossaryLoader.apply_glossary_to_texts(prepared_texts, glossary)
+
+            detector = LanguageDetector()
+            sample_text = "\n".join(paragraph.original_text for paragraph in paragraphs[:50])
+
+            source_language = settings_state.get("source_lang")
+            target_language = settings_state.get("target_lang")
+
+            if source_language == "Auto":
+                source_language = detector.detect_language(sample_text)
+                st.info(f"🔍 소스 언어 감지: {source_language}")
+
+            if target_language == "Auto":
+                target_language = detector.infer_target_language(source_language)
+                st.info(f"🔍 타겟 언어 추론: {target_language}")
+
+            batch_size = _determine_batch_size(len(paragraphs), settings)
+
+            batches = chunk_paragraphs(
+                paragraphs,
+                batch_size=batch_size,
+                ppt_context=ppt_context,
+                glossary_terms=glossary_terms,
+                prepared_texts=prepared_texts,
+            )
+
+            LOGGER.info(
+                "Prepared %d batches (batch size %d, total paragraphs %d).",
+                len(batches),
+                batch_size,
+                len(paragraphs),
+            )
+            _refresh_ui_logs(log_placeholder, log_buffer)
+
+            if not batches:
+                st.warning("번역할 배치를 생성하지 못했습니다.")
+                return
+
+            estimated_tokens = _estimate_tokens_for_batch(batches[0])
+            safe_concurrency = max(
+                1,
+                min(
+                    int(settings.max_concurrency),
+                    max(1, settings.tpm_limit // max(estimated_tokens, 1)),
+                ),
+            )
+
+            LOGGER.info(
+                "Estimated %d tokens per batch; using concurrency=%d (config max=%d, TPM limit=%d).",
+                estimated_tokens,
+                safe_concurrency,
+                settings.max_concurrency,
+                settings.tpm_limit,
+            )
+            _refresh_ui_logs(log_placeholder, log_buffer)
+
+            st.caption(
+                f"배치 크기: {batch_size} 문장 (총 {len(paragraphs)} 문장) | 최대 동시 실행: {safe_concurrency}"
+            )
+
+            progress_tracker = ProgressTracker(
+                total_batches=len(batches),
+                total_sentences=len(paragraphs),
+                log_update_fn=lambda: _refresh_ui_logs(log_placeholder, log_buffer),
+            )
+
+            chain = create_translation_chain(
+                model_name=settings_state.get("model", "gpt-5"),
+                source_lang=source_language,
+                target_lang=target_language,
+                user_prompt=settings_state.get("user_prompt"),
+            )
+
+            try:
+                LOGGER.info(
+                    "Starting translation with concurrency=%d and model=%s.",
+                    safe_concurrency,
+                    settings_state.get("model", "gpt-5"),
                 )
+                _refresh_ui_logs(log_placeholder, log_buffer)
+                translated_texts = translate_with_progress(
+                    chain,
+                    batches,
+                    progress_tracker,
+                    max_concurrency=safe_concurrency,
+                )
+            except Exception as exc:  # pylint: disable=broad-except
+                LOGGER.exception("Translation failed: %s", exc)
+                st.error("번역 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.")
+                return
+
+            if glossary:
+                translated_texts = [
+                    GlossaryLoader.apply_glossary_to_translation(text, glossary)
+                    for text in translated_texts
+                ]
+
+            writer = PPTWriter()
+            output_buffer = writer.apply_translations(paragraphs, translated_texts, presentation)
+            _refresh_ui_logs(log_placeholder, log_buffer)
+
+            total_elapsed = progress_tracker.finish()
+            minutes, seconds = divmod(total_elapsed, 60)
+            LOGGER.info("Translation completed in %d분 %.1f초", int(minutes), seconds)
+            _refresh_ui_logs(log_placeholder, log_buffer)
+            st.success(f"✅ 번역 완료! 총 소요 시간: {int(minutes)}분 {seconds:.1f}초")
+
+            original_name = st.session_state.get("uploaded_ppt_name", "presentation")
+            original_stem = Path(original_name).stem or "presentation"
+            original_stem = _sanitize_for_filename(original_stem, "presentation")
+            clean_model = _sanitize_for_filename(settings_state.get("model", "model"), "model")
+            timestamp = datetime.now().strftime("%Y%m%d")
+            safe_target_lang = _sanitize_for_filename(target_language, "target")
+            download_name = f"{safe_target_lang}_{original_stem}_{clean_model}_{timestamp}.pptx"
+
+            st.download_button(
+                label="📥 번역된 PPT 다운로드",
+                data=output_buffer.getvalue(),
+                file_name=download_name,
+                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            )
+
+
+def main() -> None:
+    """Render the Streamlit UI and orchestrate workflows."""
+
+    settings = get_settings()
+
+    st.sidebar.markdown("### 기능 선택")
+    feature = st.sidebar.radio(
+        "기능 선택",
+        options=("텍스트 추출", "PPT 번역"),
+        index=0,
+        label_visibility="collapsed",
+    )
+
+    if feature == "텍스트 추출":
+        extraction_options = render_extraction_settings(st.sidebar)
+        _render_text_extraction_page(settings, extraction_options)
+    else:
+        translation_settings = render_settings(st.sidebar)
+        _render_translation_page(settings, translation_settings)
 
 
 if __name__ == "__main__":
