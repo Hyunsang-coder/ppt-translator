@@ -66,6 +66,7 @@ def chunk_paragraphs(
                 "glossary_terms": glossary_terms,
                 "start_idx": start_idx + 1,
                 "end_idx": start_idx + len(chunk),
+                "expected_count": len(chunk),
             }
         )
 

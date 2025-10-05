@@ -13,7 +13,6 @@ import streamlit as st
 
 from src.chains.context_manager import ContextManager
 from src.chains.translation_chain import create_translation_chain, translate_with_progress
-from src.core.image_optimizer import ImageOptimizer
 from src.core.ppt_parser import PPTParser
 from src.core.ppt_writer import PPTWriter
 from src.ui.file_handler import get_cached_upload, handle_upload
@@ -147,6 +146,13 @@ def main() -> None:
                     prepared_texts=prepared_texts,
                 )
 
+                LOGGER.info(
+                    "Prepared %d batches (batch size %d, total paragraphs %d).",
+                    len(batches),
+                    batch_size,
+                    len(paragraphs),
+                )
+
                 if not batches:
                     st.warning("번역할 배치를 생성하지 못했습니다.")
                     return
@@ -163,6 +169,11 @@ def main() -> None:
                 )
 
                 try:
+                    LOGGER.info(
+                        "Starting translation with concurrency=%d and model=%s.",
+                        settings.max_concurrency,
+                        settings_state.get("model", "gpt-5"),
+                    )
                     translated_texts = translate_with_progress(
                         chain,
                         batches,
@@ -179,9 +190,6 @@ def main() -> None:
                         GlossaryLoader.apply_glossary_to_translation(text, glossary)
                         for text in translated_texts
                     ]
-
-                image_optimizer = ImageOptimizer()
-                presentation = image_optimizer.optimise(presentation)
 
                 writer = PPTWriter()
                 output_buffer = writer.apply_translations(paragraphs, translated_texts, presentation)

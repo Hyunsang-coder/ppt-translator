@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from typing import Dict, List
@@ -31,7 +32,9 @@ You are a professional translator specializing in PowerPoint presentations.
 **Task:**
 Translate the following texts from {source_lang} to {target_lang}.
 Maintain consistency with the context and glossary.
-Return ONLY the translated texts in the same order, separated by "|||".
+Return EXACTLY {expected_count} translated texts as a JSON array of strings.
+Do not add explanations, code fences, or additional fields.
+Expected output format: ["translation 1", "translation 2", ...]
 
 **Texts to translate:**
 {texts}
@@ -68,6 +71,7 @@ def create_translation_chain(
             source_lang=lambda _: source_lang,
             target_lang=lambda _: target_lang,
             user_prompt=lambda _: default_prompt,
+            expected_count=lambda x: int(x.get("expected_count", 0)),
         )
         | PromptTemplate.from_template(PROMPT_TEMPLATE)
         | llm
@@ -89,7 +93,7 @@ def translate_batch_with_retry(chain, batch: Dict[str, object]) -> str:
         batch: Batch payload containing texts and context information.
 
     Returns:
-        Raw translation string with entries separated by ``|||``.
+        Raw translation string expected to be JSON formatted.
     """
 
     LOGGER.debug("Invoking translation chain for batch %s-%s", batch.get("start_idx"), batch.get("end_idx"))
@@ -126,15 +130,21 @@ def translate_with_progress(
         progress_tracker.total_batches = total_batches
         progress_tracker.total_sentences = sum(len(batch.get("paragraphs", [])) for batch in batches)
 
+    LOGGER.info("Beginning translation of %d batches (total %d sentences).", total_batches, progress_tracker.total_sentences)
+
     if max_concurrency <= 1 or total_batches <= 1:
         for index, batch in enumerate(batches, start=1):
             start_idx = int(batch.get("start_idx", index))
             end_idx = int(batch.get("end_idx", index))
             progress_tracker.update(index, start_idx, end_idx)
 
+            LOGGER.info("Translating batch %d/%d (%d-%d).", index, total_batches, start_idx, end_idx)
+
             parts = _translate_single_batch(chain, batch)
             translations.extend(parts)
             progress_tracker.complete(index)
+
+            LOGGER.info("Completed batch %d/%d (received %d parts).", index, total_batches, len(parts))
 
         progress_tracker.finish()
         return translations
@@ -157,6 +167,13 @@ def translate_with_progress(
     def submit_batch(executor: ThreadPoolExecutor, metadata: Dict[str, object], active_futures: Dict) -> None:
         batch_index = metadata["index"]
         progress_tracker.update(batch_index, metadata["start_idx"], metadata["end_idx"])
+        LOGGER.info(
+            "Submitting batch %d/%d (%d-%d) to executor.",
+            batch_index,
+            total_batches,
+            metadata["start_idx"],
+            metadata["end_idx"],
+        )
         future = executor.submit(_translate_single_batch, chain, metadata["batch"])
         active_futures[future] = metadata
 
@@ -188,6 +205,13 @@ def translate_with_progress(
                     translations_per_batch[batch_index - 1] = parts
                     progress_tracker.complete(batch_index)
 
+                    LOGGER.info(
+                        "Completed batch %d/%d (received %d parts).",
+                        batch_index,
+                        total_batches,
+                        len(parts),
+                    )
+
                     try:
                         next_metadata = next(meta_iterator)
                     except StopIteration:
@@ -208,20 +232,61 @@ def translate_with_progress(
 def _translate_single_batch(chain, batch: Dict[str, object]) -> List[str]:
     """Invoke translation for a single batch and normalise the response length."""
 
-    raw_result = translate_batch_with_retry(chain, batch)
     expected_count = len(batch.get("paragraphs", []))
-    parts = [item.strip() for item in raw_result.split("|||")]
+    raw_result = translate_batch_with_retry(chain, batch)
+    parts = _parse_translation_output(raw_result, expected_count)
+
+    if len(parts) != expected_count:
+        parts = _force_match_expected(parts, expected_count)
+
+    return parts
+
+
+def _parse_translation_output(raw_result: str, expected_count: int) -> List[str]:
+    """Parse the LLM response favouring strict JSON output."""
+
+    cleaned = raw_result.strip()
+
+    if cleaned.startswith("```"):
+        without_prefix = cleaned[3:].lstrip()
+        if without_prefix.lower().startswith("json"):
+            without_prefix = without_prefix[4:].lstrip()
+        cleaned = without_prefix
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        cleaned = cleaned.strip()
+
+    try:
+        parsed = json.loads(cleaned)
+        if isinstance(parsed, list):
+            if len(parsed) != expected_count:
+                LOGGER.info(
+                    "Parsed JSON array length %d differs from expected %d.",
+                    len(parsed),
+                    expected_count,
+                )
+            return [str(item).strip() for item in parsed]
+    except json.JSONDecodeError:
+        LOGGER.debug("Failed to parse translation output as JSON. Falling back to delimiter split.")
+
+    parts = [item.strip() for item in cleaned.split("|||")]
+    if len(parts) == 1 and expected_count > 1:
+        LOGGER.debug("Delimiter split produced a single item; retrying with newline split.")
+        parts = [item.strip() for item in cleaned.splitlines() if item.strip()]
+
+    return parts
+
+
+def _force_match_expected(parts: List[str], expected_count: int) -> List[str]:
+    """Pad or trim decoded translations without emitting warnings."""
 
     if len(parts) < expected_count:
-        LOGGER.warning(
-            "Received %d translations but expected %d; padding with empty strings.",
-            len(parts),
-            expected_count,
-        )
-        parts.extend(["" for _ in range(expected_count - len(parts))])
+        missing = expected_count - len(parts)
+        LOGGER.debug("Padding %d missing translations with empty strings due to format mismatch.", missing)
+        parts = parts + ["" for _ in range(missing)]
     elif len(parts) > expected_count:
-        LOGGER.warning(
-            "Received %d translations but expected %d; truncating extra results.",
+        LOGGER.debug(
+            "Received %d translations but expected %d; trimming extras after successful parse.",
             len(parts),
             expected_count,
         )
