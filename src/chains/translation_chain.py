@@ -32,6 +32,7 @@ You are a professional translator specializing in PowerPoint presentations.
 **Task:**
 Translate the following texts from {source_lang} to {target_lang}.
 Maintain consistency with the context and glossary.
+If a sentence or phrase appears more than once in the source, translate it identically every time unless the glossary overrides it.
 Return EXACTLY {expected_count} translated texts as a JSON array of strings.
 Do not add explanations, code fences, or additional fields.
 Expected output format: ["translation 1", "translation 2", ...]
@@ -121,14 +122,18 @@ def translate_with_progress(
     translations: List[str] = []
     total_batches = len(batches)
 
+    total_sentences = sum(len(batch.get("paragraphs", [])) for batch in batches)
+
     if progress_tracker is None:
         progress_tracker = ProgressTracker(
             total_batches=total_batches,
-            total_sentences=sum(len(batch.get("paragraphs", [])) for batch in batches),
+            total_sentences=total_sentences,
         )
     else:
-        progress_tracker.total_batches = total_batches
-        progress_tracker.total_sentences = sum(len(batch.get("paragraphs", [])) for batch in batches)
+        progress_tracker.reset(
+            total_batches=total_batches,
+            total_sentences=total_sentences,
+        )
 
     LOGGER.info("Beginning translation of %d batches (total %d sentences).", total_batches, progress_tracker.total_sentences)
 
@@ -136,17 +141,15 @@ def translate_with_progress(
         for index, batch in enumerate(batches, start=1):
             start_idx = int(batch.get("start_idx", index))
             end_idx = int(batch.get("end_idx", index))
-            progress_tracker.update(index, start_idx, end_idx)
 
             LOGGER.info("Translating batch %d/%d (%d-%d).", index, total_batches, start_idx, end_idx)
 
             parts = _translate_single_batch(chain, batch)
             translations.extend(parts)
-            progress_tracker.complete(index)
+            progress_tracker.batch_completed(start_idx, end_idx)
 
             LOGGER.info("Completed batch %d/%d (received %d parts).", index, total_batches, len(parts))
 
-        progress_tracker.finish()
         return translations
 
     max_concurrency = max(1, min(int(max_concurrency), total_batches))
@@ -166,7 +169,6 @@ def translate_with_progress(
 
     def submit_batch(executor: ThreadPoolExecutor, metadata: Dict[str, object], active_futures: Dict) -> None:
         batch_index = metadata["index"]
-        progress_tracker.update(batch_index, metadata["start_idx"], metadata["end_idx"])
         LOGGER.info(
             "Submitting batch %d/%d (%d-%d) to executor.",
             batch_index,
@@ -203,7 +205,7 @@ def translate_with_progress(
                         raise
 
                     translations_per_batch[batch_index - 1] = parts
-                    progress_tracker.complete(batch_index)
+                    progress_tracker.batch_completed(metadata["start_idx"], metadata["end_idx"])
 
                     LOGGER.info(
                         "Completed batch %d/%d (received %d parts).",
@@ -225,7 +227,6 @@ def translate_with_progress(
         if batch_parts is not None:
             translations.extend(batch_parts)
 
-    progress_tracker.finish()
     return translations
 
 

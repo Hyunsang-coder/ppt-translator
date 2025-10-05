@@ -17,41 +17,51 @@ class ProgressTracker:
     total_sentences: int
     log_update_fn: Optional[Callable[[], None]] = field(default=None, repr=False)
     total_elapsed: float = field(init=False, default=0.0)
+    _completed_batches: int = field(init=False, default=0)
 
     def __post_init__(self) -> None:
         self.progress_bar = st.progress(0)
         self.status_text = st.empty()
         self.start_time = time.time()
-        self._refresh_logs()
-
-    def update(self, current_batch: int, batch_start_idx: int, batch_end_idx: int) -> None:
-        """Update the UI before processing a batch.
-
-        Args:
-            current_batch: 1-based index of the batch.
-            batch_start_idx: 1-based starting paragraph index for this batch.
-            batch_end_idx: 1-based ending paragraph index for this batch.
-        """
-
-        ratio = current_batch / max(self.total_batches, 1)
-        elapsed = time.time() - self.start_time
-        eta = (elapsed / ratio) * (1 - ratio) if ratio > 0 else 0
-
         self.status_text.info(
-            "📊 번역 중... 배치 %d/%d (%d~%d/%d 문장) | 경과: %.1fs | 예상 잔여: %.1fs"
-            % (current_batch, self.total_batches, batch_start_idx, batch_end_idx, self.total_sentences, elapsed, eta)
+            "📊 번역 대기 중... (0/%d 배치)" % max(self.total_batches, 1)
         )
         self._refresh_logs()
 
-    def complete(self, current_batch: int) -> None:
-        """Mark a batch as completed in the progress bar.
+    def reset(self, total_batches: int, total_sentences: int) -> None:
+        """Reset tracker state for a new translation run."""
 
-        Args:
-            current_batch: 1-based index of the recently finished batch.
-        """
+        self.total_batches = total_batches
+        self.total_sentences = total_sentences
+        self._completed_batches = 0
+        self.start_time = time.time()
+        self.progress_bar.progress(0)
+        self.status_text.info(
+            "📊 번역 대기 중... (0/%d 배치)" % max(self.total_batches, 1)
+        )
+        self._refresh_logs()
 
-        ratio = current_batch / max(self.total_batches, 1)
+    def batch_completed(self, batch_start_idx: int | None = None, batch_end_idx: int | None = None) -> None:
+        """Record completion of a batch and refresh the status."""
+
+        self._completed_batches = min(self.total_batches, self._completed_batches + 1)
+        ratio = self._completed_batches / max(self.total_batches, 1)
         self.progress_bar.progress(ratio)
+
+        if self._completed_batches < self.total_batches:
+            if batch_start_idx is not None and batch_end_idx is not None:
+                window = f" ({batch_start_idx}~{batch_end_idx})"
+            else:
+                window = ""
+            message = "📊 번역 중... 완료 %d/%d%s" % (
+                self._completed_batches,
+                self.total_batches,
+                window,
+            )
+        else:
+            message = "📊 번역이 완료되었습니다. PPT 반영 중..."
+
+        self.status_text.info(message)
         self._refresh_logs()
 
     def finish(self) -> float:

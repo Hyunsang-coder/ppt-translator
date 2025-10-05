@@ -33,6 +33,7 @@ MAX_UI_LOG_LINES = 400
 LOG_QUEUE_KEY = "ui_log_queue"
 LOG_BUFFER_KEY = "ui_log_buffer"
 LOG_DIRTY_KEY = "ui_log_dirty"
+LOG_HANDLER_KEY = "ui_log_handler_attached"
 
 
 class StreamlitLogHandler(logging.Handler):
@@ -64,6 +65,7 @@ def _initialise_log_state() -> tuple[queue.SimpleQueue[str], List[str]]:
         st.session_state[LOG_BUFFER_KEY] = []
     if LOG_DIRTY_KEY not in st.session_state:
         st.session_state[LOG_DIRTY_KEY] = True
+    st.session_state.setdefault(LOG_HANDLER_KEY, False)
     return st.session_state[LOG_QUEUE_KEY], st.session_state[LOG_BUFFER_KEY]
 
 
@@ -129,13 +131,14 @@ def _estimate_tokens_for_batch(batch: dict[str, object]) -> int:
 
 
 def _attach_streamlit_log_handler(log_queue: "queue.SimpleQueue[str]") -> None:
-    """Attach (or replace) the Streamlit log handler on the root logger."""
+    """Attach the Streamlit log handler on the root logger once per session."""
+
+    if st.session_state.get(LOG_HANDLER_KEY):
+        return
 
     root_logger = logging.getLogger()
-    for handler in list(root_logger.handlers):
-        if isinstance(handler, StreamlitLogHandler):
-            root_logger.removeHandler(handler)
     root_logger.addHandler(StreamlitLogHandler(log_queue))
+    st.session_state[LOG_HANDLER_KEY] = True
 
 
 def _load_glossary(glossary_file) -> Tuple[dict[str, str] | None, str]:
@@ -238,6 +241,8 @@ def main() -> None:
                     except queue.Empty:
                         break
                 st.session_state[LOG_DIRTY_KEY] = True
+                if st.session_state.get(LOG_HANDLER_KEY, False) is False:
+                    _attach_streamlit_log_handler(log_queue)
                 _render_log_panel(log_placeholder, log_buffer)
 
                 cached_buffer = get_cached_upload()
@@ -363,7 +368,7 @@ def main() -> None:
                 output_buffer = writer.apply_translations(paragraphs, translated_texts, presentation)
                 _refresh_ui_logs(log_placeholder, log_buffer)
 
-                total_elapsed = progress_tracker.get_total_elapsed()
+                total_elapsed = progress_tracker.finish()
                 minutes, seconds = divmod(total_elapsed, 60)
                 LOGGER.info("Translation completed in %d분 %.1f초", int(minutes), seconds)
                 _refresh_ui_logs(log_placeholder, log_buffer)
