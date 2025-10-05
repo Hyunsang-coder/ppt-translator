@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import html
 import io
 import logging
 import math
 import queue
-from itertools import islice
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -416,8 +416,18 @@ def _render_translation_page(settings, settings_state: Dict[str, Any]) -> None:
                     )
                     preview = sorted(duplicates_info.items(), key=lambda item: item[1], reverse=True)
                     with st.expander("반복 문구 미리보기", expanded=False):
-                        for text, count in islice(preview, 5):
-                            st.write(f"{count}×: {text}")
+                        rows = "<br>".join(
+                            f"<strong>{count}×</strong>: {html.escape(text)}"
+                            for text, count in preview
+                        )
+                        st.markdown(
+                            """
+                            <div style="max-height: 280px; overflow-y: auto; padding-right: 6px;">
+                                {rows}
+                            </div>
+                            """.format(rows=rows or "<em>중복 문장이 없습니다.</em>"),
+                            unsafe_allow_html=True,
+                        )
                 else:
                     st.caption("반복 문구 사전 처리 결과 중복 문장이 발견되지 않았습니다.")
 
@@ -571,9 +581,9 @@ def main() -> None:
     )
 
     if CAT_IMAGE_SCALED is not None:
-        st.sidebar.image(CAT_IMAGE_SCALED, use_container_width=True)
+        st.sidebar.image(CAT_IMAGE_SCALED)
     elif CAT_IMAGE is not None:
-        st.sidebar.image(CAT_IMAGE, use_container_width=True)
+        st.sidebar.image(CAT_IMAGE)
 
     st.sidebar.markdown("### 기능 선택")
     feature = st.sidebar.radio(
