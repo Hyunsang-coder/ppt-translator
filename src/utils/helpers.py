@@ -106,15 +106,22 @@ def split_text_into_segments(
 
     diff = len(text) - sum(allocations)
     index = 0
-    while diff != 0 and allocations:
+    max_iterations = max(1, len(allocations) * 4)
+    iterations = 0
+    while diff != 0 and allocations and iterations < max_iterations:
         adj_index = index % len(allocations)
         proposed = allocations[adj_index] + (1 if diff > 0 else -1)
         if proposed < 1:
             index += 1
+            iterations += 1
             continue
         allocations[adj_index] = proposed
         diff = len(text) - sum(allocations)
         index += 1
+        iterations += 1
+
+    if diff != 0 and allocations:
+        allocations[-1] = max(1, allocations[-1] + diff)
 
     parts: List[str] = []
     cursor = 0

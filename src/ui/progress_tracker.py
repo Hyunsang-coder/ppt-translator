@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from typing import Callable, Optional
 
 import streamlit as st
 
@@ -14,12 +15,14 @@ class ProgressTracker:
 
     total_batches: int
     total_sentences: int
+    log_update_fn: Optional[Callable[[], None]] = field(default=None, repr=False)
     total_elapsed: float = field(init=False, default=0.0)
 
     def __post_init__(self) -> None:
         self.progress_bar = st.progress(0)
         self.status_text = st.empty()
         self.start_time = time.time()
+        self._refresh_logs()
 
     def update(self, current_batch: int, batch_start_idx: int, batch_end_idx: int) -> None:
         """Update the UI before processing a batch.
@@ -38,6 +41,7 @@ class ProgressTracker:
             "📊 번역 중... 배치 %d/%d (%d~%d/%d 문장) | 경과: %.1fs | 예상 잔여: %.1fs"
             % (current_batch, self.total_batches, batch_start_idx, batch_end_idx, self.total_sentences, elapsed, eta)
         )
+        self._refresh_logs()
 
     def complete(self, current_batch: int) -> None:
         """Mark a batch as completed in the progress bar.
@@ -48,6 +52,7 @@ class ProgressTracker:
 
         ratio = current_batch / max(self.total_batches, 1)
         self.progress_bar.progress(ratio)
+        self._refresh_logs()
 
     def finish(self) -> float:
         """Finalize the progress display once translation completes."""
@@ -59,9 +64,17 @@ class ProgressTracker:
             "✅ 번역이 완료되었습니다! 총 소요: %d분 %.1f초"
             % (int(minutes), seconds)
         )
+        self._refresh_logs()
         return self.total_elapsed
 
     def get_total_elapsed(self) -> float:
         """Return the measured total elapsed time for the translation run."""
 
         return self.total_elapsed
+
+    def _refresh_logs(self) -> None:
+        """Render buffered logs if new entries are available."""
+
+        if self.log_update_fn is None:
+            return
+        self.log_update_fn()

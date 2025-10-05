@@ -34,7 +34,13 @@ class PPTWriter:
         """
 
         translation_list: List[str] = list(translations)
-        for paragraph_info, translation in zip(paragraphs, translation_list):
+        total = len(translation_list)
+        LOGGER.info("Starting to apply %d translated paragraphs to presentation.", total)
+
+        for idx, (paragraph_info, translation) in enumerate(zip(paragraphs, translation_list), start=1):
+            if idx % 100 == 0 or idx == total:
+                LOGGER.info("Applying translation %d/%d...", idx, total)
+
             paragraph = paragraph_info.paragraph
             runs = list(paragraph.runs)
 
@@ -48,6 +54,7 @@ class PPTWriter:
             for run, segment in zip(runs, segments):
                 run.text = segment
 
+        LOGGER.info("Saving translated presentation to buffer...")
         buffer = io.BytesIO()
         presentation.save(buffer)
         buffer.seek(0)

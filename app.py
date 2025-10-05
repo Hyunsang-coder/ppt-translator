@@ -5,9 +5,10 @@ from __future__ import annotations
 import io
 import logging
 import math
+import queue
 from datetime import datetime
 from pathlib import Path
-from typing import List, Tuple
+from typing import Any, List, Tuple
 
 import streamlit as st
 
@@ -27,6 +28,114 @@ logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(name)s: %(mess
 LOGGER = logging.getLogger(__name__)
 
 st.set_page_config(page_title="PPT Translator", page_icon="📊", layout="wide")
+
+MAX_UI_LOG_LINES = 400
+LOG_QUEUE_KEY = "ui_log_queue"
+LOG_BUFFER_KEY = "ui_log_buffer"
+LOG_DIRTY_KEY = "ui_log_dirty"
+
+
+class StreamlitLogHandler(logging.Handler):
+    """Thread-safe log handler that enqueues messages for the UI thread."""
+
+    def __init__(self, target_queue: "queue.SimpleQueue[str]") -> None:
+        super().__init__(level=logging.INFO)
+        self._queue = target_queue
+        self.setFormatter(logging.Formatter("[%(levelname)s] %(name)s: %(message)s"))
+
+    def emit(self, record: logging.LogRecord) -> None:  # noqa: D401 - see class docstring
+        try:
+            message = self.format(record)
+        except Exception:  # pragma: no cover - defensive
+            return
+
+        try:
+            self._queue.put_nowait(message)
+        except queue.Full:  # pragma: no cover - queue is unbounded but defensive check
+            pass
+
+
+def _initialise_log_state() -> tuple[queue.SimpleQueue[str], List[str]]:
+    """Ensure session state contains queue and buffer for UI logs."""
+
+    if LOG_QUEUE_KEY not in st.session_state:
+        st.session_state[LOG_QUEUE_KEY] = queue.SimpleQueue()
+    if LOG_BUFFER_KEY not in st.session_state:
+        st.session_state[LOG_BUFFER_KEY] = []
+    if LOG_DIRTY_KEY not in st.session_state:
+        st.session_state[LOG_DIRTY_KEY] = True
+    return st.session_state[LOG_QUEUE_KEY], st.session_state[LOG_BUFFER_KEY]
+
+
+def _drain_log_queue(target_buffer: List[str]) -> None:
+    """Transfer queued log messages into the render buffer on the main thread."""
+
+    message_queue: queue.SimpleQueue[str] = st.session_state[LOG_QUEUE_KEY]
+
+    while True:
+        try:
+            message = message_queue.get_nowait()
+        except queue.Empty:
+            break
+        target_buffer.append(message)
+
+    if len(target_buffer) > MAX_UI_LOG_LINES:
+        del target_buffer[: len(target_buffer) - MAX_UI_LOG_LINES]
+
+    st.session_state[LOG_DIRTY_KEY] = True
+
+
+def _render_log_panel(placeholder: Any, log_buffer: List[str]) -> None:
+    """Render buffered logs inside the provided placeholder."""
+
+    if not log_buffer:
+        placeholder.info("로그가 아직 없습니다.")
+    else:
+        placeholder.markdown("```\n" + "\n".join(log_buffer) + "\n```")
+    st.session_state[LOG_DIRTY_KEY] = False
+
+
+def _refresh_ui_logs(placeholder: Any, log_buffer: List[str]) -> None:
+    """Drain queued logs and update the Streamlit panel if required."""
+
+    _drain_log_queue(log_buffer)
+    if st.session_state.get(LOG_DIRTY_KEY):
+        _render_log_panel(placeholder, log_buffer)
+
+
+def _approximate_tokens(text: str) -> int:
+    """Rudimentary character-based token estimate for heuristics."""
+
+    if not text:
+        return 0
+    return max(1, len(text) // 4)
+
+
+def _estimate_tokens_for_batch(batch: dict[str, object]) -> int:
+    """Estimate total prompt tokens for a single translation batch."""
+
+    texts = str(batch.get("texts", ""))
+    ppt_context = str(batch.get("ppt_context", ""))
+    glossary_terms = str(batch.get("glossary_terms", ""))
+
+    token_estimate = (
+        _approximate_tokens(texts)
+        + _approximate_tokens(ppt_context)
+        + _approximate_tokens(glossary_terms)
+        + 200  # instructions + response padding
+    )
+
+    return max(1, token_estimate)
+
+
+def _attach_streamlit_log_handler(log_queue: "queue.SimpleQueue[str]") -> None:
+    """Attach (or replace) the Streamlit log handler on the root logger."""
+
+    root_logger = logging.getLogger()
+    for handler in list(root_logger.handlers):
+        if isinstance(handler, StreamlitLogHandler):
+            root_logger.removeHandler(handler)
+    root_logger.addHandler(StreamlitLogHandler(log_queue))
 
 
 def _load_glossary(glossary_file) -> Tuple[dict[str, str] | None, str]:
@@ -56,17 +165,33 @@ def _load_glossary(glossary_file) -> Tuple[dict[str, str] | None, str]:
 
 
 def _determine_batch_size(total_paragraphs: int, settings) -> int:
-    """Calculate a user-friendly batch size for translation."""
+    """Calculate a batch size that balances latency and throughput."""
 
     if total_paragraphs <= 0:
         return 1
 
-    max_batch_size = max(1, settings.batch_size)
-    min_batch_size = max(1, getattr(settings, "min_batch_size", 40))
-    target_batches = max(1, getattr(settings, "target_batch_count", 5))
+    min_size = max(1, int(getattr(settings, "min_batch_size", 40)))
+    max_size = max(min_size, int(getattr(settings, "max_batch_size", getattr(settings, "batch_size", min_size))))
+    default_size = max(min_size, min(max_size, int(getattr(settings, "batch_size", max_size))))
 
-    suggested = math.ceil(total_paragraphs / target_batches)
-    batch_size = min(max_batch_size, max(min_batch_size, suggested))
+    concurrency = max(1, int(getattr(settings, "max_concurrency", 1)))
+    wave_multiplier = float(getattr(settings, "wave_multiplier", 1.2) or 1.2)
+    wave_multiplier = max(1.0, wave_multiplier)
+
+    target_batches = max(concurrency, int(math.ceil(concurrency * wave_multiplier * 2)))
+    suggested_size = math.ceil(total_paragraphs / target_batches) if target_batches > 0 else default_size
+
+    batch_size = max(min_size, min(max_size, suggested_size))
+    if batch_size < default_size:
+        batch_size = max(batch_size, min(default_size, max_size))
+
+    actual_batches = max(1, math.ceil(total_paragraphs / batch_size))
+    if actual_batches > 1:
+        remainder = total_paragraphs - (actual_batches - 1) * batch_size
+        if 0 < remainder < max(1, int(min_size * 0.5)):
+            adjusted = math.ceil(total_paragraphs / (actual_batches - 1))
+            batch_size = max(min_size, min(max_size, adjusted))
+
     return max(1, min(total_paragraphs, batch_size))
 
 
@@ -87,17 +212,34 @@ def main() -> None:
     st.title("📊 PowerPoint 번역기")
     st.markdown("LangChain + OpenAI GPT-5를 활용한 고품질 PPT 번역")
 
+    log_panel = st.expander("📜 실행 로그", expanded=True)
+    log_placeholder = log_panel.empty()
+    log_queue, log_buffer = _initialise_log_state()
+    _attach_streamlit_log_handler(log_queue)
+    _refresh_ui_logs(log_placeholder, log_buffer)
+
     uploaded_file = st.file_uploader("PPT 파일 업로드", type=["ppt", "pptx"])
 
     ppt_buffer = None
     if uploaded_file:
         ppt_buffer = handle_upload(uploaded_file, max_size_mb=settings.max_upload_size_mb)
+        _refresh_ui_logs(log_placeholder, log_buffer)
 
     if ppt_buffer:
         settings_state = render_settings()
+        _refresh_ui_logs(log_placeholder, log_buffer)
 
         if st.button("🚀 번역 시작", type="primary"):
             with st.spinner("번역 진행 중..."):
+                log_buffer.clear()
+                while True:
+                    try:
+                        log_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                st.session_state[LOG_DIRTY_KEY] = True
+                _render_log_panel(log_placeholder, log_buffer)
+
                 cached_buffer = get_cached_upload()
                 if cached_buffer is None:
                     st.error("업로드된 파일을 찾을 수 없습니다. 다시 업로드해주세요.")
@@ -105,6 +247,7 @@ def main() -> None:
 
                 parser = PPTParser()
                 paragraphs, presentation = parser.extract_paragraphs(cached_buffer)
+                _refresh_ui_logs(log_placeholder, log_buffer)
 
                 if not paragraphs:
                     st.warning("번역할 텍스트를 찾을 수 없습니다.")
@@ -136,7 +279,6 @@ def main() -> None:
                     st.info(f"🔍 타겟 언어 추론: {target_language}")
 
                 batch_size = _determine_batch_size(len(paragraphs), settings)
-                st.caption(f"배치 크기: {batch_size} 문장 (총 {len(paragraphs)} 문장)")
 
                 batches = chunk_paragraphs(
                     paragraphs,
@@ -152,13 +294,38 @@ def main() -> None:
                     batch_size,
                     len(paragraphs),
                 )
+                _refresh_ui_logs(log_placeholder, log_buffer)
 
                 if not batches:
                     st.warning("번역할 배치를 생성하지 못했습니다.")
                     return
 
+                estimated_tokens = _estimate_tokens_for_batch(batches[0])
+                safe_concurrency = max(
+                    1,
+                    min(
+                        int(settings.max_concurrency),
+                        max(1, settings.tpm_limit // max(estimated_tokens, 1)),
+                    ),
+                )
+
+                LOGGER.info(
+                    "Estimated %d tokens per batch; using concurrency=%d (config max=%d, TPM limit=%d).",
+                    estimated_tokens,
+                    safe_concurrency,
+                    settings.max_concurrency,
+                    settings.tpm_limit,
+                )
+                _refresh_ui_logs(log_placeholder, log_buffer)
+
+                st.caption(
+                    f"배치 크기: {batch_size} 문장 (총 {len(paragraphs)} 문장) | 동시 실행: {safe_concurrency}"
+                )
+
                 progress_tracker = ProgressTracker(
-                    total_batches=len(batches), total_sentences=len(paragraphs)
+                    total_batches=len(batches),
+                    total_sentences=len(paragraphs),
+                    log_update_fn=lambda: _refresh_ui_logs(log_placeholder, log_buffer),
                 )
 
                 chain = create_translation_chain(
@@ -171,14 +338,15 @@ def main() -> None:
                 try:
                     LOGGER.info(
                         "Starting translation with concurrency=%d and model=%s.",
-                        settings.max_concurrency,
+                        safe_concurrency,
                         settings_state.get("model", "gpt-5"),
                     )
+                    _refresh_ui_logs(log_placeholder, log_buffer)
                     translated_texts = translate_with_progress(
                         chain,
                         batches,
                         progress_tracker,
-                        max_concurrency=settings.max_concurrency,
+                        max_concurrency=safe_concurrency,
                     )
                 except Exception as exc:  # pylint: disable=broad-except
                     LOGGER.exception("Translation failed: %s", exc)
@@ -193,10 +361,12 @@ def main() -> None:
 
                 writer = PPTWriter()
                 output_buffer = writer.apply_translations(paragraphs, translated_texts, presentation)
+                _refresh_ui_logs(log_placeholder, log_buffer)
 
                 total_elapsed = progress_tracker.get_total_elapsed()
                 minutes, seconds = divmod(total_elapsed, 60)
                 LOGGER.info("Translation completed in %d분 %.1f초", int(minutes), seconds)
+                _refresh_ui_logs(log_placeholder, log_buffer)
                 st.success(f"✅ 번역 완료! 총 소요 시간: {int(minutes)}분 {seconds:.1f}초")
 
                 original_name = st.session_state.get("uploaded_ppt_name", "presentation")
