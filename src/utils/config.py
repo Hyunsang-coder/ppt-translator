@@ -19,7 +19,7 @@ class Settings:
     """Container for runtime configuration values."""
 
     openai_api_key: Optional[str]
-    max_upload_size_mb: int = 50
+    max_upload_size_mb: int = 200
     batch_size: int = 80
     max_retries: int = 3
     min_batch_size: int = 60

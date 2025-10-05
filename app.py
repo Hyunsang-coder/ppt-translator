@@ -6,11 +6,13 @@ import io
 import logging
 import math
 import queue
+from itertools import islice
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 import streamlit as st
+from PIL import Image
 
 from src.chains.context_manager import ContextManager
 from src.chains.translation_chain import create_translation_chain, translate_with_progress
@@ -24,12 +26,32 @@ from src.ui.settings_panel import render_settings
 from src.utils.config import get_settings
 from src.utils.glossary_loader import GlossaryLoader
 from src.utils.helpers import chunk_paragraphs
+from src.utils.repetition import build_repetition_plan, expand_translations
 from src.utils.language_detector import LanguageDetector
 
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(name)s: %(message)s")
 LOGGER = logging.getLogger(__name__)
 
-st.set_page_config(page_title="PPT Translator", page_icon="📊", layout="wide")
+CAT_IMAGE_PATH = Path(__file__).resolve().parent / "assets" / "번역캣 회색.png"
+try:
+    resample = Image.Resampling.LANCZOS  # type: ignore[attr-defined]
+except AttributeError:  # pragma: no cover - Pillow < 9 fallback
+    resample = Image.LANCZOS
+
+try:
+    CAT_IMAGE = Image.open(CAT_IMAGE_PATH)
+    CAT_IMAGE_SCALED = CAT_IMAGE.resize(
+        (
+            max(1, int(CAT_IMAGE.width * 0.7)),
+            max(1, int(CAT_IMAGE.height * 0.7)),
+        ),
+        resample,
+    )
+except FileNotFoundError:  # pragma: no cover - asset expected to be present in prod
+    CAT_IMAGE = None
+    CAT_IMAGE_SCALED = None
+
+st.set_page_config(page_title="PPT 번역캣", page_icon=CAT_IMAGE or "📊", layout="wide")
 
 MAX_UI_LOG_LINES = 400
 LOG_QUEUE_KEY = "ui_log_queue"
@@ -215,8 +237,7 @@ def _get_extraction_state() -> Dict[str, Any]:
 def _render_text_extraction_page(settings, extraction_options: ExtractionOptions) -> None:
     """Render PPT text extraction workflow."""
 
-    st.title("🐱 PPT 번역캣")
-    st.header("🧾 PPT 텍스트 추출")
+    st.title("🧾 PPT 텍스트 추출")
     st.markdown("PPT 파일에서 텍스트를 추출하여 Markdown 형식으로 정리할 수 있습니다.")
 
     uploaded_file = st.file_uploader(
@@ -286,12 +307,11 @@ def _render_text_extraction_page(settings, extraction_options: ExtractionOptions
         st.info("옵션이나 파일이 변경되었습니다. 다시 변환을 실행하면 최신 결과를 확인할 수 있습니다.")
 
     markdown_value = state["markdown"]
-    if st.session_state.get("markdown_preview") != markdown_value:
+    if "markdown_preview" not in st.session_state:
         st.session_state["markdown_preview"] = markdown_value
 
     st.text_area(
         "Markdown 미리보기",
-        value=st.session_state.get("markdown_preview", markdown_value),
         height=400,
         key="markdown_preview",
     )
@@ -307,15 +327,19 @@ def _render_text_extraction_page(settings, extraction_options: ExtractionOptions
         )
 
 
+
 def _render_translation_page(settings, settings_state: Dict[str, Any]) -> None:
     """Render PPT translation workflow."""
 
-    st.title("🐱 PPT 번역캣")
-    st.header("🌐 번역된 PPT 생성")
+    st.title("🌐 번역된 PPT 생성")
     st.markdown("원본 PPT의 디자인을 유지하면서 내부 텍스트만 번역한 새 파일을 생성합니다.")
 
     if not settings.openai_api_key:
         st.warning("OPENAI_API_KEY가 설정되지 않았습니다. 번역 실행 시 에러가 발생할 수 있습니다.")
+
+    preprocess_repetitions = bool(settings_state.get("preprocess_repetitions"))
+    if preprocess_repetitions:
+        st.info("반복 문구 사전 처리 옵션이 활성화되어 동일 문장을 한 번만 번역합니다.")
 
     log_panel = st.expander("📜 실행 로그", expanded=True)
     log_placeholder = log_panel.empty()
@@ -375,6 +399,32 @@ def _render_translation_page(settings, settings_state: Dict[str, Any]) -> None:
             if glossary:
                 prepared_texts = GlossaryLoader.apply_glossary_to_texts(prepared_texts, glossary)
 
+            repetition_plan = None
+            target_paragraphs = paragraphs
+            target_prepared_texts = prepared_texts
+
+            if preprocess_repetitions:
+                repetition_plan = build_repetition_plan(paragraphs)
+                target_paragraphs = [paragraphs[idx] for idx in repetition_plan.unique_indices]
+                target_prepared_texts = [prepared_texts[idx] for idx in repetition_plan.unique_indices]
+
+                duplicates_info = repetition_plan.duplicate_counts()
+                reduced = len(paragraphs) - len(target_paragraphs)
+                if duplicates_info:
+                    st.caption(
+                        f"반복 문구 {len(duplicates_info)}개 감지: 번역 문장 수 {len(paragraphs)} → {len(target_paragraphs)} (감소 {reduced})"
+                    )
+                    preview = sorted(duplicates_info.items(), key=lambda item: item[1], reverse=True)
+                    with st.expander("반복 문구 미리보기", expanded=False):
+                        for text, count in islice(preview, 5):
+                            st.write(f"{count}×: {text}")
+                else:
+                    st.caption("반복 문구 사전 처리 결과 중복 문장이 발견되지 않았습니다.")
+
+                if not target_paragraphs:
+                    st.warning("반복 문구 사전 처리 결과 번역할 텍스트가 없습니다.")
+                    return
+
             detector = LanguageDetector()
             sample_text = "\n".join(paragraph.original_text for paragraph in paragraphs[:50])
 
@@ -389,20 +439,21 @@ def _render_translation_page(settings, settings_state: Dict[str, Any]) -> None:
                 target_language = detector.infer_target_language(source_language)
                 st.info(f"🔍 타겟 언어 추론: {target_language}")
 
-            batch_size = _determine_batch_size(len(paragraphs), settings)
+            batch_size = _determine_batch_size(len(target_paragraphs), settings)
 
             batches = chunk_paragraphs(
-                paragraphs,
+                target_paragraphs,
                 batch_size=batch_size,
                 ppt_context=ppt_context,
                 glossary_terms=glossary_terms,
-                prepared_texts=prepared_texts,
+                prepared_texts=target_prepared_texts,
             )
 
             LOGGER.info(
-                "Prepared %d batches (batch size %d, total paragraphs %d).",
+                "Prepared %d batches (batch size %d, unique paragraphs %d of %d total).",
                 len(batches),
                 batch_size,
+                len(target_paragraphs),
                 len(paragraphs),
             )
             _refresh_ui_logs(log_placeholder, log_buffer)
@@ -430,12 +481,12 @@ def _render_translation_page(settings, settings_state: Dict[str, Any]) -> None:
             _refresh_ui_logs(log_placeholder, log_buffer)
 
             st.caption(
-                f"배치 크기: {batch_size} 문장 (총 {len(paragraphs)} 문장) | 최대 동시 실행: {safe_concurrency}"
+                f"배치 크기: {batch_size} 문장 (고유 {len(target_paragraphs)} / 전체 {len(paragraphs)}) | 최대 동시 실행: {safe_concurrency}"
             )
 
             progress_tracker = ProgressTracker(
                 total_batches=len(batches),
-                total_sentences=len(paragraphs),
+                total_sentences=len(target_paragraphs),
                 log_update_fn=lambda: _refresh_ui_logs(log_placeholder, log_buffer),
             )
 
@@ -453,7 +504,7 @@ def _render_translation_page(settings, settings_state: Dict[str, Any]) -> None:
                     settings_state.get("model", "gpt-5"),
                 )
                 _refresh_ui_logs(log_placeholder, log_buffer)
-                translated_texts = translate_with_progress(
+                translated_unique = translate_with_progress(
                     chain,
                     batches,
                     progress_tracker,
@@ -463,6 +514,15 @@ def _render_translation_page(settings, settings_state: Dict[str, Any]) -> None:
                 LOGGER.exception("Translation failed: %s", exc)
                 st.error("번역 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.")
                 return
+
+            if repetition_plan is not None:
+                translated_texts = expand_translations(
+                    repetition_plan,
+                    translated_unique,
+                    len(paragraphs),
+                )
+            else:
+                translated_texts = translated_unique
 
             if glossary:
                 translated_texts = [
@@ -501,10 +561,24 @@ def main() -> None:
 
     settings = get_settings()
 
+    st.sidebar.markdown(
+        """
+        <div style="text-align: center; font-size: 2rem; font-weight: 700; margin-bottom: 0.5rem;">
+            PPT 번역캣
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if CAT_IMAGE_SCALED is not None:
+        st.sidebar.image(CAT_IMAGE_SCALED, use_container_width=True)
+    elif CAT_IMAGE is not None:
+        st.sidebar.image(CAT_IMAGE, use_container_width=True)
+
     st.sidebar.markdown("### 기능 선택")
     feature = st.sidebar.radio(
         "기능 선택",
-        options=("텍스트 추출", "PPT 번역"),
+        options=("PPT 번역", "텍스트 추출"),
         index=0,
         label_visibility="collapsed",
     )

@@ -61,9 +61,15 @@ def render_settings(container: Optional[DeltaGenerator] = None) -> Dict[str, Any
         help="gpt-5: 최고 품질 (느림, 비쌈) | gpt-5-mini: 빠르고 저렴",
     )
 
+    preprocess_repetitions = expander.checkbox(
+        "반복 문구 사전 처리 (Markdown 분석)",
+        value=True,
+        help="추출된 텍스트를 분석해 동일 문장을 한 번만 번역하고 결과를 재사용합니다.",
+    )
+
     user_prompt = expander.text_area(
         "커스텀 프롬프트 (선택)",
-        placeholder="예: 슬라이드 간 일관성 유지",
+        placeholder="예) 영어 고유명사는 그대로 두기 \n 슬라이드 간 일관된 톤과 용어 유지",
         height=100,
     )
 
@@ -88,6 +94,7 @@ def render_settings(container: Optional[DeltaGenerator] = None) -> Dict[str, Any
         "source_lang": source_lang,
         "target_lang": target_lang,
         "model": model,
+        "preprocess_repetitions": preprocess_repetitions,
         "user_prompt": user_prompt,
         "glossary_file": glossary_file,
     }
