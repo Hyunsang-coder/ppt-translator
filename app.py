@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import io
+import json
 import logging
 import math
 import queue
@@ -12,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 import streamlit as st
+import streamlit.components.v1 as components
 from PIL import Image
 
 from src.chains.context_manager import ContextManager
@@ -310,21 +312,83 @@ def _render_text_extraction_page(settings, extraction_options: ExtractionOptions
     if "markdown_preview" not in st.session_state:
         st.session_state["markdown_preview"] = markdown_value
 
-    st.text_area(
-        "Markdown 미리보기",
-        height=400,
-        key="markdown_preview",
-    )
-
+    # 버튼을 먼저 표시
     if markdown_value.strip():
         safe_name = _sanitize_for_filename(Path(state["file_name"] or "presentation").stem, "presentation")
         download_name = f"{safe_name}_extracted.md"
-        st.download_button(
-            "📥 Markdown 다운로드",
-            data=markdown_value.encode("utf-8"),
-            file_name=download_name,
-            mime="text/markdown",
-        )
+        
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            st.download_button(
+                "📥 Markdown 다운로드",
+                data=markdown_value.encode("utf-8"),
+                file_name=download_name,
+                mime="text/markdown",
+                use_container_width=True,
+            )
+        with col2:
+            # JavaScript를 사용한 클립보드 복사
+            # JSON으로 직렬화하여 안전하게 JavaScript로 전달
+            escaped_markdown = json.dumps(markdown_value)
+            copy_html = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <style>
+                    body {{
+                        margin: 0;
+                        padding: 0;
+                        font-family: 'Source Sans Pro', sans-serif;
+                    }}
+                    button {{
+                        width: 100%;
+                        padding: 0.375rem 0.75rem;
+                        background-color: rgb(255, 255, 255);
+                        color: rgb(49, 51, 63);
+                        border: 1px solid rgba(49, 51, 63, 0.2);
+                        border-radius: 0.5rem;
+                        font-family: 'Source Sans Pro', sans-serif;
+                        font-size: 1rem;
+                        font-weight: 400;
+                        line-height: 1.6;
+                        cursor: pointer;
+                        transition: all 0.2s;
+                    }}
+                    button:hover {{
+                        border-color: rgb(255, 75, 75);
+                        color: rgb(255, 75, 75);
+                    }}
+                </style>
+            </head>
+            <body>
+                <button onclick="copyToClipboard()">📋 클립보드 복사</button>
+                <script>
+                    const text = {escaped_markdown};
+                    
+                    function copyToClipboard() {{
+                        navigator.clipboard.writeText(text).then(() => {{
+                            const btn = document.querySelector('button');
+                            btn.textContent = '✅ 복사 완료!';
+                            setTimeout(() => {{
+                                btn.textContent = '📋 클립보드 복사';
+                            }}, 2000);
+                        }}).catch(err => {{
+                            alert('복사에 실패했습니다: ' + err);
+                        }});
+                    }}
+                </script>
+            </body>
+            </html>
+            """
+            components.html(copy_html, height=50)
+
+    # 미리보기를 버튼 아래에 표시
+    st.subheader("Markdown 미리보기")
+    st.code(
+        st.session_state.get("markdown_preview", ""),
+        language="markdown",
+        line_numbers=False,
+    )
 
 
 
