@@ -7,9 +7,9 @@ import logging
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from typing import Dict, List
 
-from langchain.prompts import PromptTemplate
-from langchain.schema.output_parser import StrOutputParser
-from langchain.schema.runnable import RunnablePassthrough
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
 from langchain_openai import ChatOpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
 
