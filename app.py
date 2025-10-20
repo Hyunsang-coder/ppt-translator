@@ -648,6 +648,14 @@ def main() -> None:
         """,
         unsafe_allow_html=True,
     )
+    st.sidebar.markdown(
+        f"""
+        <div style="text-align: center; font-size: 0.9rem; color: #6b7280; margin-top: -0.25rem; margin-bottom: 0.5rem;">
+            (Version 2.1, last updated: {datetime.now().strftime('%Y-%m-%d')})
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     if CAT_IMAGE_SCALED is not None:
         st.sidebar.image(CAT_IMAGE_SCALED)
