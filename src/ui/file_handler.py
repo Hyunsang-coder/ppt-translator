@@ -27,28 +27,9 @@ def handle_upload(uploaded_file, max_size_mb: int = 50) -> Optional[io.BytesIO]:
         st.error(f"파일 크기가 {max_size_mb}MB를 초과합니다. 더 작은 파일을 업로드해주세요.")
         return None
 
+    st.session_state.pop("uploaded_ppt_bytes", None)
+    uploaded_file.seek(0)
     buffer = io.BytesIO(uploaded_file.read())
     buffer.seek(0)
-    st.session_state["uploaded_ppt_bytes"] = buffer
     st.session_state["uploaded_ppt_name"] = uploaded_file.name
     return buffer
-
-
-def get_cached_upload() -> Optional[io.BytesIO]:
-    """Retrieve the previously cached PPT bytes from session state.
-
-    Returns:
-        BytesIO buffer if present in session state, otherwise ``None``.
-    """
-
-    buffer = st.session_state.get("uploaded_ppt_bytes")
-    if buffer:
-        buffer.seek(0)
-    return buffer
-
-
-def clear_cached_upload() -> None:
-    """Remove cached uploads from session state to free memory."""
-
-    st.session_state.pop("uploaded_ppt_bytes", None)
-    st.session_state.pop("uploaded_ppt_name", None)

@@ -22,7 +22,7 @@ from src.core.ppt_parser import PPTParser
 from src.core.ppt_writer import PPTWriter
 from src.core.text_extractor import ExtractionOptions, docs_to_markdown, extract_pptx_to_docs
 from src.ui.extraction_settings import render_extraction_settings
-from src.ui.file_handler import get_cached_upload, handle_upload
+from src.ui.file_handler import handle_upload
 from src.ui.progress_tracker import ProgressTracker
 from src.ui.settings_panel import render_settings
 from src.utils.config import get_settings
@@ -89,6 +89,9 @@ def _initialise_log_state() -> tuple[queue.SimpleQueue[str], List[str]]:
     if LOG_QUEUE_KEY not in st.session_state:
         st.session_state[LOG_QUEUE_KEY] = queue.SimpleQueue()
     if LOG_BUFFER_KEY not in st.session_state:
+        st.session_state[LOG_BUFFER_KEY] = []
+    elif len(st.session_state[LOG_BUFFER_KEY]) > MAX_UI_LOG_LINES * 2:
+        # Prevent excessive memory usage by clearing buffer if it exceeds 2x limit
         st.session_state[LOG_BUFFER_KEY] = []
     if LOG_DIRTY_KEY not in st.session_state:
         st.session_state[LOG_DIRTY_KEY] = True
@@ -283,10 +286,6 @@ def _render_text_extraction_page(settings, extraction_options: ExtractionOptions
             ppt_buffer.seek(0)
             try:
                 docs = extract_pptx_to_docs(ppt_buffer, extraction_options)
-            except Exception as exc:  # pylint: disable=broad-except
-                LOGGER.exception("Extraction failed: %s", exc)
-                st.error("텍스트 추출 중 오류가 발생했습니다. 파일을 다시 확인해주세요.")
-            else:
                 markdown_text = docs_to_markdown(docs, extraction_options)
                 total_blocks = sum(len(doc.blocks) for doc in docs)
                 state.update(
@@ -299,18 +298,21 @@ def _render_text_extraction_page(settings, extraction_options: ExtractionOptions
                         "stale": False,
                     }
                 )
-                st.session_state["markdown_preview"] = markdown_text
                 if markdown_text.strip():
                     st.success(f"총 {len(docs)}개의 슬라이드에서 {total_blocks}개의 블록을 추출했습니다.")
                 else:
                     st.warning("추출된 텍스트가 없습니다.")
+            except Exception as exc:  # pylint: disable=broad-except
+                LOGGER.exception("Extraction failed: %s", exc)
+                st.error("텍스트 추출 중 오류가 발생했습니다. 파일을 다시 확인해주세요.")
+            finally:
+                # Explicitly close buffer to free memory
+                ppt_buffer.close()
 
     if state["stale"]:
         st.info("옵션이나 파일이 변경되었습니다. 다시 변환을 실행하면 최신 결과를 확인할 수 있습니다.")
 
     markdown_value = state["markdown"]
-    if "markdown_preview" not in st.session_state:
-        st.session_state["markdown_preview"] = markdown_value
 
     # 버튼을 먼저 표시
     if markdown_value.strip():
@@ -385,7 +387,7 @@ def _render_text_extraction_page(settings, extraction_options: ExtractionOptions
     # 미리보기를 버튼 아래에 표시
     st.subheader("Markdown 미리보기")
     st.code(
-        st.session_state.get("markdown_preview", ""),
+        markdown_value,
         language="markdown",
         line_numbers=False,
     )
@@ -439,13 +441,9 @@ def _render_translation_page(settings, settings_state: Dict[str, Any]) -> None:
                 _attach_streamlit_log_handler(log_queue)
             _render_log_panel(log_placeholder, log_buffer)
 
-            cached_buffer = get_cached_upload()
-            if cached_buffer is None:
-                st.error("업로드된 파일을 찾을 수 없습니다. 다시 업로드해주세요.")
-                return
-
             parser = PPTParser()
-            paragraphs, presentation = parser.extract_paragraphs(cached_buffer)
+            ppt_buffer.seek(0)
+            paragraphs, presentation = parser.extract_paragraphs(ppt_buffer)
             _refresh_ui_logs(log_placeholder, log_buffer)
 
             if not paragraphs:
@@ -607,6 +605,13 @@ def _render_translation_page(settings, settings_state: Dict[str, Any]) -> None:
             writer = PPTWriter()
             output_buffer = writer.apply_translations(paragraphs, translated_texts, presentation)
             _refresh_ui_logs(log_placeholder, log_buffer)
+
+            # Explicitly clear large objects to help GC
+            paragraphs = None
+            presentation = None
+            translated_texts = None
+            if repetition_plan is not None:
+                translated_unique = None
 
             total_elapsed = progress_tracker.finish()
             minutes, seconds = divmod(total_elapsed, 60)
