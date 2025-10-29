@@ -224,8 +224,9 @@ def _determine_batch_size(total_paragraphs: int, settings) -> int:
 def _sanitize_for_filename(value: str, fallback: str) -> str:
     """Remove characters that are risky inside file names while keeping unicode."""
 
-    sanitized = "".join(ch for ch in value if ch.isalnum() or ch in ("-", "_"))
-    return sanitized or fallback
+    from src.utils.security import sanitize_filename
+
+    return sanitize_filename(value, fallback=fallback)
 
 
 def _get_extraction_state() -> Dict[str, Any]:
@@ -284,30 +285,41 @@ def _render_text_extraction_page(settings, extraction_options: ExtractionOptions
         else:
             ppt_buffer = io.BytesIO(uploaded_file.getvalue())
             ppt_buffer.seek(0)
-            try:
-                docs = extract_pptx_to_docs(ppt_buffer, extraction_options)
-                markdown_text = docs_to_markdown(docs, extraction_options)
-                total_blocks = sum(len(doc.blocks) for doc in docs)
-                state.update(
-                    {
-                        "markdown": markdown_text,
-                        "file_name": uploaded_file.name,
-                        "options": current_signature,
-                        "slides": len(docs),
-                        "blocks": total_blocks,
-                        "stale": False,
-                    }
-                )
-                if markdown_text.strip():
-                    st.success(f"총 {len(docs)}개의 슬라이드에서 {total_blocks}개의 블록을 추출했습니다.")
-                else:
-                    st.warning("추출된 텍스트가 없습니다.")
-            except Exception as exc:  # pylint: disable=broad-except
-                LOGGER.exception("Extraction failed: %s", exc)
-                st.error("텍스트 추출 중 오류가 발생했습니다. 파일을 다시 확인해주세요.")
-            finally:
-                # Explicitly close buffer to free memory
+            
+            # Validate file signature
+            from src.utils.security import validate_pptx_file, sanitize_filename
+            is_valid, error_msg = validate_pptx_file(ppt_buffer)
+            
+            if not is_valid:
+                st.error(error_msg or "파일 형식이 올바르지 않습니다. PPT 또는 PPTX 파일만 업로드 가능합니다.")
                 ppt_buffer.close()
+            else:
+                ppt_buffer.seek(0)
+                try:
+                    docs = extract_pptx_to_docs(ppt_buffer, extraction_options)
+                    markdown_text = docs_to_markdown(docs, extraction_options)
+                    total_blocks = sum(len(doc.blocks) for doc in docs)
+                    sanitized_name = sanitize_filename(uploaded_file.name)
+                    state.update(
+                        {
+                            "markdown": markdown_text,
+                            "file_name": sanitized_name,
+                            "options": current_signature,
+                            "slides": len(docs),
+                            "blocks": total_blocks,
+                            "stale": False,
+                        }
+                    )
+                    if markdown_text.strip():
+                        st.success(f"총 {len(docs)}개의 슬라이드에서 {total_blocks}개의 블록을 추출했습니다.")
+                    else:
+                        st.warning("추출된 텍스트가 없습니다.")
+                except Exception as exc:  # pylint: disable=broad-except
+                    LOGGER.exception("Extraction failed: %s", exc)
+                    st.error("텍스트 추출 중 오류가 발생했습니다. 파일을 다시 확인해주세요.")
+                finally:
+                    # Explicitly close buffer to free memory
+                    ppt_buffer.close()
 
     if state["stale"]:
         st.info("옵션이나 파일이 변경되었습니다. 다시 변환을 실행하면 최신 결과를 확인할 수 있습니다.")
@@ -331,57 +343,81 @@ def _render_text_extraction_page(settings, extraction_options: ExtractionOptions
         with col2:
             # JavaScript를 사용한 클립보드 복사
             # JSON으로 직렬화하여 안전하게 JavaScript로 전달
-            escaped_markdown = json.dumps(markdown_value)
-            copy_html = f"""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <style>
-                    body {{
-                        margin: 0;
-                        padding: 0;
-                        font-family: 'Source Sans Pro', sans-serif;
-                    }}
-                    button {{
-                        width: 100%;
-                        padding: 0.375rem 0.75rem;
-                        background-color: rgb(255, 255, 255);
-                        color: rgb(49, 51, 63);
-                        border: 1px solid rgba(49, 51, 63, 0.2);
-                        border-radius: 0.5rem;
-                        font-family: 'Source Sans Pro', sans-serif;
-                        font-size: 1rem;
-                        font-weight: 400;
-                        line-height: 1.6;
-                        cursor: pointer;
-                        transition: all 0.2s;
-                    }}
-                    button:hover {{
-                        border-color: rgb(255, 75, 75);
-                        color: rgb(255, 75, 75);
-                    }}
-                </style>
-            </head>
-            <body>
-                <button onclick="copyToClipboard()">📋 클립보드 복사</button>
-                <script>
-                    const text = {escaped_markdown};
-                    
-                    function copyToClipboard() {{
-                        navigator.clipboard.writeText(text).then(() => {{
-                            const btn = document.querySelector('button');
-                            btn.textContent = '✅ 복사 완료!';
-                            setTimeout(() => {{
-                                btn.textContent = '📋 클립보드 복사';
-                            }}, 2000);
-                        }}).catch(err => {{
-                            alert('복사에 실패했습니다: ' + err);
-                        }});
-                    }}
-                </script>
-            </body>
-            </html>
-            """
+            # 길이 제한을 추가하여 XSS 및 DoS 방지
+            max_markdown_length = 10 * 1024 * 1024  # 10MB 제한
+            safe_markdown = markdown_value[:max_markdown_length] if len(markdown_value) > max_markdown_length else markdown_value
+            escaped_markdown = json.dumps(safe_markdown)
+            
+            # JSON 문자열 길이 확인 (과도한 길이 방지)
+            if len(escaped_markdown) > 15 * 1024 * 1024:  # 15MB 제한 (JSON 이스케이프 고려)
+                st.warning("내용이 너무 커서 클립보드 복사 기능을 사용할 수 없습니다. 다운로드 버튼을 사용해주세요.")
+                copy_html = """
+                <div style="padding: 0.375rem 0.75rem; text-align: center; color: #6b7280;">
+                    내용이 너무 커서 복사할 수 없습니다
+                </div>
+                """
+            else:
+                copy_html = f"""
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <style>
+                        body {{
+                            margin: 0;
+                            padding: 0;
+                            font-family: 'Source Sans Pro', sans-serif;
+                        }}
+                        button {{
+                            width: 100%;
+                            padding: 0.375rem 0.75rem;
+                            background-color: rgb(255, 255, 255);
+                            color: rgb(49, 51, 63);
+                            border: 1px solid rgba(49, 51, 63, 0.2);
+                            border-radius: 0.5rem;
+                            font-family: 'Source Sans Pro', sans-serif;
+                            font-size: 1rem;
+                            font-weight: 400;
+                            line-height: 1.6;
+                            cursor: pointer;
+                            transition: all 0.2s;
+                        }}
+                        button:hover {{
+                            border-color: rgb(255, 75, 75);
+                            color: rgb(255, 75, 75);
+                        }}
+                    </style>
+                </head>
+                <body>
+                    <button onclick="copyToClipboard()">📋 클립보드 복사</button>
+                    <script>
+                        (function() {{
+                            const text = {escaped_markdown};
+                            
+                            function copyToClipboard() {{
+                                if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {{
+                                    navigator.clipboard.writeText(text).then(function() {{
+                                        const btn = document.querySelector('button');
+                                        if (btn) {{
+                                            btn.textContent = '✅ 복사 완료!';
+                                            setTimeout(function() {{
+                                                btn.textContent = '📋 클립보드 복사';
+                                            }}, 2000);
+                                        }}
+                                    }}).catch(function(err) {{
+                                        alert('복사에 실패했습니다.');
+                                    }});
+                                }} else {{
+                                    alert('클립보드 API를 사용할 수 없습니다.');
+                                }}
+                            }}
+                            
+                            // 전역 함수로 노출
+                            window.copyToClipboard = copyToClipboard;
+                        }})();
+                    </script>
+                </body>
+                </html>
+                """
             components.html(copy_html, height=50)
 
     # 미리보기를 버튼 아래에 표시
@@ -478,10 +514,15 @@ def _render_translation_page(settings, settings_state: Dict[str, Any]) -> None:
                     )
                     preview = sorted(duplicates_info.items(), key=lambda item: item[1], reverse=True)
                     with st.expander("반복 문구 미리보기", expanded=False):
-                        rows = "<br>".join(
-                            f"<strong>{count}×</strong>: {html.escape(text)}"
-                            for text, count in preview
-                        )
+                        from src.utils.security import sanitize_html_content
+                        
+                        # 각 텍스트를 안전하게 이스케이프
+                        safe_rows = []
+                        for text, count in preview:
+                            safe_text = sanitize_html_content(text, max_length=500)
+                            safe_rows.append(f"<strong>{count}×</strong>: {safe_text}")
+                        
+                        rows = "<br>".join(safe_rows)
                         st.markdown(
                             """
                             <div style="max-height: 280px; overflow-y: auto; padding-right: 6px;">

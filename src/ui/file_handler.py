@@ -7,6 +7,8 @@ from typing import Optional
 
 import streamlit as st
 
+from src.utils.security import sanitize_filename, validate_pptx_file
+
 
 def handle_upload(uploaded_file, max_size_mb: int = 50) -> Optional[io.BytesIO]:
     """Validate and cache the uploaded PPT file in memory.
@@ -27,9 +29,18 @@ def handle_upload(uploaded_file, max_size_mb: int = 50) -> Optional[io.BytesIO]:
         st.error(f"파일 크기가 {max_size_mb}MB를 초과합니다. 더 작은 파일을 업로드해주세요.")
         return None
 
-    st.session_state.pop("uploaded_ppt_bytes", None)
+    # Validate file signature
     uploaded_file.seek(0)
     buffer = io.BytesIO(uploaded_file.read())
+    is_valid, error_msg = validate_pptx_file(buffer)
+    
+    if not is_valid:
+        st.error(error_msg or "파일 형식이 올바르지 않습니다.")
+        buffer.close()
+        return None
+
     buffer.seek(0)
-    st.session_state["uploaded_ppt_name"] = uploaded_file.name
+    st.session_state.pop("uploaded_ppt_bytes", None)
+    sanitized_name = sanitize_filename(uploaded_file.name)
+    st.session_state["uploaded_ppt_name"] = sanitized_name
     return buffer

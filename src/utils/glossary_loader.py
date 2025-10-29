@@ -8,6 +8,8 @@ from typing import Dict, Iterable, List
 
 import pandas as pd
 
+from src.utils.security import validate_excel_file
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -15,6 +17,7 @@ class GlossaryLoader:
     """Load glossary definitions from Excel files for translation prompts."""
 
     REQUIRED_COLUMNS = 2
+    MAX_FILE_SIZE_MB = 10  # Maximum Excel file size: 10MB
 
     def load_glossary(self, file_data: io.BytesIO) -> Dict[str, str]:
         """Load glossary entries from an uploaded Excel file.
@@ -28,6 +31,20 @@ class GlossaryLoader:
         Raises:
             ValueError: If the uploaded file is invalid or empty.
         """
+
+        # Validate file size
+        file_data.seek(0, io.SEEK_END)
+        file_size = file_data.tell()
+        file_data.seek(0)
+        
+        size_mb = file_size / (1024 * 1024)
+        if size_mb > self.MAX_FILE_SIZE_MB:
+            raise ValueError(f"용어집 파일 크기가 {self.MAX_FILE_SIZE_MB}MB를 초과합니다. 더 작은 파일로 다시 시도해주세요.")
+
+        # Validate file signature
+        is_valid, error_msg = validate_excel_file(file_data)
+        if not is_valid:
+            raise ValueError(error_msg or "파일 형식이 올바르지 않습니다.")
 
         try:
             file_data.seek(0)
