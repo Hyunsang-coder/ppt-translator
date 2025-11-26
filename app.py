@@ -555,15 +555,15 @@ def _render_pdf_conversion_page(settings, conversion_settings: Dict[str, Any]) -
                     st.session_state[LOG_DIRTY_KEY] = True
                     _render_log_panel(log_placeholder, log_buffer)
 
-                    # Initialize PDF processor with OpenAI Vision
+                    # Initialize PDF processor
                     processor = PDFProcessor(
                         api_key=settings.openai_api_key,
                         model="gpt-4o",
                         dpi=conversion_settings["dpi"],
                     )
 
-                    # Process PDF with Vision
-                    LOGGER.info("PDF 처리 시작 (OpenAI Vision): %s", uploaded_file.name)
+                    # Process PDF
+                    LOGGER.info("PDF 처리 시작 (Vision-First): %s", uploaded_file.name)
                     _refresh_ui_logs(log_placeholder, log_buffer)
 
                     ocr_results = processor.process_pdf(pdf_buffer)

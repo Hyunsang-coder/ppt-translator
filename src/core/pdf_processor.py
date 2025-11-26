@@ -1,4 +1,4 @@
-"""PDF processing with Tesseract + OpenAI Vision hybrid OCR."""
+"""PDF processing using Pure OpenAI Vision for semantic layout analysis."""
 
 from __future__ import annotations
 
@@ -16,17 +16,16 @@ LOGGER = logging.getLogger(__name__)
 
 @dataclass
 class TextBlock:
-    """Represents a text block with precise pixel coordinates."""
+    """Represents a semantic text block identified by Vision."""
     
     text: str
     left: int      # pixels
     top: int       # pixels
     width: int     # pixels
     height: int    # pixels
-    confidence: float = 1.0
-    font_size: int = 16  # estimated pt
-    block_id: int = 0
-
+    block_type: str = "body"  # title, subtitle, body, list, caption
+    text_color: Tuple[int, int, int] = (0, 0, 0)  # RGB
+    
     @property
     def right(self) -> int:
         return self.left + self.width
@@ -34,11 +33,6 @@ class TextBlock:
     @property
     def bottom(self) -> int:
         return self.top + self.height
-
-    @property
-    def bbox(self) -> Tuple[int, int, int, int]:
-        """Return (left, top, width, height) tuple."""
-        return (self.left, self.top, self.width, self.height)
 
 
 @dataclass
@@ -58,36 +52,44 @@ class PageOCRResult:
 
 
 class PDFProcessor:
-    """Process PDF files using Tesseract + OpenAI Vision hybrid approach."""
+    """Process PDF files using OpenAI Vision for human-like layout analysis."""
 
-    GROUPING_PROMPT = """이 슬라이드 이미지를 분석해주세요. Tesseract OCR이 추출한 텍스트 블록 목록이 있습니다.
+    # 프롬프트 설계: 구조와 의미 중심
+    LAYOUT_PROMPT = """
+    You are an expert document layout analyzer. 
+    Analyze the provided slide image and extract all text content grouped by their semantic structure.
 
-각 블록에 대해:
-1. 텍스트 오류가 있으면 수정해주세요
-2. 의미적으로 같은 문장/단락인 블록들을 그룹으로 묶어주세요
-3. 각 그룹의 적절한 폰트 크기(pt)를 추정해주세요
+    Task:
+    1. Identify logical text blocks (e.g., a full title, a complete paragraph, a list item).
+    2. Do NOT split sentences or paragraphs into small pieces. Keep them as one block.
+    3. Classify each block type: "title", "subtitle", "body", "list", "caption".
+    4. Estimate the bounding box for each block using a 0-1000 normalized scale (0,0 is top-left, 1000,1000 is bottom-right).
+    5. Extract the exact text content.
+    6. Estimate the text color (hex code).
 
-OCR 추출 결과:
-{ocr_blocks}
-
-응답 형식 (JSON):
-```json
-{{
-  "groups": [
-    {{
-      "block_ids": [0, 1, 2],
-      "corrected_text": "보정된 전체 텍스트",
-      "font_size": 24
-    }}
-  ]
-}}
-```
-
-규칙:
-- 모든 블록은 반드시 하나의 그룹에 포함되어야 함
-- 같은 줄/문장의 단어들은 하나로 묶기
-- 제목은 큰 폰트(28-40pt), 본문은 중간(14-20pt), 캡션은 작게(10-14pt)
-- JSON만 출력, 다른 설명 없이"""
+    Output JSON Format:
+    {
+        "blocks": [
+            {
+                "type": "title",
+                "text": "GROUNDED IN PUBG LORE",
+                "box_2d": [ymin, xmin, ymax, xmax],  // 0-1000 scale
+                "color": "#FFA500"
+            },
+            {
+                "type": "body",
+                "text": "Expanding on the existing lore in the PUBG universe...",
+                "box_2d": [ymin, xmin, ymax, xmax],
+                "color": "#FFFFFF"
+            }
+        ]
+    }
+    
+    Important:
+    - "box_2d" must be [ymin, xmin, ymax, xmax].
+    - Ensure the bounding box covers the text area generously.
+    - Return ONLY valid JSON.
+    """
 
     def __init__(
         self,
@@ -95,13 +97,7 @@ OCR 추출 결과:
         model: str = "gpt-4o",
         dpi: int = 150,
     ) -> None:
-        """Initialize PDF processor.
-
-        Args:
-            api_key: OpenAI API key for Vision.
-            model: OpenAI model to use.
-            dpi: Resolution for PDF to image conversion.
-        """
+        """Initialize PDF processor."""
         self._api_key = api_key
         self._model = model
         self._dpi = dpi
@@ -136,53 +132,7 @@ OCR 추출 결과:
             images.append((page_num + 1, img))
 
         doc.close()
-        LOGGER.info("PDF conversion complete: %d pages", len(images))
         return images
-
-    def _extract_with_tesseract(
-        self,
-        image: Image.Image,
-        min_confidence: float = 30.0,
-    ) -> List[TextBlock]:
-        """Extract text blocks with precise bounding boxes using Tesseract."""
-        try:
-            import pytesseract
-        except ImportError as e:
-            raise ImportError(
-                "pytesseract required: pip install pytesseract\n"
-                "Also install Tesseract: brew install tesseract tesseract-lang"
-            ) from e
-
-        # Get word-level data with bounding boxes
-        data = pytesseract.image_to_data(
-            image,
-            lang="kor+eng",
-            output_type=pytesseract.Output.DICT,
-        )
-
-        blocks = []
-        n_boxes = len(data["text"])
-
-        for i in range(n_boxes):
-            text = data["text"][i].strip()
-            conf = float(data["conf"][i])
-
-            if not text or conf < min_confidence:
-                continue
-
-            block = TextBlock(
-                text=text,
-                left=data["left"][i],
-                top=data["top"][i],
-                width=data["width"][i],
-                height=data["height"][i],
-                confidence=conf / 100.0,
-                block_id=len(blocks),
-            )
-            blocks.append(block)
-
-        LOGGER.info("Tesseract extracted %d text blocks", len(blocks))
-        return blocks
 
     def _image_to_base64(self, image: Image.Image) -> str:
         """Convert PIL Image to base64 string."""
@@ -191,42 +141,20 @@ OCR 추출 결과:
         buffer.seek(0)
         return base64.b64encode(buffer.read()).decode("utf-8")
 
-    def _format_blocks_for_prompt(self, blocks: List[TextBlock]) -> str:
-        """Format blocks for OpenAI prompt."""
-        lines = []
-        for b in blocks:
-            lines.append(
-                f"[{b.block_id}] \"{b.text}\" (left={b.left}, top={b.top}, "
-                f"w={b.width}, h={b.height})"
-            )
-        return "\n".join(lines)
-
-    def _extract_json_from_response(self, content: str) -> dict:
-        """Extract JSON from OpenAI response."""
-        content = content.strip()
-        
-        if content.startswith("```"):
-            lines = content.split("\n")
-            if lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            content = "\n".join(lines)
-        
+    def _hex_to_rgb(self, hex_color: str) -> Tuple[int, int, int]:
+        """Convert hex string to RGB tuple."""
         try:
-            return json.loads(content)
-        except json.JSONDecodeError as e:
-            LOGGER.error("Failed to parse JSON: %s", e)
-            return {"groups": []}
+            hex_color = hex_color.lstrip("#")
+            if len(hex_color) == 3:
+                hex_color = "".join(c * 2 for c in hex_color)
+            return tuple(int(hex_color[i : i + 2], 16) for i in (0, 2, 4))
+        except Exception:
+            return (0, 0, 0)  # Default black
 
-    def _group_and_correct_with_openai(
-        self,
-        image: Image.Image,
-        blocks: List[TextBlock],
-    ) -> List[dict]:
-        """Use OpenAI Vision to correct text and group blocks."""
-        if not blocks:
-            return []
+    def _analyze_layout_with_vision(self, image: Image.Image) -> List[TextBlock]:
+        """Analyze layout and extract text using OpenAI Vision."""
+        if not self._api_key:
+            raise ValueError("OpenAI API Key is required for Vision processing.")
 
         try:
             from langchain_openai import ChatOpenAI
@@ -235,132 +163,82 @@ OCR 추출 결과:
             raise ImportError("langchain-openai required") from e
 
         base64_image = self._image_to_base64(image)
-        blocks_text = self._format_blocks_for_prompt(blocks)
-        prompt = self.GROUPING_PROMPT.format(ocr_blocks=blocks_text)
-
-        model = ChatOpenAI(
+        
+        chat = ChatOpenAI(
             model=self._model,
             api_key=self._api_key,
+            temperature=0.0,
             max_tokens=4096,
-            temperature=0,
+            model_kwargs={"response_format": {"type": "json_object"}}
         )
 
-        message = HumanMessage(
-            content=[
-                {"type": "text", "text": prompt},
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/png;base64,{base64_image}"},
-                },
-            ]
-        )
-
+        LOGGER.info("Sending image to OpenAI Vision for layout analysis...")
+        
         try:
-            response = model.invoke([message])
-            data = self._extract_json_from_response(response.content)
-            groups = data.get("groups", [])
-            LOGGER.info("OpenAI created %d groups from %d blocks", len(groups), len(blocks))
-            return groups
+            response = chat.invoke([
+                HumanMessage(content=[
+                    {"type": "text", "text": self.LAYOUT_PROMPT},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{base64_image}"},
+                    },
+                ])
+            ])
+            
+            result = json.loads(response.content)
+            raw_blocks = result.get("blocks", [])
+            
+            text_blocks = []
+            img_w, img_h = image.size
+
+            for b in raw_blocks:
+                # Parse normalized coordinates (0-1000)
+                # box_2d: [ymin, xmin, ymax, xmax]
+                ymin, xmin, ymax, xmax = b.get("box_2d", [0, 0, 0, 0])
+                
+                # Convert to pixels
+                left = int(xmin * img_w / 1000)
+                top = int(ymin * img_h / 1000)
+                right = int(xmax * img_w / 1000)
+                bottom = int(ymax * img_h / 1000)
+                
+                # Validate dimensions
+                width = max(1, right - left)
+                height = max(1, bottom - top)
+                
+                text_blocks.append(TextBlock(
+                    text=b.get("text", "").strip(),
+                    left=left,
+                    top=top,
+                    width=width,
+                    height=height,
+                    block_type=b.get("type", "body"),
+                    text_color=self._hex_to_rgb(b.get("color", "#000000"))
+                ))
+            
+            LOGGER.info("Vision detected %d semantic text blocks.", len(text_blocks))
+            return text_blocks
+
         except Exception as e:
-            LOGGER.error("OpenAI grouping failed: %s", e)
-            # Fallback: each block is its own group
-            return [
-                {"block_ids": [b.block_id], "corrected_text": b.text, "font_size": 16}
-                for b in blocks
-            ]
-
-    def _merge_blocks(
-        self,
-        blocks: List[TextBlock],
-        groups: List[dict],
-    ) -> List[TextBlock]:
-        """Merge blocks according to OpenAI grouping."""
-        if not blocks or not groups:
-            return blocks
-
-        # Create lookup by block_id
-        block_map = {b.block_id: b for b in blocks}
-        merged = []
-
-        for group in groups:
-            block_ids = group.get("block_ids", [])
-            if not block_ids:
-                continue
-
-            # Get blocks in this group
-            group_blocks = [block_map[bid] for bid in block_ids if bid in block_map]
-            if not group_blocks:
-                continue
-
-            # Calculate merged bounding box
-            min_left = min(b.left for b in group_blocks)
-            min_top = min(b.top for b in group_blocks)
-            max_right = max(b.right for b in group_blocks)
-            max_bottom = max(b.bottom for b in group_blocks)
-
-            merged_block = TextBlock(
-                text=group.get("corrected_text", " ".join(b.text for b in group_blocks)),
-                left=min_left,
-                top=min_top,
-                width=max_right - min_left,
-                height=max_bottom - min_top,
-                confidence=sum(b.confidence for b in group_blocks) / len(group_blocks),
-                font_size=group.get("font_size", 16),
-                block_id=len(merged),
-            )
-            merged.append(merged_block)
-
-        LOGGER.info("Merged %d blocks into %d groups", len(blocks), len(merged))
-        return merged
+            LOGGER.error("Vision layout analysis failed: %s", e)
+            return []
 
     def process_pdf(
         self,
         pdf_buffer: io.BytesIO,
+        use_openai: bool = True,  # Ignored, always True in this mode
         max_pages: Optional[int] = None,
     ) -> List[PageOCRResult]:
-        """Process PDF using Tesseract + OpenAI hybrid approach."""
-        if not self._api_key:
-            raise ValueError("OpenAI API key is required")
-
+        """Process PDF using pure Vision approach."""
         images = self.convert_pdf_to_images(pdf_buffer, max_pages)
         results = []
 
-        LOGGER.info("Processing %d pages with hybrid OCR...", len(images))
+        LOGGER.info("Processing %d pages with Vision-First architecture...", len(images))
 
         for page_num, image in images:
-            LOGGER.info("Page %d: Extracting with Tesseract...", page_num)
+            LOGGER.info("Page %d: Analyzing layout & content...", page_num)
             
-            # Step 1: Tesseract extraction (precise positions)
-            raw_blocks = self._extract_with_tesseract(image)
-            
-            if not raw_blocks:
-                LOGGER.warning("Page %d: No text found", page_num)
-                results.append(PageOCRResult(
-                    page_number=page_num,
-                    image=image,
-                    text_blocks=[],
-                ))
-                continue
-
-            # Step 2: OpenAI grouping and correction
-            LOGGER.info("Page %d: Grouping with OpenAI Vision...", page_num)
-            groups = self._group_and_correct_with_openai(image, raw_blocks)
-
-            # Step 3: Merge blocks
-            merged_blocks = self._merge_blocks(raw_blocks, groups)
-
-            result = PageOCRResult(
-                page_number=page_num,
-                image=image,
-                text_blocks=merged_blocks,
-            )
-            results.append(result)
-
-            LOGGER.info(
-                "Page %d: %d raw blocks → %d merged blocks",
-                page_num,
-                len(raw_blocks),
-                len(merged_blocks),
-            )
+            blocks = self._analyze_layout_with_vision(image)
+            results.append(PageOCRResult(page_num, image, blocks))
 
         return results
