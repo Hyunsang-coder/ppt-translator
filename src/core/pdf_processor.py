@@ -94,8 +94,8 @@ class PDFProcessor:
     def __init__(
         self,
         api_key: str,
-        model: str = "gpt-4o",
-        dpi: int = 150,
+        model: str = "gpt-5.1",
+        dpi: int = 200,
     ) -> None:
         """Initialize PDF processor."""
         self._api_key = api_key
@@ -190,11 +190,28 @@ class PDFProcessor:
             
             text_blocks = []
             img_w, img_h = image.size
+            
+            LOGGER.info("Image dimensions: %d x %d pixels", img_w, img_h)
 
-            for b in raw_blocks:
+            for idx, b in enumerate(raw_blocks):
                 # Parse normalized coordinates (0-1000)
                 # box_2d: [ymin, xmin, ymax, xmax]
-                ymin, xmin, ymax, xmax = b.get("box_2d", [0, 0, 0, 0])
+                raw_box = b.get("box_2d", [0, 0, 0, 0])
+                text_content = b.get("text", "").strip()
+                block_type = b.get("type", "body")
+                
+                # Debug: Log raw Vision response
+                LOGGER.info(
+                    "Block %d [%s]: raw_box=%s, text='%s'",
+                    idx, block_type, raw_box, text_content[:50] if len(text_content) > 50 else text_content
+                )
+                
+                # Ensure we have exactly 4 values
+                if len(raw_box) != 4:
+                    LOGGER.warning("Block %d has invalid box_2d length: %s", idx, raw_box)
+                    continue
+                
+                ymin, xmin, ymax, xmax = raw_box
                 
                 # Convert to pixels
                 left = int(xmin * img_w / 1000)
@@ -202,17 +219,23 @@ class PDFProcessor:
                 right = int(xmax * img_w / 1000)
                 bottom = int(ymax * img_h / 1000)
                 
+                # Debug: Log converted pixel coordinates
+                LOGGER.info(
+                    "Block %d: normalized (ymin=%d, xmin=%d, ymax=%d, xmax=%d) -> pixels (left=%d, top=%d, right=%d, bottom=%d)",
+                    idx, ymin, xmin, ymax, xmax, left, top, right, bottom
+                )
+                
                 # Validate dimensions
                 width = max(1, right - left)
                 height = max(1, bottom - top)
                 
                 text_blocks.append(TextBlock(
-                    text=b.get("text", "").strip(),
+                    text=text_content,
                     left=left,
                     top=top,
                     width=width,
                     height=height,
-                    block_type=b.get("type", "body"),
+                    block_type=block_type,
                     text_color=self._hex_to_rgb(b.get("color", "#000000"))
                 ))
             

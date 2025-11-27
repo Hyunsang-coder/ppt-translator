@@ -8,9 +8,11 @@ import json
 import logging
 import math
 import queue
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
+from zoneinfo import ZoneInfo
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -36,7 +38,34 @@ from src.utils.language_detector import LanguageDetector
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(name)s: %(message)s")
 LOGGER = logging.getLogger(__name__)
 
-CAT_IMAGE_PATH = Path(__file__).resolve().parent / "assets" / "번역캣 회색.png"
+APP_ROOT_PATH = Path(__file__).resolve()
+APP_BASE_DIR = APP_ROOT_PATH.parent
+APP_TIMEZONE = ZoneInfo("Asia/Seoul")
+
+
+def _compute_last_updated_date() -> str:
+    """Resolve last updated date from Git commit history (fallback to current date)."""
+
+    try:
+        git_output = subprocess.run(
+            ["git", "log", "-1", "--format=%cd", "--date=short"],
+            cwd=APP_BASE_DIR,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        last_commit_date = git_output.stdout.strip()
+        if last_commit_date:
+            return last_commit_date
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    return datetime.now(APP_TIMEZONE).strftime("%Y-%m-%d")
+
+
+APP_LAST_UPDATED = _compute_last_updated_date()
+
+CAT_IMAGE_PATH = APP_BASE_DIR / "assets" / "번역캣 회색.png"
 try:
     resample = Image.Resampling.LANCZOS  # type: ignore[attr-defined]
 except AttributeError:  # pragma: no cover - Pillow < 9 fallback
@@ -450,17 +479,27 @@ def _render_pdf_conversion_settings(sidebar) -> Dict[str, Any]:
 
     sidebar.markdown("#### 텍스트 박스 스타일")
 
-    bg_color = sidebar.color_picker(
-        "배경색",
-        value="#FFFFFF",
-        help="텍스트 박스의 배경색을 선택합니다. 원본 텍스트를 덮습니다.",
+    use_auto_color = sidebar.checkbox(
+        "자동 색상 매칭 (Adaptive Style)",
+        value=True,
+        help="원본 이미지의 배경색을 분석하여 텍스트 박스 색상을 자동으로 맞춥니다.",
     )
 
-    text_color = sidebar.color_picker(
-        "글자색",
-        value="#000000",
-        help="텍스트 색상을 선택합니다.",
-    )
+    if not use_auto_color:
+        bg_color = sidebar.color_picker(
+            "배경색",
+            value="#FFFFFF",
+            help="텍스트 박스의 배경색을 선택합니다. 원본 텍스트를 덮습니다.",
+        )
+
+        text_color = sidebar.color_picker(
+            "글자색",
+            value="#000000",
+            help="텍스트 색상을 선택합니다.",
+        )
+    else:
+        bg_color = None
+        text_color = None
 
     font_name = sidebar.selectbox(
         "폰트",
@@ -471,19 +510,27 @@ def _render_pdf_conversion_settings(sidebar) -> Dict[str, Any]:
 
     sidebar.markdown("#### 이미지 설정")
 
+    include_background = sidebar.checkbox(
+        "원본 배경 이미지 포함",
+        value=False,
+        help="체크하면 PPT 슬라이드 배경으로 원본 PDF 이미지를 삽입합니다.",
+    )
+
     dpi = sidebar.slider(
         "이미지 품질 (DPI)",
         min_value=72,
         max_value=300,
-        value=150,
+        value=200,
         step=18,
         help="PDF를 이미지로 변환할 때의 해상도입니다. 높을수록 품질이 좋지만 처리 시간이 길어집니다.",
     )
 
     return {
+        "use_auto_color": use_auto_color,
         "bg_color": bg_color,
         "text_color": text_color,
         "font_name": font_name,
+        "include_background": include_background,
         "dpi": dpi,
     }
 
@@ -558,7 +605,7 @@ def _render_pdf_conversion_page(settings, conversion_settings: Dict[str, Any]) -
                     # Initialize PDF processor
                     processor = PDFProcessor(
                         api_key=settings.openai_api_key,
-                        model="gpt-4o",
+                        model="gpt-5.1",
                         dpi=conversion_settings["dpi"],
                     )
 
@@ -574,14 +621,26 @@ def _render_pdf_conversion_page(settings, conversion_settings: Dict[str, Any]) -
                         return
 
                     # Create PPT with precise positioning
-                    text_style = TextBoxStyle(
-                        font_name=conversion_settings["font_name"],
-                        background_color=_hex_to_rgb(conversion_settings["bg_color"]),
-                        text_color=_hex_to_rgb(conversion_settings["text_color"]),
-                    )
+                    if conversion_settings["use_auto_color"]:
+                        # Auto color: Pass None so backend uses adaptive logic
+                        text_style = TextBoxStyle(
+                            font_name=conversion_settings["font_name"],
+                            background_color=None, # Signal for adaptive
+                            text_color=None        # Signal for adaptive
+                        )
+                    else:
+                        # Manual color
+                        text_style = TextBoxStyle(
+                            font_name=conversion_settings["font_name"],
+                            background_color=_hex_to_rgb(conversion_settings["bg_color"]),
+                            text_color=_hex_to_rgb(conversion_settings["text_color"]),
+                        )
 
                     writer = PDFToPPTWriter(text_style=text_style)
-                    output_buffer = writer.create_presentation(ocr_results)
+                    output_buffer = writer.create_presentation(
+                        ocr_results,
+                        include_background=conversion_settings["include_background"]
+                    )
                     _refresh_ui_logs(log_placeholder, log_buffer)
 
                     # Update state
@@ -809,7 +868,7 @@ def _render_translation_page(settings, settings_state: Dict[str, Any]) -> None:
             )
 
             chain = create_translation_chain(
-                model_name=settings_state.get("model", "gpt-5"),
+                model_name=settings_state.get("model", "gpt-5.1"),
                 source_lang=source_language,
                 target_lang=target_language,
                 user_prompt=settings_state.get("user_prompt"),
@@ -819,7 +878,7 @@ def _render_translation_page(settings, settings_state: Dict[str, Any]) -> None:
                 LOGGER.info(
                     "Starting translation with concurrency=%d and model=%s.",
                     safe_concurrency,
-                    settings_state.get("model", "gpt-5"),
+                    settings_state.get("model", "gpt-5.1"),
                 )
                 _refresh_ui_logs(log_placeholder, log_buffer)
                 translated_unique = translate_with_progress(
@@ -897,7 +956,7 @@ def main() -> None:
     st.sidebar.markdown(
         f"""
         <div style="text-align: center; font-size: 0.9rem; color: #6b7280; margin-top: -0.25rem; margin-bottom: 0.5rem;">
-            (Version 2.2, last updated: {datetime.now().strftime('%Y-%m-%d')})
+            (Version 2.2, last updated: {APP_LAST_UPDATED})
         </div>
         """,
         unsafe_allow_html=True,
