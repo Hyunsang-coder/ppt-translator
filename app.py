@@ -44,8 +44,9 @@ APP_TIMEZONE = ZoneInfo("Asia/Seoul")
 
 
 def _compute_last_updated_date() -> str:
-    """Resolve last updated date from Git commit history (fallback to current date)."""
+    """Resolve last updated date from Git, GitHub API, or file modification time."""
 
+    # 1. Try Git
     try:
         git_output = subprocess.run(
             ["git", "log", "-1", "--format=%cd", "--date=short"],
@@ -58,6 +59,27 @@ def _compute_last_updated_date() -> str:
         if last_commit_date:
             return last_commit_date
     except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    # 2. Try GitHub API (Fallback for cloud environments without .git)
+    try:
+        import urllib.request
+        repo_api_url = "https://api.github.com/repos/Hyunsang-coder/ppt-translator"
+        headers = {"User-Agent": "Streamlit-App-Metadata-Fetcher"}
+        req = urllib.request.Request(repo_api_url, headers=headers)
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = json.loads(response.read().decode())
+            pushed_at = data.get("pushed_at")
+            if pushed_at:
+                return pushed_at[:10]  # Extract YYYY-MM-DD
+    except Exception:
+        pass
+
+    # 3. Try File Modification Time (Fallback for offline/no-git environments)
+    try:
+        mtime = APP_ROOT_PATH.stat().st_mtime
+        return datetime.fromtimestamp(mtime, tz=APP_TIMEZONE).strftime("%Y-%m-%d")
+    except Exception:
         pass
 
     return datetime.now(APP_TIMEZONE).strftime("%Y-%m-%d")
