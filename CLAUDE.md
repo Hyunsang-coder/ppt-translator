@@ -87,3 +87,66 @@ pytest tests/ -v -m slow
 - **python-pptx**: PPTX parsing and writing
 - **Streamlit**: Web UI with session state management
 - **PyMuPDF**: PDF to image conversion for Vision processing
+
+## Claude Code Customization Best Practices
+
+### Skills
+커스텀 슬래시 명령어 정의 시 준수사항:
+- **명확한 트리거**: `/command` 형식의 직관적 명령어명 사용
+- **단일 책임**: 하나의 skill은 하나의 명확한 작업만 수행
+- **문서화**: 각 skill의 목적, 입력, 출력을 명시
+- **에러 핸들링**: 실패 시 명확한 피드백 제공
+- **멱등성**: 동일 입력에 동일 결과 보장
+
+```markdown
+# Example skill definition in .claude/skills/
+name: translate-slide
+description: Translate a single slide with glossary support
+trigger: /translate-slide
+```
+
+### Subagents (Task Tool)
+전문화된 에이전트 위임 시 준수사항:
+- **적절한 agent type 선택**:
+  - `Explore`: 코드베이스 탐색, 파일 검색
+  - `Plan`: 구현 전략 설계
+  - `Bash`: Git, 빌드, 시스템 명령
+  - `general-purpose`: 복합 멀티스텝 작업
+- **명확한 프롬프트**: 컨텍스트와 기대 결과를 구체적으로 명시
+- **병렬 실행**: 독립적인 작업은 동시에 여러 Task 호출
+- **결과 검증**: 서브에이전트 결과를 맹신하지 않고 검증
+
+```python
+# Parallel task example
+Task(subagent_type="Explore", prompt="Find all translation-related files")
+Task(subagent_type="Explore", prompt="Find all test files")  # 병렬 호출
+```
+
+### Hooks
+이벤트 기반 자동화 시 준수사항:
+- **최소 권한**: 필요한 작업만 수행, 과도한 권한 요청 금지
+- **빠른 실행**: 훅은 빠르게 완료되어야 함 (blocking 최소화)
+- **실패 허용**: 훅 실패가 전체 워크플로우를 중단시키지 않도록 설계
+- **로깅**: 디버깅을 위한 적절한 로그 출력
+- **조건부 실행**: 불필요한 실행을 피하기 위한 조건 검사
+
+```json
+// .claude/settings.json hook example
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "command": "echo 'File modification detected'"
+      }
+    ]
+  }
+}
+```
+
+### 공통 원칙
+1. **보안 우선**: 민감 정보(API 키, 자격 증명) 노출 금지
+2. **테스트 가능성**: 커스텀 확장은 독립적으로 테스트 가능하게 설계
+3. **버전 관리**: `.claude/` 설정 파일은 git으로 관리
+4. **점진적 개선**: 작게 시작하여 필요에 따라 확장
+5. **문서화**: 팀원이 이해할 수 있도록 충분한 주석과 README 제공

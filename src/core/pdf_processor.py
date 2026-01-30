@@ -102,6 +102,10 @@ class PDFProcessor:
         self._model = model
         self._dpi = dpi
 
+    # Image size limits for Vision API safety
+    MAX_IMAGE_DIMENSION = 4096  # pixels
+    MAX_IMAGE_BYTES = 20 * 1024 * 1024  # 20MB
+
     def convert_pdf_to_images(
         self,
         pdf_buffer: io.BytesIO,
@@ -117,29 +121,70 @@ class PDFProcessor:
         doc = fitz.open(stream=pdf_buffer.read(), filetype="pdf")
 
         images = []
-        total_pages = len(doc)
-        pages_to_process = min(total_pages, max_pages) if max_pages else total_pages
+        try:
+            total_pages = len(doc)
+            pages_to_process = min(total_pages, max_pages) if max_pages else total_pages
 
-        LOGGER.info("Converting %d/%d PDF pages (DPI=%d)...", 
-                    pages_to_process, total_pages, self._dpi)
+            LOGGER.info("Converting %d/%d PDF pages (DPI=%d)...",
+                        pages_to_process, total_pages, self._dpi)
 
-        for page_num in range(pages_to_process):
-            page = doc[page_num]
-            zoom = self._dpi / 72
-            matrix = fitz.Matrix(zoom, zoom)
-            pix = page.get_pixmap(matrix=matrix)
-            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-            images.append((page_num + 1, img))
+            for page_num in range(pages_to_process):
+                page = doc[page_num]
+                zoom = self._dpi / 72
+                matrix = fitz.Matrix(zoom, zoom)
+                pix = page.get_pixmap(matrix=matrix)
+                img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                images.append((page_num + 1, img))
+        finally:
+            doc.close()
 
-        doc.close()
         return images
 
+    def _validate_and_resize_image(self, image: Image.Image) -> Image.Image:
+        """Validate image size and resize if necessary to prevent memory issues."""
+        width, height = image.size
+
+        # Check if resize is needed
+        if width > self.MAX_IMAGE_DIMENSION or height > self.MAX_IMAGE_DIMENSION:
+            # Calculate new dimensions maintaining aspect ratio
+            ratio = min(self.MAX_IMAGE_DIMENSION / width, self.MAX_IMAGE_DIMENSION / height)
+            new_width = int(width * ratio)
+            new_height = int(height * ratio)
+            LOGGER.warning(
+                "Image too large (%dx%d), resizing to %dx%d",
+                width, height, new_width, new_height
+            )
+            try:
+                resample = Image.Resampling.LANCZOS
+            except AttributeError:
+                resample = Image.LANCZOS
+            image = image.resize((new_width, new_height), resample)
+
+        return image
+
     def _image_to_base64(self, image: Image.Image) -> str:
-        """Convert PIL Image to base64 string."""
+        """Convert PIL Image to base64 string with size validation."""
+        # Validate and resize if necessary
+        image = self._validate_and_resize_image(image)
+
         buffer = io.BytesIO()
         image.save(buffer, format="PNG")
         buffer.seek(0)
-        return base64.b64encode(buffer.read()).decode("utf-8")
+        encoded = base64.b64encode(buffer.read()).decode("utf-8")
+
+        # Check encoded size
+        if len(encoded) > self.MAX_IMAGE_BYTES:
+            LOGGER.warning(
+                "Base64 image size (%d bytes) exceeds limit, reducing quality",
+                len(encoded)
+            )
+            # Retry with JPEG and lower quality
+            buffer = io.BytesIO()
+            image.save(buffer, format="JPEG", quality=85)
+            buffer.seek(0)
+            encoded = base64.b64encode(buffer.read()).decode("utf-8")
+
+        return encoded
 
     def _hex_to_rgb(self, hex_color: str) -> Tuple[int, int, int]:
         """Convert hex string to RGB tuple."""

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait, TimeoutError as FuturesTimeoutError
 from typing import Dict, List
 
 from langchain_core.prompts import PromptTemplate
@@ -200,8 +200,10 @@ def translate_with_progress(
                     try:
                         parts = future.result()
                     except Exception:
+                        # Cancel pending futures and wait for them to finish
                         for pending in active:
                             pending.cancel()
+                        _wait_for_futures_cleanup(active, timeout=5.0)
                         raise
 
                     translations_per_batch[batch_index - 1] = parts
@@ -220,14 +222,26 @@ def translate_with_progress(
                         continue
                     submit_batch(executor, next_metadata, active)
         finally:
+            # Cancel any remaining futures and wait for cleanup
             for pending in active:
                 pending.cancel()
+            _wait_for_futures_cleanup(active, timeout=5.0)
 
     for batch_parts in translations_per_batch:
         if batch_parts is not None:
             translations.extend(batch_parts)
 
     return translations
+
+
+def _wait_for_futures_cleanup(active: Dict, timeout: float = 5.0) -> None:
+    """Wait for cancelled futures to complete with a timeout."""
+    if not active:
+        return
+    try:
+        wait(list(active.keys()), timeout=timeout)
+    except Exception:
+        LOGGER.debug("Some futures did not complete within timeout during cleanup.")
 
 
 def _translate_single_batch(chain, batch: Dict[str, object]) -> List[str]:

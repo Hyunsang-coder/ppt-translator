@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import html
 import io
 import json
 import logging
-import math
 import queue
 import subprocess
 from datetime import datetime
@@ -191,27 +189,18 @@ def _refresh_ui_logs(placeholder: Any, log_buffer: List[str]) -> None:
 
 def _approximate_tokens(text: str) -> int:
     """Rudimentary character-based token estimate for heuristics."""
+    # Delegate to service layer for consistency
+    from src.services.translation_service import TranslationService
 
-    if not text:
-        return 0
-    return max(1, len(text) // 4)
+    return TranslationService._approximate_tokens(text)
 
 
 def _estimate_tokens_for_batch(batch: Dict[str, object]) -> int:
     """Estimate total prompt tokens for a single translation batch."""
+    # Delegate to service layer for consistency
+    from src.services.translation_service import TranslationService
 
-    texts = str(batch.get("texts", ""))
-    ppt_context = str(batch.get("ppt_context", ""))
-    glossary_terms = str(batch.get("glossary_terms", ""))
-
-    token_estimate = (
-        _approximate_tokens(texts)
-        + _approximate_tokens(ppt_context)
-        + _approximate_tokens(glossary_terms)
-        + 200  # instructions + response padding
-    )
-
-    return max(1, token_estimate)
+    return TranslationService._estimate_tokens_for_batch(batch)
 
 
 def _attach_streamlit_log_handler(log_queue: "queue.SimpleQueue[str]") -> None:
@@ -246,33 +235,11 @@ def _load_glossary(glossary_file) -> Tuple[dict[str, str] | None, str]:
 
 def _determine_batch_size(total_paragraphs: int, settings) -> int:
     """Calculate a batch size that balances latency and throughput."""
+    # Delegate to service layer for consistency
+    from src.services.translation_service import TranslationService
 
-    if total_paragraphs <= 0:
-        return 1
-
-    min_size = max(1, int(getattr(settings, "min_batch_size", 40)))
-    max_size = max(min_size, int(getattr(settings, "max_batch_size", getattr(settings, "batch_size", min_size))))
-    default_size = max(min_size, min(max_size, int(getattr(settings, "batch_size", max_size))))
-
-    concurrency = max(1, int(getattr(settings, "max_concurrency", 1)))
-    wave_multiplier = float(getattr(settings, "wave_multiplier", 1.2) or 1.2)
-    wave_multiplier = max(1.0, wave_multiplier)
-
-    target_batches = max(concurrency, int(math.ceil(concurrency * wave_multiplier * 2)))
-    suggested_size = math.ceil(total_paragraphs / target_batches) if target_batches > 0 else default_size
-
-    batch_size = max(min_size, min(max_size, suggested_size))
-    if batch_size < default_size:
-        batch_size = max(batch_size, min(default_size, max_size))
-
-    actual_batches = max(1, math.ceil(total_paragraphs / batch_size))
-    if actual_batches > 1:
-        remainder = total_paragraphs - (actual_batches - 1) * batch_size
-        if 0 < remainder < max(1, int(min_size * 0.5)):
-            adjusted = math.ceil(total_paragraphs / (actual_batches - 1))
-            batch_size = max(min_size, min(max_size, adjusted))
-
-    return max(1, min(total_paragraphs, batch_size))
+    service = TranslationService(settings=settings)
+    return service._determine_batch_size(total_paragraphs)
 
 
 def _sanitize_for_filename(value: str, fallback: str) -> str:
@@ -716,6 +683,220 @@ def _render_pdf_conversion_page(settings, conversion_settings: Dict[str, Any]) -
         )
 
 
+def _run_translation_workflow(
+    ppt_buffer: io.BytesIO,
+    settings,
+    settings_state: Dict[str, Any],
+    preprocess_repetitions: bool,
+    log_queue: "queue.SimpleQueue[str]",
+    log_buffer: List[str],
+    log_placeholder: Any,
+) -> None:
+    """Execute the translation workflow with proper resource management."""
+    with st.spinner("번역 진행 중..."):
+        log_buffer.clear()
+        while True:
+            try:
+                log_queue.get_nowait()
+            except queue.Empty:
+                break
+        st.session_state[LOG_DIRTY_KEY] = True
+        if st.session_state.get(LOG_HANDLER_KEY, False) is False:
+            _attach_streamlit_log_handler(log_queue)
+        _render_log_panel(log_placeholder, log_buffer)
+
+        parser = PPTParser()
+        ppt_buffer.seek(0)
+        paragraphs, presentation = parser.extract_paragraphs(ppt_buffer)
+        _refresh_ui_logs(log_placeholder, log_buffer)
+
+        if not paragraphs:
+            st.warning("번역할 텍스트를 찾을 수 없습니다.")
+            return
+
+        if len(presentation.slides) > 100:
+            st.warning("슬라이드가 100장을 초과합니다. 처리 시간이 길어질 수 있습니다.")
+
+        context_manager = ContextManager(paragraphs)
+        ppt_context = context_manager.build_global_context()
+
+        glossary, glossary_terms = _load_glossary(settings_state.get("glossary_file"))
+        prepared_texts: List[str] = [info.original_text for info in paragraphs]
+        if glossary:
+            prepared_texts = GlossaryLoader.apply_glossary_to_texts(prepared_texts, glossary)
+
+        repetition_plan = None
+        target_paragraphs = paragraphs
+        target_prepared_texts = prepared_texts
+
+        if preprocess_repetitions:
+            repetition_plan = build_repetition_plan(paragraphs)
+            target_paragraphs = [paragraphs[idx] for idx in repetition_plan.unique_indices]
+            target_prepared_texts = [prepared_texts[idx] for idx in repetition_plan.unique_indices]
+
+            duplicates_info = repetition_plan.duplicate_counts()
+            reduced = len(paragraphs) - len(target_paragraphs)
+            if duplicates_info:
+                st.caption(
+                    f"반복 문구 {len(duplicates_info)}개 감지: 번역 문장 수 {len(paragraphs)} → {len(target_paragraphs)} (감소 {reduced})"
+                )
+                preview = sorted(duplicates_info.items(), key=lambda item: item[1], reverse=True)
+                with st.expander("반복 문구 미리보기", expanded=False):
+                    from src.utils.security import sanitize_html_content
+
+                    # 각 텍스트를 안전하게 이스케이프
+                    safe_rows = []
+                    for text, count in preview:
+                        safe_text = sanitize_html_content(text, max_length=500)
+                        safe_rows.append(f"<strong>{count}×</strong>: {safe_text}")
+
+                    rows = "<br>".join(safe_rows)
+                    st.markdown(
+                        """
+                        <div style="max-height: 280px; overflow-y: auto; padding-right: 6px;">
+                            {rows}
+                        </div>
+                        """.format(rows=rows or "<em>중복 문장이 없습니다.</em>"),
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.caption("반복 문구 사전 처리 결과 중복 문장이 발견되지 않았습니다.")
+
+            if not target_paragraphs:
+                st.warning("반복 문구 사전 처리 결과 번역할 텍스트가 없습니다.")
+                return
+
+        detector = LanguageDetector()
+        sample_text = "\n".join(paragraph.original_text for paragraph in paragraphs[:50])
+
+        source_language = settings_state.get("source_lang")
+        target_language = settings_state.get("target_lang")
+
+        if source_language == "Auto":
+            source_language = detector.detect_language(sample_text)
+            st.info(f"🔍 소스 언어 감지: {source_language}")
+
+        if target_language == "Auto":
+            target_language = detector.infer_target_language(source_language)
+            st.info(f"🔍 타겟 언어 추론: {target_language}")
+
+        batch_size = _determine_batch_size(len(target_paragraphs), settings)
+
+        batches = chunk_paragraphs(
+            target_paragraphs,
+            batch_size=batch_size,
+            ppt_context=ppt_context,
+            glossary_terms=glossary_terms,
+            prepared_texts=target_prepared_texts,
+        )
+
+        LOGGER.info(
+            "Prepared %d batches (batch size %d, unique paragraphs %d of %d total).",
+            len(batches),
+            batch_size,
+            len(target_paragraphs),
+            len(paragraphs),
+        )
+        _refresh_ui_logs(log_placeholder, log_buffer)
+
+        if not batches:
+            st.warning("번역할 배치를 생성하지 못했습니다.")
+            return
+
+        estimated_tokens = _estimate_tokens_for_batch(batches[0])
+        safe_concurrency = max(
+            1,
+            min(
+                int(settings.max_concurrency),
+                max(1, settings.tpm_limit // max(estimated_tokens, 1)),
+            ),
+        )
+
+        LOGGER.info(
+            "Estimated %d tokens per batch; using concurrency=%d (config max=%d, TPM limit=%d).",
+            estimated_tokens,
+            safe_concurrency,
+            settings.max_concurrency,
+            settings.tpm_limit,
+        )
+        _refresh_ui_logs(log_placeholder, log_buffer)
+
+        st.caption(
+            f"배치 크기: {batch_size} 문장 (고유 {len(target_paragraphs)} / 전체 {len(paragraphs)}) | 최대 동시 실행: {safe_concurrency}"
+        )
+
+        progress_tracker = ProgressTracker(
+            total_batches=len(batches),
+            total_sentences=len(target_paragraphs),
+            log_update_fn=lambda: _refresh_ui_logs(log_placeholder, log_buffer),
+        )
+
+        chain = create_translation_chain(
+            model_name=settings_state.get("model", "gpt-5.1"),
+            source_lang=source_language,
+            target_lang=target_language,
+            user_prompt=settings_state.get("user_prompt"),
+        )
+
+        try:
+            LOGGER.info(
+                "Starting translation with concurrency=%d and model=%s.",
+                safe_concurrency,
+                settings_state.get("model", "gpt-5.1"),
+            )
+            _refresh_ui_logs(log_placeholder, log_buffer)
+            translated_unique = translate_with_progress(
+                chain,
+                batches,
+                progress_tracker,
+                max_concurrency=safe_concurrency,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            LOGGER.exception("Translation failed: %s", exc)
+            st.error("번역 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.")
+            return
+
+        if repetition_plan is not None:
+            translated_texts = expand_translations(
+                repetition_plan,
+                translated_unique,
+                len(paragraphs),
+            )
+        else:
+            translated_texts = translated_unique
+
+        if glossary:
+            translated_texts = [
+                GlossaryLoader.apply_glossary_to_translation(text, glossary)
+                for text in translated_texts
+            ]
+
+        writer = PPTWriter()
+        output_buffer = writer.apply_translations(paragraphs, translated_texts, presentation)
+        _refresh_ui_logs(log_placeholder, log_buffer)
+
+        total_elapsed = progress_tracker.finish()
+        minutes, seconds = divmod(total_elapsed, 60)
+        LOGGER.info("Translation completed in %d분 %.1f초", int(minutes), seconds)
+        _refresh_ui_logs(log_placeholder, log_buffer)
+        st.success(f"✅ 번역 완료! 총 소요 시간: {int(minutes)}분 {seconds:.1f}초")
+
+        original_name = st.session_state.get("uploaded_ppt_name", "presentation")
+        original_stem = Path(original_name).stem or "presentation"
+        original_stem = _sanitize_for_filename(original_stem, "presentation")
+        clean_model = _sanitize_for_filename(settings_state.get("model", "model"), "model")
+        timestamp = datetime.now().strftime("%Y%m%d")
+        safe_target_lang = _sanitize_for_filename(target_language, "target")
+        download_name = f"{safe_target_lang}_{original_stem}_{clean_model}_{timestamp}.pptx"
+
+        st.download_button(
+            label="📥 번역된 PPT 다운로드",
+            data=output_buffer.getvalue(),
+            file_name=download_name,
+            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        )
+
+
 def _render_translation_page(settings, settings_state: Dict[str, Any]) -> None:
     """Render PPT translation workflow."""
 
@@ -751,215 +932,15 @@ def _render_translation_page(settings, settings_state: Dict[str, Any]) -> None:
         return
 
     if st.button("🚀 번역 시작", type="primary"):
-        with st.spinner("번역 진행 중..."):
-            log_buffer.clear()
-            while True:
-                try:
-                    log_queue.get_nowait()
-                except queue.Empty:
-                    break
-            st.session_state[LOG_DIRTY_KEY] = True
-            if st.session_state.get(LOG_HANDLER_KEY, False) is False:
-                _attach_streamlit_log_handler(log_queue)
-            _render_log_panel(log_placeholder, log_buffer)
-
-            parser = PPTParser()
-            ppt_buffer.seek(0)
-            paragraphs, presentation = parser.extract_paragraphs(ppt_buffer)
-            _refresh_ui_logs(log_placeholder, log_buffer)
-
-            if not paragraphs:
-                st.warning("번역할 텍스트를 찾을 수 없습니다.")
-                return
-
-            if len(presentation.slides) > 100:
-                st.warning("슬라이드가 100장을 초과합니다. 처리 시간이 길어질 수 있습니다.")
-
-            context_manager = ContextManager(paragraphs)
-            ppt_context = context_manager.build_global_context()
-
-            glossary, glossary_terms = _load_glossary(settings_state.get("glossary_file"))
-            prepared_texts: List[str] = [info.original_text for info in paragraphs]
-            if glossary:
-                prepared_texts = GlossaryLoader.apply_glossary_to_texts(prepared_texts, glossary)
-
-            repetition_plan = None
-            target_paragraphs = paragraphs
-            target_prepared_texts = prepared_texts
-
-            if preprocess_repetitions:
-                repetition_plan = build_repetition_plan(paragraphs)
-                target_paragraphs = [paragraphs[idx] for idx in repetition_plan.unique_indices]
-                target_prepared_texts = [prepared_texts[idx] for idx in repetition_plan.unique_indices]
-
-                duplicates_info = repetition_plan.duplicate_counts()
-                reduced = len(paragraphs) - len(target_paragraphs)
-                if duplicates_info:
-                    st.caption(
-                        f"반복 문구 {len(duplicates_info)}개 감지: 번역 문장 수 {len(paragraphs)} → {len(target_paragraphs)} (감소 {reduced})"
-                    )
-                    preview = sorted(duplicates_info.items(), key=lambda item: item[1], reverse=True)
-                    with st.expander("반복 문구 미리보기", expanded=False):
-                        from src.utils.security import sanitize_html_content
-                        
-                        # 각 텍스트를 안전하게 이스케이프
-                        safe_rows = []
-                        for text, count in preview:
-                            safe_text = sanitize_html_content(text, max_length=500)
-                            safe_rows.append(f"<strong>{count}×</strong>: {safe_text}")
-                        
-                        rows = "<br>".join(safe_rows)
-                        st.markdown(
-                            """
-                            <div style="max-height: 280px; overflow-y: auto; padding-right: 6px;">
-                                {rows}
-                            </div>
-                            """.format(rows=rows or "<em>중복 문장이 없습니다.</em>"),
-                            unsafe_allow_html=True,
-                        )
-                else:
-                    st.caption("반복 문구 사전 처리 결과 중복 문장이 발견되지 않았습니다.")
-
-                if not target_paragraphs:
-                    st.warning("반복 문구 사전 처리 결과 번역할 텍스트가 없습니다.")
-                    return
-
-            detector = LanguageDetector()
-            sample_text = "\n".join(paragraph.original_text for paragraph in paragraphs[:50])
-
-            source_language = settings_state.get("source_lang")
-            target_language = settings_state.get("target_lang")
-
-            if source_language == "Auto":
-                source_language = detector.detect_language(sample_text)
-                st.info(f"🔍 소스 언어 감지: {source_language}")
-
-            if target_language == "Auto":
-                target_language = detector.infer_target_language(source_language)
-                st.info(f"🔍 타겟 언어 추론: {target_language}")
-
-            batch_size = _determine_batch_size(len(target_paragraphs), settings)
-
-            batches = chunk_paragraphs(
-                target_paragraphs,
-                batch_size=batch_size,
-                ppt_context=ppt_context,
-                glossary_terms=glossary_terms,
-                prepared_texts=target_prepared_texts,
+        try:
+            _run_translation_workflow(
+                ppt_buffer, settings, settings_state, preprocess_repetitions,
+                log_queue, log_buffer, log_placeholder
             )
-
-            LOGGER.info(
-                "Prepared %d batches (batch size %d, unique paragraphs %d of %d total).",
-                len(batches),
-                batch_size,
-                len(target_paragraphs),
-                len(paragraphs),
-            )
-            _refresh_ui_logs(log_placeholder, log_buffer)
-
-            if not batches:
-                st.warning("번역할 배치를 생성하지 못했습니다.")
-                return
-
-            estimated_tokens = _estimate_tokens_for_batch(batches[0])
-            safe_concurrency = max(
-                1,
-                min(
-                    int(settings.max_concurrency),
-                    max(1, settings.tpm_limit // max(estimated_tokens, 1)),
-                ),
-            )
-
-            LOGGER.info(
-                "Estimated %d tokens per batch; using concurrency=%d (config max=%d, TPM limit=%d).",
-                estimated_tokens,
-                safe_concurrency,
-                settings.max_concurrency,
-                settings.tpm_limit,
-            )
-            _refresh_ui_logs(log_placeholder, log_buffer)
-
-            st.caption(
-                f"배치 크기: {batch_size} 문장 (고유 {len(target_paragraphs)} / 전체 {len(paragraphs)}) | 최대 동시 실행: {safe_concurrency}"
-            )
-
-            progress_tracker = ProgressTracker(
-                total_batches=len(batches),
-                total_sentences=len(target_paragraphs),
-                log_update_fn=lambda: _refresh_ui_logs(log_placeholder, log_buffer),
-            )
-
-            chain = create_translation_chain(
-                model_name=settings_state.get("model", "gpt-5.1"),
-                source_lang=source_language,
-                target_lang=target_language,
-                user_prompt=settings_state.get("user_prompt"),
-            )
-
-            try:
-                LOGGER.info(
-                    "Starting translation with concurrency=%d and model=%s.",
-                    safe_concurrency,
-                    settings_state.get("model", "gpt-5.1"),
-                )
-                _refresh_ui_logs(log_placeholder, log_buffer)
-                translated_unique = translate_with_progress(
-                    chain,
-                    batches,
-                    progress_tracker,
-                    max_concurrency=safe_concurrency,
-                )
-            except Exception as exc:  # pylint: disable=broad-except
-                LOGGER.exception("Translation failed: %s", exc)
-                st.error("번역 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.")
-                return
-
-            if repetition_plan is not None:
-                translated_texts = expand_translations(
-                    repetition_plan,
-                    translated_unique,
-                    len(paragraphs),
-                )
-            else:
-                translated_texts = translated_unique
-
-            if glossary:
-                translated_texts = [
-                    GlossaryLoader.apply_glossary_to_translation(text, glossary)
-                    for text in translated_texts
-                ]
-
-            writer = PPTWriter()
-            output_buffer = writer.apply_translations(paragraphs, translated_texts, presentation)
-            _refresh_ui_logs(log_placeholder, log_buffer)
-
-            # Explicitly clear large objects to help GC
-            paragraphs = None
-            presentation = None
-            translated_texts = None
-            if repetition_plan is not None:
-                translated_unique = None
-
-            total_elapsed = progress_tracker.finish()
-            minutes, seconds = divmod(total_elapsed, 60)
-            LOGGER.info("Translation completed in %d분 %.1f초", int(minutes), seconds)
-            _refresh_ui_logs(log_placeholder, log_buffer)
-            st.success(f"✅ 번역 완료! 총 소요 시간: {int(minutes)}분 {seconds:.1f}초")
-
-            original_name = st.session_state.get("uploaded_ppt_name", "presentation")
-            original_stem = Path(original_name).stem or "presentation"
-            original_stem = _sanitize_for_filename(original_stem, "presentation")
-            clean_model = _sanitize_for_filename(settings_state.get("model", "model"), "model")
-            timestamp = datetime.now().strftime("%Y%m%d")
-            safe_target_lang = _sanitize_for_filename(target_language, "target")
-            download_name = f"{safe_target_lang}_{original_stem}_{clean_model}_{timestamp}.pptx"
-
-            st.download_button(
-                label="📥 번역된 PPT 다운로드",
-                data=output_buffer.getvalue(),
-                file_name=download_name,
-                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            )
+        finally:
+            # Ensure buffer cleanup to prevent memory leaks
+            if ppt_buffer:
+                ppt_buffer.close()
 
 
 def main() -> None:
