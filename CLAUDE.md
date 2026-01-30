@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-PPT 번역캣 is a PowerPoint translation application using LangChain and OpenAI GPT models. It provides both a Streamlit web UI and FastAPI REST API. Features include slide text translation while preserving original formatting, glossary support, auto language detection, and detailed progress tracking.
+PPT 번역캣 is a PowerPoint translation application using LangChain with OpenAI GPT and Anthropic Claude models. It provides both a Streamlit web UI and FastAPI REST API. Features include slide text translation while preserving original formatting, glossary support, auto language detection, and detailed progress tracking.
 
 ## Development Commands
 
@@ -27,7 +27,9 @@ pytest tests/ -v -m slow
 
 ## Environment Setup
 
-1. Create `.env` from `.env.example` and set `OPENAI_API_KEY`
+1. Create `.env` from `.env.example` and set API keys:
+   - `OPENAI_API_KEY` - Required for OpenAI models (GPT)
+   - `ANTHROPIC_API_KEY` - Required for Anthropic models (Claude)
 2. Optional environment variables for tuning:
    - `TRANSLATION_MAX_CONCURRENCY` (default: 8)
    - `TRANSLATION_BATCH_SIZE` (default: 80)
@@ -37,10 +39,9 @@ pytest tests/ -v -m slow
 ## Architecture
 
 ### Entry Points
-- `app.py`: Streamlit UI orchestrating three workflows:
+- `app.py`: Streamlit UI orchestrating two workflows:
   - PPT Translation (main feature)
   - Text Extraction (PPT → Markdown)
-  - PDF → PPT Conversion (Vision API-based)
 - `api.py`: FastAPI REST API server
   - `GET /health`: Health check endpoint
   - `POST /translate`: PPT translation endpoint (multipart/form-data)
@@ -50,10 +51,6 @@ pytest tests/ -v -m slow
 - `ppt_parser.py`: Extracts `ParagraphInfo` objects from PPTX (handles shapes, tables, groups)
 - `ppt_writer.py`: Applies translations back using run-based text distribution to preserve formatting
 - `text_extractor.py`: Converts PPTX to structured markdown
-- `pdf_processor.py`: Uses OpenAI Vision for semantic layout analysis of PDFs (with image size validation/resize)
-- `pdf_to_ppt_writer.py`: Creates PPTX from Vision OCR results with precise positioning
-- `pdf_to_ppt_helpers.py`: Helper functions for PDF to PPT conversion
-- `image_optimizer.py`: Image optimization utilities for Vision API
 
 ### Service Layer (`src/services/`)
 - `models.py`: Data models (`TranslationRequest`, `TranslationResult`, `TranslationProgress`, `TranslationStatus`)
@@ -62,7 +59,8 @@ pytest tests/ -v -m slow
   - Progress callback support for real-time updates
 
 ### Translation Chain (`src/chains/`)
-- `translation_chain.py`: LangChain pipeline with `ChatOpenAI`, batch retry logic via tenacity, concurrent execution with wave-based batching
+- `llm_factory.py`: Factory for creating LLM instances (OpenAI/Anthropic) with provider-specific configuration
+- `translation_chain.py`: LangChain pipeline with batch retry logic via tenacity, concurrent execution with wave-based batching
 - `context_manager.py`: Builds global presentation context for consistent translations
 
 ### Utilities (`src/utils/`)
@@ -81,8 +79,6 @@ pytest tests/ -v -m slow
 
 ### Tests (`tests/`)
 - `test_translation.py`: Unit tests for translation helpers and language detection
-- `test_integration_pdf.py`: PDF processing integration tests
-- `test_pdf_to_ppt_layout.py`: PDF to PPT layout conversion tests
 
 ## Key Patterns
 
@@ -108,22 +104,30 @@ pytest tests/ -v -m slow
 # Health check
 curl http://localhost:8000/health
 
-# Translate PPT
+# Translate PPT with OpenAI
 curl -X POST http://localhost:8000/translate \
   -F "ppt_file=@presentation.pptx" \
   -F "target_lang=한국어" \
-  -F "model=gpt-5.1" \
+  -F "provider=openai" \
+  -F "model=gpt-5.2" \
+  -o translated.pptx
+
+# Translate PPT with Anthropic Claude
+curl -X POST http://localhost:8000/translate \
+  -F "ppt_file=@presentation.pptx" \
+  -F "target_lang=한국어" \
+  -F "provider=anthropic" \
+  -F "model=claude-sonnet-4-5-20250929" \
   -o translated.pptx
 ```
 
 ## Libraries
-- **LangChain**: Translation chain with `ChatOpenAI` and `PromptTemplate`
+- **LangChain**: Translation chain with `ChatOpenAI`/`ChatAnthropic` and `PromptTemplate`
+- **langchain-anthropic**: Anthropic Claude model integration
 - **python-pptx**: PPTX parsing and writing
 - **Streamlit**: Web UI with session state management
 - **FastAPI**: REST API server with automatic OpenAPI docs
-- **PyMuPDF**: PDF to image conversion for Vision processing
 - **Mangum**: AWS Lambda adapter for FastAPI
-- **OpenCV**: Image processing for PDF optimization
 - **tenacity**: Retry logic with exponential backoff
 - **langdetect**: Automatic language detection
 

@@ -8,6 +8,8 @@ from typing import Any, Dict, Optional
 import streamlit as st
 from streamlit.delta_generator import DeltaGenerator
 
+from src.chains.llm_factory import ANTHROPIC_MODELS, ANTHROPIC_MODEL_DISPLAY_NAMES, OPENAI_MODELS, Provider
+
 
 _TEMPLATE_PATH = Path(__file__).resolve().parents[2] / "glossary_template.xlsx"
 
@@ -54,11 +56,32 @@ def render_settings(container: Optional[DeltaGenerator] = None) -> Dict[str, Any
         help="'Auto'를 선택하면 소스 언어의 반대로 추론합니다",
     )
 
+    provider: Provider = expander.selectbox(
+        "AI Provider",
+        ["anthropic", "openai"],
+        index=0,
+        format_func=lambda x: "Anthropic" if x == "anthropic" else "OpenAI",
+        help="Anthropic: Claude 모델 | OpenAI: GPT 모델",
+    )
+
+    model_options = ANTHROPIC_MODELS if provider == "anthropic" else OPENAI_MODELS
+    model_help = (
+        "Claude Sonnet 4.5: 추천 (균형) | Claude Opus 4.5: 최고 품질 | Claude Haiku 4.5: 빠르고 저렴"
+        if provider == "anthropic"
+        else "gpt-5.2: 최고 품질 (느림, 비쌈) | gpt-5-mini: 빠르고 저렴"
+    )
+
+    def format_model_name(model_id: str) -> str:
+        if provider == "anthropic":
+            return ANTHROPIC_MODEL_DISPLAY_NAMES.get(model_id, model_id)
+        return model_id
+
     model = expander.selectbox(
         "모델 선택",
-        ["gpt-5.2", "gpt-5-mini"],
+        model_options,
         index=0,
-        help="gpt-5.2: 최고 품질 (느림, 비쌈) | gpt-5-mini: 빠르고 저렴",
+        format_func=format_model_name,
+        help=model_help,
     )
 
     preprocess_repetitions = expander.checkbox(
@@ -93,6 +116,7 @@ def render_settings(container: Optional[DeltaGenerator] = None) -> Dict[str, Any
     return {
         "source_lang": source_lang,
         "target_lang": target_lang,
+        "provider": provider,
         "model": model,
         "preprocess_repetitions": preprocess_repetitions,
         "user_prompt": user_prompt,

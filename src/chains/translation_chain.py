@@ -10,9 +10,9 @@ from typing import Dict, List
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
-from langchain_openai import ChatOpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from src.chains.llm_factory import Provider, create_llm
 from src.ui.progress_tracker import ProgressTracker
 
 LOGGER = logging.getLogger(__name__)
@@ -49,20 +49,22 @@ def create_translation_chain(
     source_lang: str,
     target_lang: str,
     user_prompt: str | None,
+    provider: Provider = "openai",
 ):
-    """Create a LangChain sequence for translation relying on ChatGPT models.
+    """Create a LangChain sequence for translation.
 
     Args:
-        model_name: OpenAI model identifier (gpt-5.2 or gpt-5-mini).
+        model_name: Model identifier (e.g., gpt-5.2, claude-sonnet-4-5-20250929).
         source_lang: Display name of the source language.
         target_lang: Display name of the target language.
         user_prompt: Optional custom instruction string.
+        provider: LLM provider ("openai" or "anthropic").
 
     Returns:
         Configured LangChain runnable sequence.
     """
 
-    llm = ChatOpenAI(model=model_name)
+    llm = create_llm(provider=provider, model_name=model_name)
     default_prompt = user_prompt or "Translate naturally and professionally."
 
     chain = (

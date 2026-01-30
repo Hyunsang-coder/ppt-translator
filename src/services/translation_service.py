@@ -382,6 +382,7 @@ class TranslationService:
             source_lang=source_language,
             target_lang=target_language,
             user_prompt=request.user_prompt,
+            provider=request.provider,
         )
 
         LOGGER.info(

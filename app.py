@@ -21,8 +21,6 @@ from src.chains.translation_chain import create_translation_chain, translate_wit
 from src.core.ppt_parser import PPTParser
 from src.core.ppt_writer import PPTWriter
 from src.core.text_extractor import ExtractionOptions, docs_to_markdown, extract_pptx_to_docs
-from src.core.pdf_processor import PDFProcessor
-from src.core.pdf_to_ppt_writer import PDFToPPTWriter, TextBoxStyle
 from src.ui.extraction_settings import render_extraction_settings
 from src.ui.file_handler import handle_upload
 from src.ui.progress_tracker import ProgressTracker
@@ -112,7 +110,6 @@ LOG_BUFFER_KEY = "ui_log_buffer"
 LOG_DIRTY_KEY = "ui_log_dirty"
 LOG_HANDLER_KEY = "ui_log_handler_attached"
 EXTRACTION_STATE_KEY = "text_extraction_state"
-PDF_CONVERSION_STATE_KEY = "pdf_conversion_state"
 
 
 class StreamlitLogHandler(logging.Handler):
@@ -450,239 +447,6 @@ def _render_text_extraction_page(settings, extraction_options: ExtractionOptions
     )
 
 
-def _get_pdf_conversion_state() -> Dict[str, Any]:
-    """Get or initialize PDF conversion state."""
-    state = st.session_state.setdefault(PDF_CONVERSION_STATE_KEY, {})
-    state.setdefault("result_buffer", None)
-    state.setdefault("file_name", None)
-    state.setdefault("pages_processed", 0)
-    state.setdefault("text_blocks_count", 0)
-    return state
-
-
-def _render_pdf_conversion_settings(sidebar) -> Dict[str, Any]:
-    """Render PDF to PPT conversion settings in sidebar."""
-    sidebar.markdown("### PDF 변환 설정")
-    
-    sidebar.info("🤖 OpenAI Vision API를 사용하여 PDF를 분석합니다. API 비용이 발생합니다.")
-
-    sidebar.markdown("#### 텍스트 박스 스타일")
-
-    use_auto_color = sidebar.checkbox(
-        "자동 색상 매칭 (Adaptive Style)",
-        value=True,
-        help="원본 이미지의 배경색을 분석하여 텍스트 박스 색상을 자동으로 맞춥니다.",
-    )
-
-    if not use_auto_color:
-        bg_color = sidebar.color_picker(
-            "배경색",
-            value="#FFFFFF",
-            help="텍스트 박스의 배경색을 선택합니다. 원본 텍스트를 덮습니다.",
-        )
-
-        text_color = sidebar.color_picker(
-            "글자색",
-            value="#000000",
-            help="텍스트 색상을 선택합니다.",
-        )
-    else:
-        bg_color = None
-        text_color = None
-
-    font_name = sidebar.selectbox(
-        "폰트",
-        options=["맑은 고딕", "Arial", "나눔고딕", "굴림"],
-        index=0,
-        help="텍스트 박스에 사용할 폰트를 선택합니다.",
-    )
-
-    sidebar.markdown("#### 이미지 설정")
-
-    include_background = sidebar.checkbox(
-        "원본 배경 이미지 포함",
-        value=False,
-        help="체크하면 PPT 슬라이드 배경으로 원본 PDF 이미지를 삽입합니다.",
-    )
-
-    dpi = sidebar.slider(
-        "이미지 품질 (DPI)",
-        min_value=72,
-        max_value=300,
-        value=200,
-        step=18,
-        help="PDF를 이미지로 변환할 때의 해상도입니다. 높을수록 품질이 좋지만 처리 시간이 길어집니다.",
-    )
-
-    return {
-        "use_auto_color": use_auto_color,
-        "bg_color": bg_color,
-        "text_color": text_color,
-        "font_name": font_name,
-        "include_background": include_background,
-        "dpi": dpi,
-    }
-
-
-def _hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
-    """Convert hex color string to RGB tuple."""
-    hex_color = hex_color.lstrip("#")
-    return tuple(int(hex_color[i : i + 2], 16) for i in (0, 2, 4))
-
-
-def _render_pdf_conversion_page(settings, conversion_settings: Dict[str, Any]) -> None:
-    """Render PDF to PPT conversion workflow."""
-
-    st.title("📄 PDF → PPT 변환")
-    st.markdown(
-        "OpenAI Vision을 사용하여 PDF를 지능적으로 분석하고, "
-        "원본 페이지를 배경으로 편집 가능한 PPT를 생성합니다."
-    )
-
-    # Check API key
-    if not settings.openai_api_key:
-        st.error("⚠️ OPENAI_API_KEY가 설정되지 않았습니다. PDF 변환 기능을 사용하려면 API 키가 필요합니다.")
-        return
-
-    # Log panel setup
-    log_panel = st.expander("📜 실행 로그", expanded=True)
-    log_placeholder = log_panel.empty()
-    log_queue, log_buffer = _initialise_log_state()
-    _attach_streamlit_log_handler(log_queue)
-    _refresh_ui_logs(log_placeholder, log_buffer)
-
-    uploaded_file = st.file_uploader(
-        "PDF 파일 업로드",
-        type=["pdf"],
-        key="pdf_conversion_uploader",
-        help="최대 %dMB까지 업로드 가능합니다." % settings.max_upload_size_mb,
-    )
-
-    state = _get_pdf_conversion_state()
-
-    # Check if file changed
-    if uploaded_file:
-        if state["file_name"] != uploaded_file.name:
-            state["result_buffer"] = None
-            state["file_name"] = uploaded_file.name
-            state["pages_processed"] = 0
-            state["text_blocks_count"] = 0
-
-    convert_clicked = st.button(
-        "🔄 PPT로 변환",
-        type="primary",
-        disabled=uploaded_file is None,
-    )
-
-    if convert_clicked and uploaded_file is not None:
-        size_mb = uploaded_file.size / (1024 * 1024)
-        if size_mb > settings.max_upload_size_mb:
-            st.error(
-                f"파일 크기가 {settings.max_upload_size_mb}MB를 초과합니다. 더 작은 파일로 다시 시도해주세요."
-            )
-        else:
-            pdf_buffer = io.BytesIO(uploaded_file.getvalue())
-            pdf_buffer.seek(0)
-
-            with st.spinner("OpenAI Vision으로 PDF를 분석하는 중... (페이지당 약 5-10초 소요)"):
-                try:
-                    # Clear log buffer for fresh start
-                    log_buffer.clear()
-                    st.session_state[LOG_DIRTY_KEY] = True
-                    _render_log_panel(log_placeholder, log_buffer)
-
-                    # Initialize PDF processor
-                    processor = PDFProcessor(
-                        api_key=settings.openai_api_key,
-                        model="gpt-5.1",
-                        dpi=conversion_settings["dpi"],
-                    )
-
-                    # Process PDF
-                    LOGGER.info("PDF 처리 시작 (Vision-First): %s", uploaded_file.name)
-                    _refresh_ui_logs(log_placeholder, log_buffer)
-
-                    ocr_results = processor.process_pdf(pdf_buffer)
-                    _refresh_ui_logs(log_placeholder, log_buffer)
-
-                    if not ocr_results:
-                        st.warning("PDF에서 페이지를 추출할 수 없습니다.")
-                        return
-
-                    # Create PPT with precise positioning
-                    if conversion_settings["use_auto_color"]:
-                        # Auto color: Pass None so backend uses adaptive logic
-                        text_style = TextBoxStyle(
-                            font_name=conversion_settings["font_name"],
-                            background_color=None, # Signal for adaptive
-                            text_color=None        # Signal for adaptive
-                        )
-                    else:
-                        # Manual color
-                        text_style = TextBoxStyle(
-                            font_name=conversion_settings["font_name"],
-                            background_color=_hex_to_rgb(conversion_settings["bg_color"]),
-                            text_color=_hex_to_rgb(conversion_settings["text_color"]),
-                        )
-
-                    writer = PDFToPPTWriter(text_style=text_style)
-                    output_buffer = writer.create_presentation(
-                        ocr_results,
-                        include_background=conversion_settings["include_background"]
-                    )
-                    _refresh_ui_logs(log_placeholder, log_buffer)
-
-                    # Update state
-                    total_blocks = sum(len(r.text_blocks) for r in ocr_results)
-                    state["result_buffer"] = output_buffer
-                    state["pages_processed"] = len(ocr_results)
-                    state["text_blocks_count"] = total_blocks
-
-                    LOGGER.info(
-                        "변환 완료: %d페이지, %d개 텍스트 블록",
-                        len(ocr_results),
-                        total_blocks,
-                    )
-                    _refresh_ui_logs(log_placeholder, log_buffer)
-
-                    st.success(
-                        f"✅ 변환 완료! {len(ocr_results)}페이지에서 {total_blocks}개의 텍스트 블록을 추출했습니다."
-                    )
-
-                except ValueError as e:
-                    LOGGER.error("설정 오류: %s", e)
-                    st.error(str(e))
-                except ImportError as e:
-                    LOGGER.error("필수 라이브러리가 설치되지 않았습니다: %s", e)
-                    st.error(
-                        "필수 라이브러리가 설치되지 않았습니다. "
-                        "`pip install PyMuPDF langchain-openai` 명령어로 설치해주세요."
-                    )
-                except Exception as exc:
-                    LOGGER.exception("PDF 변환 실패: %s", exc)
-                    st.error("PDF 변환 중 오류가 발생했습니다. 파일을 다시 확인해주세요.")
-                finally:
-                    pdf_buffer.close()
-
-    # Download button
-    if state["result_buffer"] is not None:
-        original_name = Path(state["file_name"] or "document").stem
-        safe_name = _sanitize_for_filename(original_name, "document")
-        timestamp = datetime.now().strftime("%Y%m%d")
-        download_name = f"{safe_name}_converted_{timestamp}.pptx"
-
-        st.download_button(
-            label="📥 변환된 PPT 다운로드",
-            data=state["result_buffer"].getvalue(),
-            file_name=download_name,
-            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        )
-
-        st.caption(
-            f"📊 {state['pages_processed']}페이지, {state['text_blocks_count']}개 텍스트 블록"
-        )
-
-
 def _run_translation_workflow(
     ppt_buffer: io.BytesIO,
     settings,
@@ -832,17 +596,19 @@ def _run_translation_workflow(
         )
 
         chain = create_translation_chain(
-            model_name=settings_state.get("model", "gpt-5.1"),
+            model_name=settings_state.get("model", "gpt-5.2"),
             source_lang=source_language,
             target_lang=target_language,
             user_prompt=settings_state.get("user_prompt"),
+            provider=settings_state.get("provider", "openai"),
         )
 
         try:
             LOGGER.info(
-                "Starting translation with concurrency=%d and model=%s.",
+                "Starting translation with concurrency=%d, provider=%s and model=%s.",
                 safe_concurrency,
-                settings_state.get("model", "gpt-5.1"),
+                settings_state.get("provider", "openai"),
+                settings_state.get("model", "gpt-5.2"),
             )
             _refresh_ui_logs(log_placeholder, log_buffer)
             translated_unique = translate_with_progress(
@@ -903,8 +669,8 @@ def _render_translation_page(settings, settings_state: Dict[str, Any]) -> None:
     st.title("🌐 번역된 PPT 생성")
     st.markdown("원본 PPT의 디자인을 유지하면서 내부 텍스트만 번역한 새 파일을 생성합니다.")
 
-    if not settings.openai_api_key:
-        st.warning("OPENAI_API_KEY가 설정되지 않았습니다. 번역 실행 시 에러가 발생할 수 있습니다.")
+    if not settings.openai_api_key and not settings.anthropic_api_key:
+        st.warning("OPENAI_API_KEY 또는 ANTHROPIC_API_KEY가 설정되지 않았습니다. 번역 실행 시 에러가 발생할 수 있습니다.")
 
     preprocess_repetitions = bool(settings_state.get("preprocess_repetitions"))
     if preprocess_repetitions:
@@ -973,7 +739,7 @@ def main() -> None:
     st.sidebar.markdown("### 기능 선택")
     feature = st.sidebar.radio(
         "기능 선택",
-        options=("PPT 번역", "텍스트 추출", "PDF → PPT 변환"),
+        options=("PPT 번역", "텍스트 추출"),
         index=0,
         label_visibility="collapsed",
     )
@@ -981,9 +747,6 @@ def main() -> None:
     if feature == "텍스트 추출":
         extraction_options = render_extraction_settings(st.sidebar)
         _render_text_extraction_page(settings, extraction_options)
-    elif feature == "PDF → PPT 변환":
-        conversion_settings = _render_pdf_conversion_settings(st.sidebar)
-        _render_pdf_conversion_page(settings, conversion_settings)
     else:
         translation_settings = render_settings(st.sidebar)
         _render_translation_page(settings, translation_settings)

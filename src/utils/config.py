@@ -19,6 +19,7 @@ class Settings:
     """Container for runtime configuration values."""
 
     openai_api_key: Optional[str]
+    anthropic_api_key: Optional[str] = None
     max_upload_size_mb: int = 200
     batch_size: int = 80
     max_retries: int = 3
@@ -40,7 +41,8 @@ def get_settings() -> Settings:
 
     load_dotenv()
     openai_api_key = os.getenv("OPENAI_API_KEY")
-    base_settings = Settings(openai_api_key=openai_api_key)
+    anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
+    base_settings = Settings(openai_api_key=openai_api_key, anthropic_api_key=anthropic_api_key)
 
     concurrency_raw = os.getenv("TRANSLATION_MAX_CONCURRENCY")
     max_concurrency = base_settings.max_concurrency
@@ -117,8 +119,8 @@ def get_settings() -> Settings:
                 tpm_limit,
             )
 
-    if not openai_api_key:
-        LOGGER.warning("OPENAI_API_KEY is not set. The app will fail when translating.")
+    if not openai_api_key and not anthropic_api_key:
+        LOGGER.warning("Neither OPENAI_API_KEY nor ANTHROPIC_API_KEY is set. The app will fail when translating.")
 
     return replace(
         base_settings,

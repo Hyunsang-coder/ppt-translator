@@ -24,8 +24,8 @@ LOGGER = logging.getLogger(__name__)
 
 app = FastAPI(
     title="PPT 번역캣 API",
-    description="PowerPoint translation API using OpenAI GPT models",
-    version="2.2.0",
+    description="PowerPoint translation API using OpenAI GPT and Anthropic Claude models",
+    version="2.3.0",
 )
 
 # For AWS Lambda deployment
@@ -44,7 +44,8 @@ async def health_check() -> dict:
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "api_key_configured": bool(settings.openai_api_key),
+        "openai_api_key_configured": bool(settings.openai_api_key),
+        "anthropic_api_key_configured": bool(settings.anthropic_api_key),
     }
 
 
@@ -56,7 +57,8 @@ async def translate_ppt(
     ),
     source_lang: str = Form("Auto", description="Source language (Auto for detection)"),
     target_lang: str = Form("Auto", description="Target language (Auto for inference)"),
-    model: str = Form("gpt-5.1", description="OpenAI model to use"),
+    provider: str = Form("openai", description="LLM provider (openai or anthropic)"),
+    model: str = Form("gpt-5.2", description="Model to use (depends on provider)"),
     user_prompt: Optional[str] = Form(None, description="Custom translation instructions"),
     preprocess_repetitions: bool = Form(
         False, description="Deduplicate repeated phrases"
@@ -68,11 +70,23 @@ async def translate_ppt(
     """
     settings = get_settings()
 
-    # Validate API key
-    if not settings.openai_api_key:
+    # Validate provider
+    if provider not in ("openai", "anthropic"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid provider: {provider}. Must be 'openai' or 'anthropic'.",
+        )
+
+    # Validate API key for selected provider
+    if provider == "openai" and not settings.openai_api_key:
         raise HTTPException(
             status_code=500,
             detail="OPENAI_API_KEY is not configured on the server",
+        )
+    if provider == "anthropic" and not settings.anthropic_api_key:
+        raise HTTPException(
+            status_code=500,
+            detail="ANTHROPIC_API_KEY is not configured on the server",
         )
 
     # Validate file type
@@ -131,6 +145,7 @@ async def translate_ppt(
         ppt_file=ppt_buffer,
         source_lang=source_lang,
         target_lang=target_lang,
+        provider=provider,
         model=model,
         user_prompt=user_prompt,
         glossary=glossary,
@@ -139,10 +154,11 @@ async def translate_ppt(
 
     # Execute translation
     LOGGER.info(
-        "Starting translation: file=%s, source=%s, target=%s, model=%s",
+        "Starting translation: file=%s, source=%s, target=%s, provider=%s, model=%s",
         ppt_file.filename,
         source_lang,
         target_lang,
+        provider,
         model,
     )
 

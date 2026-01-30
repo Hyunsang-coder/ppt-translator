@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "WebSearch",
+      "Bash(python -m py_compile:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(python -c:*)",
+      "Bash(wc:*)",
+      "Bash(curl:*)",
+      "Bash(python -m json.tool:*)",
+      "Bash(pkill:*)",
+      "Bash(ls:*)",
+      "Bash(git push)",
+      "Bash(pytest:*)",
+      "WebFetch(domain:docs.anthropic.com)",
+      "WebFetch(domain:python.langchain.com)",
+      "WebFetch(domain:reference.langchain.com)",
+      "Bash(pip install:*)"
+    ]
+  }
+}
