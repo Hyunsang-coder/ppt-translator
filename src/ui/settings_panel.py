@@ -56,9 +56,9 @@ def render_settings(container: Optional[DeltaGenerator] = None) -> Dict[str, Any
 
     model = expander.selectbox(
         "모델 선택",
-        ["gpt-5", "gpt-5-mini"],
+        ["gpt-5.2", "gpt-5-mini"],
         index=0,
-        help="gpt-5: 최고 품질 (느림, 비쌈) | gpt-5-mini: 빠르고 저렴",
+        help="gpt-5.2: 최고 품질 (느림, 비쌈) | gpt-5-mini: 빠르고 저렴",
     )
 
     preprocess_repetitions = expander.checkbox(

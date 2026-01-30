@@ -53,7 +53,7 @@ def create_translation_chain(
     """Create a LangChain sequence for translation relying on ChatGPT models.
 
     Args:
-        model_name: OpenAI model identifier (gpt-5 or gpt-5-mini).
+        model_name: OpenAI model identifier (gpt-5.2 or gpt-5-mini).
         source_lang: Display name of the source language.
         target_lang: Display name of the target language.
         user_prompt: Optional custom instruction string.
