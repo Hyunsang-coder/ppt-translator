@@ -35,6 +35,9 @@ pytest tests/ -v -m slow
    - `TRANSLATION_BATCH_SIZE` (default: 80)
    - `TRANSLATION_MIN_BATCH_SIZE` / `TRANSLATION_MAX_BATCH_SIZE`
    - `TRANSLATION_TPM_LIMIT` (default: 30000)
+   - `TRANSLATION_RATE_LIMIT_RPS` (default: 1.0) - Requests per second
+   - `TRANSLATION_RATE_LIMIT_CHECK_INTERVAL` (default: 0.1) - Rate check interval in seconds
+   - `TRANSLATION_RATE_LIMIT_MAX_BUCKET` (default: 10) - Token bucket size for rate limiting
 
 ## Architecture
 
@@ -59,8 +62,8 @@ pytest tests/ -v -m slow
   - Progress callback support for real-time updates
 
 ### Translation Chain (`src/chains/`)
-- `llm_factory.py`: Factory for creating LLM instances (OpenAI/Anthropic) with provider-specific configuration
-- `translation_chain.py`: LangChain pipeline with batch retry logic via tenacity, concurrent execution with wave-based batching
+- `llm_factory.py`: Factory for creating LLM instances (OpenAI/Anthropic) with provider-specific configuration, includes built-in rate limiting via `InMemoryRateLimiter`
+- `translation_chain.py`: LangChain pipeline using structured output (`TranslationOutput` Pydantic model) for type-safe parsing, LangChain batch API for concurrent execution with tenacity retry logic
 - `context_manager.py`: Builds global presentation context for consistent translations
 
 ### Utilities (`src/utils/`)
@@ -96,8 +99,8 @@ pytest tests/ -v -m slow
 
 ### Error Handling
 - Translation chain uses tenacity with exponential backoff (3 attempts)
-- JSON parsing falls back to `|||` delimiter then newline splitting
-- Futures cleanup with timeout for graceful shutdown on errors
+- Structured output via Pydantic ensures type-safe translation parsing (no JSON fallback needed)
+- LangChain batch API handles concurrent execution with built-in rate limiting
 
 ### API Usage
 ```bash

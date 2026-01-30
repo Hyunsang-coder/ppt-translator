@@ -29,6 +29,10 @@ class Settings:
     max_concurrency: int = 8
     wave_multiplier: float = 1.2
     tpm_limit: int = 30_000
+    # Rate limiter settings
+    rate_limit_requests_per_second: float = 1.0
+    rate_limit_check_interval: float = 0.1
+    rate_limit_max_bucket_size: int = 10
 
 
 @lru_cache(maxsize=1)
@@ -119,6 +123,43 @@ def get_settings() -> Settings:
                 tpm_limit,
             )
 
+    # Rate limiter settings
+    rate_limit_rps = base_settings.rate_limit_requests_per_second
+    rate_limit_rps_raw = os.getenv("TRANSLATION_RATE_LIMIT_RPS")
+    if rate_limit_rps_raw:
+        try:
+            rate_limit_rps = max(0.1, float(rate_limit_rps_raw))
+        except ValueError:
+            LOGGER.warning(
+                "Invalid TRANSLATION_RATE_LIMIT_RPS=%s; using default %.2f.",
+                rate_limit_rps_raw,
+                rate_limit_rps,
+            )
+
+    rate_limit_check_interval = base_settings.rate_limit_check_interval
+    rate_limit_check_raw = os.getenv("TRANSLATION_RATE_LIMIT_CHECK_INTERVAL")
+    if rate_limit_check_raw:
+        try:
+            rate_limit_check_interval = max(0.01, float(rate_limit_check_raw))
+        except ValueError:
+            LOGGER.warning(
+                "Invalid TRANSLATION_RATE_LIMIT_CHECK_INTERVAL=%s; using default %.2f.",
+                rate_limit_check_raw,
+                rate_limit_check_interval,
+            )
+
+    rate_limit_max_bucket = base_settings.rate_limit_max_bucket_size
+    rate_limit_bucket_raw = os.getenv("TRANSLATION_RATE_LIMIT_MAX_BUCKET")
+    if rate_limit_bucket_raw:
+        try:
+            rate_limit_max_bucket = max(1, int(rate_limit_bucket_raw))
+        except ValueError:
+            LOGGER.warning(
+                "Invalid TRANSLATION_RATE_LIMIT_MAX_BUCKET=%s; using default %d.",
+                rate_limit_bucket_raw,
+                rate_limit_max_bucket,
+            )
+
     if not openai_api_key and not anthropic_api_key:
         LOGGER.warning("Neither OPENAI_API_KEY nor ANTHROPIC_API_KEY is set. The app will fail when translating.")
 
@@ -131,4 +172,7 @@ def get_settings() -> Settings:
         wave_multiplier=wave_multiplier,
         target_batch_count=target_batch_count,
         tpm_limit=tpm_limit,
+        rate_limit_requests_per_second=rate_limit_rps,
+        rate_limit_check_interval=rate_limit_check_interval,
+        rate_limit_max_bucket_size=rate_limit_max_bucket,
     )
