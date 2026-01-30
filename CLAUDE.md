@@ -4,17 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-PPT 번역캣 is a Streamlit-based PowerPoint translation prototype using LangChain and OpenAI GPT models. It translates slide text while preserving original formatting, supports glossaries, auto language detection, and provides detailed progress tracking.
+PPT 번역캣 is a PowerPoint translation application using LangChain and OpenAI GPT models. It provides both a Streamlit web UI and FastAPI REST API. Features include slide text translation while preserving original formatting, glossary support, auto language detection, and detailed progress tracking.
 
 ## Development Commands
 
 ```bash
-# Run the app
+# Run the Streamlit app
 streamlit run app.py
 
+# Run the FastAPI server
+uvicorn api:app --reload --port 8000
+
 # Run all tests
-python -m unittest tests/test_translation.py
-# Or with pytest
 pytest tests/ -v
 
 # Run a specific test
@@ -35,18 +36,30 @@ pytest tests/ -v -m slow
 
 ## Architecture
 
-### Entry Point
+### Entry Points
 - `app.py`: Streamlit UI orchestrating three workflows:
   - PPT Translation (main feature)
   - Text Extraction (PPT → Markdown)
   - PDF → PPT Conversion (Vision API-based)
+- `api.py`: FastAPI REST API server
+  - `GET /health`: Health check endpoint
+  - `POST /translate`: PPT translation endpoint (multipart/form-data)
+  - Supports AWS Lambda deployment via Mangum
 
 ### Core Components (`src/core/`)
 - `ppt_parser.py`: Extracts `ParagraphInfo` objects from PPTX (handles shapes, tables, groups)
 - `ppt_writer.py`: Applies translations back using run-based text distribution to preserve formatting
 - `text_extractor.py`: Converts PPTX to structured markdown
-- `pdf_processor.py`: Uses OpenAI Vision for semantic layout analysis of PDFs
+- `pdf_processor.py`: Uses OpenAI Vision for semantic layout analysis of PDFs (with image size validation/resize)
 - `pdf_to_ppt_writer.py`: Creates PPTX from Vision OCR results with precise positioning
+- `pdf_to_ppt_helpers.py`: Helper functions for PDF to PPT conversion
+- `image_optimizer.py`: Image optimization utilities for Vision API
+
+### Service Layer (`src/services/`)
+- `models.py`: Data models (`TranslationRequest`, `TranslationResult`, `TranslationProgress`, `TranslationStatus`)
+- `translation_service.py`: `TranslationService` class encapsulating translation workflow logic
+  - Shared by both Streamlit (`app.py`) and FastAPI (`api.py`)
+  - Progress callback support for real-time updates
 
 ### Translation Chain (`src/chains/`)
 - `translation_chain.py`: LangChain pipeline with `ChatOpenAI`, batch retry logic via tenacity, concurrent execution with wave-based batching
@@ -58,11 +71,18 @@ pytest tests/ -v -m slow
 - `language_detector.py`: Uses langdetect with Korean↔English inference rules
 - `repetition.py`: Deduplicates repeated phrases to reduce API calls
 - `helpers.py`: Batch chunking, text segmentation for run distribution
+- `security.py`: File validation, filename sanitization, HTML content escaping
 
 ### UI Components (`src/ui/`)
 - `progress_tracker.py`: Streamlit progress bar and log updates
 - `settings_panel.py`: Translation settings sidebar
 - `file_handler.py`: Upload validation and buffer management
+- `extraction_settings.py`: Text extraction options UI
+
+### Tests (`tests/`)
+- `test_translation.py`: Unit tests for translation helpers and language detection
+- `test_integration_pdf.py`: PDF processing integration tests
+- `test_pdf_to_ppt_layout.py`: PDF to PPT layout conversion tests
 
 ## Key Patterns
 
@@ -81,12 +101,31 @@ pytest tests/ -v -m slow
 ### Error Handling
 - Translation chain uses tenacity with exponential backoff (3 attempts)
 - JSON parsing falls back to `|||` delimiter then newline splitting
+- Futures cleanup with timeout for graceful shutdown on errors
+
+### API Usage
+```bash
+# Health check
+curl http://localhost:8000/health
+
+# Translate PPT
+curl -X POST http://localhost:8000/translate \
+  -F "ppt_file=@presentation.pptx" \
+  -F "target_lang=한국어" \
+  -F "model=gpt-5.1" \
+  -o translated.pptx
+```
 
 ## Libraries
 - **LangChain**: Translation chain with `ChatOpenAI` and `PromptTemplate`
 - **python-pptx**: PPTX parsing and writing
 - **Streamlit**: Web UI with session state management
+- **FastAPI**: REST API server with automatic OpenAPI docs
 - **PyMuPDF**: PDF to image conversion for Vision processing
+- **Mangum**: AWS Lambda adapter for FastAPI
+- **OpenCV**: Image processing for PDF optimization
+- **tenacity**: Retry logic with exponential backoff
+- **langdetect**: Automatic language detection
 
 ## Claude Code Customization Best Practices
 
