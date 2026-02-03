@@ -16,6 +16,9 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "PPT 번역캣",
   description: "PowerPoint 번역 및 텍스트 추출 도구",
+  icons: {
+    icon: "/favicon.png",
+  },
 };
 
 export default function RootLayout({

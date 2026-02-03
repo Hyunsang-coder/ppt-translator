@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ExtractionForm } from "@/components/extraction/ExtractionForm";
@@ -11,7 +12,16 @@ export default function ExtractPage() {
       <header className="border-b">
         <div className="container mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
-            <h1 className="text-2xl font-bold">PPT 번역캣</h1>
+            <div className="flex items-center gap-3">
+              <Image
+                src="/cat-logo.png"
+                alt="번역캣"
+                width={40}
+                height={40}
+                className="rounded"
+              />
+              <h1 className="text-2xl font-bold">PPT 번역캣</h1>
+            </div>
             <Tabs defaultValue="extract">
               <TabsList>
                 <TabsTrigger value="translate" asChild>
