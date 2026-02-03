@@ -2,17 +2,31 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
+import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Literal, Optional
 from urllib.parse import quote
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import Response
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response, StreamingResponse
+from pydantic import BaseModel
 
-from src.services import TranslationRequest, TranslationService
+from src.core.text_extractor import ExtractionOptions, docs_to_markdown, extract_pptx_to_docs
+from src.services import (
+    TranslationProgress,
+    TranslationRequest,
+    TranslationResult,
+    TranslationService,
+    get_job_manager,
+    Job,
+    JobState,
+    JobType,
+)
 from src.utils.config import get_settings
 from src.utils.glossary_loader import GlossaryLoader
 from src.utils.security import sanitize_filename, validate_pptx_file
@@ -25,7 +39,28 @@ LOGGER = logging.getLogger(__name__)
 app = FastAPI(
     title="PPT 번역캣 API",
     description="PowerPoint translation API using OpenAI GPT and Anthropic Claude models",
-    version="2.3.0",
+    version="2.4.0",
+)
+
+# CORS middleware for Next.js frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",  # Next.js dev server
+        "http://127.0.0.1:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=[
+        "X-Translation-Source-Lang",
+        "X-Translation-Target-Lang",
+        "X-Translation-Total-Paragraphs",
+        "X-Translation-Unique-Paragraphs",
+        "X-Translation-Batch-Count",
+        "X-Translation-Elapsed-Seconds",
+        "Content-Disposition",
+    ],
 )
 
 # For AWS Lambda deployment
@@ -37,16 +72,548 @@ except ImportError:
     handler = None
 
 
-@app.get("/health")
-async def health_check() -> dict:
+# ============================================================================
+# Pydantic Models for API responses
+# ============================================================================
+
+
+class HealthResponse(BaseModel):
+    """Health check response."""
+
+    status: str
+    timestamp: str
+    openai_api_key_configured: bool
+    anthropic_api_key_configured: bool
+
+
+class ModelInfo(BaseModel):
+    """Model information."""
+
+    id: str
+    name: str
+    provider: str
+
+
+class ModelsResponse(BaseModel):
+    """Available models response."""
+
+    models: List[ModelInfo]
+
+
+class LanguageInfo(BaseModel):
+    """Language information."""
+
+    code: str
+    name: str
+
+
+class LanguagesResponse(BaseModel):
+    """Available languages response."""
+
+    languages: List[LanguageInfo]
+
+
+class ConfigResponse(BaseModel):
+    """Configuration response."""
+
+    max_upload_size_mb: int
+    providers: List[str]
+    default_provider: str
+    default_model: str
+
+
+class JobCreateResponse(BaseModel):
+    """Job creation response."""
+
+    job_id: str
+    status: str
+
+
+class JobStatusResponse(BaseModel):
+    """Job status response."""
+
+    job_id: str
+    job_type: str
+    state: str
+    created_at: float
+    started_at: Optional[float]
+    completed_at: Optional[float]
+    progress: Optional[Dict[str, Any]]
+    error_message: Optional[str]
+
+
+class ExtractionResponse(BaseModel):
+    """Text extraction response."""
+
+    markdown: str
+    slide_count: int
+
+
+# ============================================================================
+# Configuration Data
+# ============================================================================
+
+SUPPORTED_MODELS: Dict[str, List[ModelInfo]] = {
+    "openai": [
+        ModelInfo(id="gpt-5.2", name="GPT-5.2", provider="openai"),
+        ModelInfo(id="gpt-4.1", name="GPT-4.1", provider="openai"),
+        ModelInfo(id="gpt-4.1-mini", name="GPT-4.1 Mini", provider="openai"),
+        ModelInfo(id="gpt-4.1-nano", name="GPT-4.1 Nano", provider="openai"),
+        ModelInfo(id="gpt-4o", name="GPT-4o", provider="openai"),
+        ModelInfo(id="gpt-4o-mini", name="GPT-4o Mini", provider="openai"),
+    ],
+    "anthropic": [
+        ModelInfo(id="claude-sonnet-4-5-20250929", name="Claude Sonnet 4.5", provider="anthropic"),
+        ModelInfo(id="claude-sonnet-4-20250514", name="Claude Sonnet 4", provider="anthropic"),
+        ModelInfo(id="claude-3-5-sonnet-20241022", name="Claude 3.5 Sonnet", provider="anthropic"),
+        ModelInfo(id="claude-3-5-haiku-20241022", name="Claude 3.5 Haiku", provider="anthropic"),
+    ],
+}
+
+SUPPORTED_LANGUAGES: List[LanguageInfo] = [
+    LanguageInfo(code="Auto", name="Auto (자동 감지)"),
+    LanguageInfo(code="한국어", name="한국어"),
+    LanguageInfo(code="영어", name="English"),
+    LanguageInfo(code="일본어", name="日本語"),
+    LanguageInfo(code="중국어", name="中文"),
+    LanguageInfo(code="스페인어", name="Español"),
+    LanguageInfo(code="프랑스어", name="Français"),
+    LanguageInfo(code="독일어", name="Deutsch"),
+]
+
+
+# ============================================================================
+# Health & Config Endpoints
+# ============================================================================
+
+
+@app.get("/health", response_model=HealthResponse)
+async def health_check() -> HealthResponse:
     """Health check endpoint."""
     settings = get_settings()
-    return {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "openai_api_key_configured": bool(settings.openai_api_key),
-        "anthropic_api_key_configured": bool(settings.anthropic_api_key),
+    return HealthResponse(
+        status="healthy",
+        timestamp=datetime.now().isoformat(),
+        openai_api_key_configured=bool(settings.openai_api_key),
+        anthropic_api_key_configured=bool(settings.anthropic_api_key),
+    )
+
+
+@app.get("/api/v1/models", response_model=ModelsResponse)
+async def get_models(provider: Optional[str] = None) -> ModelsResponse:
+    """Get available models, optionally filtered by provider."""
+    if provider:
+        if provider not in SUPPORTED_MODELS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid provider: {provider}. Must be one of: {list(SUPPORTED_MODELS.keys())}",
+            )
+        return ModelsResponse(models=SUPPORTED_MODELS[provider])
+
+    all_models = []
+    for models in SUPPORTED_MODELS.values():
+        all_models.extend(models)
+    return ModelsResponse(models=all_models)
+
+
+@app.get("/api/v1/languages", response_model=LanguagesResponse)
+async def get_languages() -> LanguagesResponse:
+    """Get supported languages."""
+    return LanguagesResponse(languages=SUPPORTED_LANGUAGES)
+
+
+@app.get("/api/v1/config", response_model=ConfigResponse)
+async def get_config() -> ConfigResponse:
+    """Get application configuration."""
+    settings = get_settings()
+    return ConfigResponse(
+        max_upload_size_mb=settings.max_upload_size_mb,
+        providers=list(SUPPORTED_MODELS.keys()),
+        default_provider="openai",
+        default_model="gpt-5.2",
+    )
+
+
+# ============================================================================
+# Job System Endpoints
+# ============================================================================
+
+
+def _create_progress_callback(job_id: str):
+    """Create a progress callback for the job."""
+    job_manager = get_job_manager()
+
+    def callback(progress: TranslationProgress) -> None:
+        job_manager.update_job_progress(job_id, progress)
+
+    return callback
+
+
+async def _run_translation_job(
+    job_id: str,
+    ppt_buffer: io.BytesIO,
+    filename: str,
+    source_lang: str,
+    target_lang: str,
+    provider: str,
+    model: str,
+    user_prompt: Optional[str],
+    preprocess_repetitions: bool,
+    glossary: Optional[Dict[str, str]],
+) -> None:
+    """Run translation job in background."""
+    job_manager = get_job_manager()
+    settings = get_settings()
+
+    try:
+        request = TranslationRequest(
+            ppt_file=ppt_buffer,
+            source_lang=source_lang,
+            target_lang=target_lang,
+            provider=provider,
+            model=model,
+            user_prompt=user_prompt,
+            glossary=glossary,
+            preprocess_repetitions=preprocess_repetitions,
+        )
+
+        progress_callback = _create_progress_callback(job_id)
+        service = TranslationService(settings=settings, progress_callback=progress_callback)
+
+        # Run translation in thread pool to avoid blocking
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, service.translate, request)
+
+        if not result.success:
+            job_manager.fail_job(job_id, result.error_message or "Translation failed")
+            return
+
+        if result.output_file is None:
+            job_manager.fail_job(job_id, "Translation succeeded but no output file was generated")
+            return
+
+        # Generate output filename
+        original_name = Path(filename).stem
+        safe_name = sanitize_filename(original_name, fallback="presentation")
+        safe_model = sanitize_filename(model, fallback="model")
+        safe_target = sanitize_filename(result.target_language_used, fallback="target")
+        timestamp = datetime.now().strftime("%Y%m%d")
+        download_name = f"{safe_target}_{safe_name}_{safe_model}_{timestamp}.pptx"
+
+        job_manager.complete_job(
+            job_id,
+            result=result,
+            output_file=result.output_file,
+            output_filename=download_name,
+        )
+
+    except Exception as exc:
+        LOGGER.exception("Translation job %s failed: %s", job_id, exc)
+        job_manager.fail_job(job_id, f"번역 중 오류가 발생했습니다: {str(exc)}")
+
+
+@app.post("/api/v1/jobs", response_model=JobCreateResponse)
+async def create_job(
+    background_tasks: BackgroundTasks,
+    ppt_file: UploadFile = File(..., description="PPTX or PPT file to translate"),
+    glossary_file: Optional[UploadFile] = File(None, description="Optional Excel glossary file"),
+    source_lang: str = Form("Auto", description="Source language"),
+    target_lang: str = Form("Auto", description="Target language"),
+    provider: str = Form("openai", description="LLM provider"),
+    model: str = Form("gpt-5.2", description="Model to use"),
+    user_prompt: Optional[str] = Form(None, description="Custom translation instructions"),
+    preprocess_repetitions: bool = Form(False, description="Deduplicate repeated phrases"),
+) -> JobCreateResponse:
+    """Create a new translation job."""
+    settings = get_settings()
+    job_manager = get_job_manager()
+
+    # Validate provider
+    if provider not in SUPPORTED_MODELS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid provider: {provider}. Must be one of: {list(SUPPORTED_MODELS.keys())}",
+        )
+
+    # Validate API key
+    if provider == "openai" and not settings.openai_api_key:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY is not configured")
+    if provider == "anthropic" and not settings.anthropic_api_key:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not configured")
+
+    # Validate file
+    if not ppt_file.filename:
+        raise HTTPException(status_code=400, detail="No filename provided")
+
+    filename_lower = ppt_file.filename.lower()
+    if not (filename_lower.endswith(".pptx") or filename_lower.endswith(".ppt")):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid file type. Only .ppt and .pptx files are supported.",
+        )
+
+    # Read file content
+    try:
+        file_content = await ppt_file.read()
+    except Exception as exc:
+        LOGGER.exception("Failed to read uploaded file: %s", exc)
+        raise HTTPException(status_code=400, detail="Failed to read uploaded file")
+
+    # Validate file size
+    size_mb = len(file_content) / (1024 * 1024)
+    if size_mb > settings.max_upload_size_mb:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File size ({size_mb:.1f}MB) exceeds limit ({settings.max_upload_size_mb}MB)",
+        )
+
+    # Validate file signature
+    ppt_buffer = io.BytesIO(file_content)
+    is_valid, error_msg = validate_pptx_file(ppt_buffer)
+    if not is_valid:
+        raise HTTPException(status_code=400, detail=error_msg or "Invalid PPT/PPTX file format")
+    ppt_buffer.seek(0)
+
+    # Load glossary if provided
+    glossary = None
+    if glossary_file and glossary_file.filename:
+        try:
+            glossary_content = await glossary_file.read()
+            glossary_buffer = io.BytesIO(glossary_content)
+            glossary_loader = GlossaryLoader()
+            glossary = glossary_loader.load_glossary(glossary_buffer)
+            LOGGER.info("Loaded glossary with %d terms", len(glossary))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"Glossary error: {str(exc)}")
+        except Exception as exc:
+            LOGGER.exception("Failed to load glossary: %s", exc)
+            raise HTTPException(status_code=400, detail="Failed to load glossary file")
+
+    # Create job
+    job = job_manager.create_job(JobType.TRANSLATION)
+
+    # Start background task
+    task = asyncio.create_task(
+        _run_translation_job(
+            job_id=job.id,
+            ppt_buffer=ppt_buffer,
+            filename=ppt_file.filename,
+            source_lang=source_lang,
+            target_lang=target_lang,
+            provider=provider,
+            model=model,
+            user_prompt=user_prompt,
+            preprocess_repetitions=preprocess_repetitions,
+            glossary=glossary,
+        )
+    )
+    job_manager.start_job(job.id, task)
+
+    LOGGER.info(
+        "Created translation job %s: file=%s, provider=%s, model=%s",
+        job.id,
+        ppt_file.filename,
+        provider,
+        model,
+    )
+
+    return JobCreateResponse(job_id=job.id, status=job.state.value)
+
+
+@app.get("/api/v1/jobs/{job_id}", response_model=JobStatusResponse)
+async def get_job_status(job_id: str) -> JobStatusResponse:
+    """Get job status."""
+    job_manager = get_job_manager()
+    job = job_manager.get_job(job_id)
+
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    progress_dict = None
+    if job.progress:
+        progress_dict = {
+            "status": job.progress.status.value,
+            "current_batch": job.progress.current_batch,
+            "total_batches": job.progress.total_batches,
+            "current_sentence": job.progress.current_sentence,
+            "total_sentences": job.progress.total_sentences,
+            "message": job.progress.message,
+        }
+
+    return JobStatusResponse(
+        job_id=job.id,
+        job_type=job.job_type.value,
+        state=job.state.value,
+        created_at=job.created_at,
+        started_at=job.started_at,
+        completed_at=job.completed_at,
+        progress=progress_dict,
+        error_message=job.error_message,
+    )
+
+
+@app.get("/api/v1/jobs/{job_id}/events")
+async def stream_job_events(job_id: str) -> StreamingResponse:
+    """Stream job events via SSE."""
+    job_manager = get_job_manager()
+    job = job_manager.get_job(job_id)
+
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    async def event_generator():
+        async for event in job_manager.stream_events(job_id):
+            data = json.dumps(
+                {
+                    "type": event.event_type,
+                    "data": event.data,
+                    "timestamp": event.timestamp,
+                }
+            )
+            yield f"data: {data}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.get("/api/v1/jobs/{job_id}/result")
+async def download_job_result(job_id: str) -> Response:
+    """Download completed job result."""
+    job_manager = get_job_manager()
+    job = job_manager.get_job(job_id)
+
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.state != JobState.COMPLETED:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job is not completed. Current state: {job.state.value}",
+        )
+
+    if job.output_file is None:
+        raise HTTPException(status_code=500, detail="No output file available")
+
+    job.output_file.seek(0)
+    content = job.output_file.read()
+
+    filename = job.output_filename or "translated.pptx"
+    encoded_filename = quote(filename, safe="")
+
+    headers = {
+        "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
     }
+
+    if job.result:
+        headers.update(
+            {
+                "X-Translation-Source-Lang": quote(job.result.source_language_detected, safe=""),
+                "X-Translation-Target-Lang": quote(job.result.target_language_used, safe=""),
+                "X-Translation-Total-Paragraphs": str(job.result.total_paragraphs),
+                "X-Translation-Unique-Paragraphs": str(job.result.unique_paragraphs),
+                "X-Translation-Batch-Count": str(job.result.batch_count),
+                "X-Translation-Elapsed-Seconds": f"{job.result.elapsed_seconds:.2f}",
+            }
+        )
+
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        headers=headers,
+    )
+
+
+@app.delete("/api/v1/jobs/{job_id}")
+async def cancel_job(job_id: str) -> Dict[str, str]:
+    """Cancel/delete a job."""
+    job_manager = get_job_manager()
+    success = job_manager.delete_job(job_id)
+
+    if not success:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    return {"status": "cancelled", "job_id": job_id}
+
+
+# ============================================================================
+# Text Extraction Endpoint
+# ============================================================================
+
+
+@app.post("/api/v1/extract", response_model=ExtractionResponse)
+async def extract_text(
+    ppt_file: UploadFile = File(..., description="PPTX file to extract text from"),
+    figures: Literal["omit", "placeholder"] = Form("omit", description="How to handle figures"),
+    charts: Literal["labels", "placeholder", "omit"] = Form("labels", description="How to handle charts"),
+    with_notes: bool = Form(False, description="Include speaker notes"),
+    table_header: bool = Form(True, description="Treat first row as table header"),
+) -> ExtractionResponse:
+    """Extract text from PPT as markdown."""
+    settings = get_settings()
+
+    # Validate file
+    if not ppt_file.filename:
+        raise HTTPException(status_code=400, detail="No filename provided")
+
+    filename_lower = ppt_file.filename.lower()
+    if not filename_lower.endswith(".pptx"):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid file type. Only .pptx files are supported for extraction.",
+        )
+
+    # Read file content
+    try:
+        file_content = await ppt_file.read()
+    except Exception as exc:
+        LOGGER.exception("Failed to read uploaded file: %s", exc)
+        raise HTTPException(status_code=400, detail="Failed to read uploaded file")
+
+    # Validate file size
+    size_mb = len(file_content) / (1024 * 1024)
+    if size_mb > settings.max_upload_size_mb:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File size ({size_mb:.1f}MB) exceeds limit ({settings.max_upload_size_mb}MB)",
+        )
+
+    # Validate file signature
+    ppt_buffer = io.BytesIO(file_content)
+    is_valid, error_msg = validate_pptx_file(ppt_buffer)
+    if not is_valid:
+        raise HTTPException(status_code=400, detail=error_msg or "Invalid PPTX file format")
+    ppt_buffer.seek(0)
+
+    # Extract text
+    try:
+        options = ExtractionOptions(
+            figures=figures,
+            charts=charts,
+            table_header=table_header,
+            with_notes=with_notes,
+        )
+        docs = extract_pptx_to_docs(ppt_buffer, options)
+        markdown = docs_to_markdown(docs, options)
+
+        LOGGER.info("Extracted text from %s: %d slides", ppt_file.filename, len(docs))
+
+        return ExtractionResponse(markdown=markdown, slide_count=len(docs))
+
+    except Exception as exc:
+        LOGGER.exception("Failed to extract text: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Failed to extract text: {str(exc)}")
+
+
+# ============================================================================
+# Legacy Sync Translate Endpoint (kept for backwards compatibility)
+# ============================================================================
 
 
 @app.post("/translate")
@@ -64,7 +631,7 @@ async def translate_ppt(
         False, description="Deduplicate repeated phrases"
     ),
 ) -> Response:
-    """Translate a PowerPoint presentation.
+    """Translate a PowerPoint presentation (synchronous).
 
     Returns the translated PPTX file as a binary response with metadata in headers.
     """
