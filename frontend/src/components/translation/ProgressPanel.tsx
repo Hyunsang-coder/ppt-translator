@@ -1,7 +1,7 @@
 "use client";
 
-import { Progress } from "@/components/ui/progress";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Loader2, CheckCircle2, XCircle, Clock, FileStack, MessageSquare } from "lucide-react";
 import type { JobProgress } from "@/types/api";
 import type { TranslationStatus } from "@/stores/translation-store";
 
@@ -22,6 +22,80 @@ const STATUS_LABELS: Record<string, string> = {
   failed: "실패",
 };
 
+interface CircularProgressProps {
+  percentage: number;
+  size?: number;
+  strokeWidth?: number;
+}
+
+function CircularProgress({ percentage, size = 120, strokeWidth = 8 }: CircularProgressProps) {
+  const radius = (size - strokeWidth) / 2;
+  const circumference = radius * 2 * Math.PI;
+  const strokeDashoffset = circumference - (percentage / 100) * circumference;
+
+  return (
+    <div className="relative inline-flex items-center justify-center">
+      <svg
+        width={size}
+        height={size}
+        className="transform -rotate-90"
+      >
+        {/* Background circle */}
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          stroke="currentColor"
+          strokeWidth={strokeWidth}
+          fill="none"
+          className="text-foreground/20"
+        />
+        {/* Progress circle - solid color */}
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          stroke="currentColor"
+          strokeWidth={strokeWidth}
+          fill="none"
+          strokeDasharray={circumference}
+          strokeDashoffset={strokeDashoffset}
+          strokeLinecap="round"
+          className="text-foreground transition-all duration-500 ease-out progress-ring-animate"
+        />
+      </svg>
+      {/* Center content */}
+      <div className="absolute inset-0 flex flex-col items-center justify-center">
+        <span className="text-2xl font-bold text-foreground">{percentage}%</span>
+      </div>
+    </div>
+  );
+}
+
+interface StatCardProps {
+  icon: React.ReactNode;
+  label: string;
+  value: string | number;
+  subValue?: string;
+}
+
+function StatCard({ icon, label, value, subValue }: StatCardProps) {
+  return (
+    <div className="stat-card glass-card p-3 flex items-center gap-3">
+      <div className="p-2 rounded-lg border border-foreground text-foreground">
+        {icon}
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-xs text-foreground/60">{label}</p>
+        <p className="text-sm font-semibold truncate">{value}</p>
+        {subValue && (
+          <p className="text-xs text-foreground/60">{subValue}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function ProgressPanel({ status, progress, startTime }: ProgressPanelProps) {
   const getProgressPercentage = (): number => {
     if (!progress) return 0;
@@ -37,27 +111,25 @@ export function ProgressPanel({ status, progress, startTime }: ProgressPanelProp
     return 0;
   };
 
-  const getStatusIcon = (): string => {
+  const getStatusIcon = () => {
     switch (status) {
       case "idle":
-        return "⏸️";
+        return <Clock className="w-5 h-5 text-foreground" />;
       case "uploading":
-        return "📤";
       case "translating":
-        return "🔄";
+        return <Loader2 className="w-5 h-5 text-foreground animate-spin" />;
       case "completed":
-        return "✅";
+        return <CheckCircle2 className="w-5 h-5 text-success" />;
       case "failed":
-        return "❌";
       case "cancelled":
-        return "🚫";
+        return <XCircle className="w-5 h-5 text-destructive" />;
       default:
-        return "⏳";
+        return <Clock className="w-5 h-5 text-foreground" />;
     }
   };
 
   const getElapsedTime = (): string => {
-    if (!startTime) return "";
+    if (!startTime) return "-";
     const elapsed = Math.floor((Date.now() - startTime) / 1000);
     const minutes = Math.floor(elapsed / 60);
     const seconds = elapsed % 60;
@@ -68,55 +140,67 @@ export function ProgressPanel({ status, progress, startTime }: ProgressPanelProp
   const statusLabel = progress?.status ? STATUS_LABELS[progress.status] || progress.status : "";
 
   return (
-    <Card>
+    <Card className="glass-card overflow-hidden animate-slide-up">
       <CardHeader className="pb-2">
         <CardTitle className="text-lg flex items-center gap-2">
-          <span>{getStatusIcon()}</span>
+          {getStatusIcon()}
           <span>번역 진행 상황</span>
+          {status === "translating" && (
+            <span className="ml-auto text-xs font-normal text-foreground/60 animate-pulse">
+              진행 중...
+            </span>
+          )}
         </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-4">
-        {/* Progress Bar */}
-        <div className="space-y-2">
-          <div className="flex justify-between text-sm">
-            <span className="text-muted-foreground">{statusLabel}</span>
-            <span className="font-medium">{percentage}%</span>
+      <CardContent className="space-y-6">
+        {/* Circular Progress */}
+        <div className="flex flex-col items-center gap-4">
+          <CircularProgress percentage={percentage} />
+          <div className="text-center">
+            <p className="text-sm font-medium">{statusLabel || "준비 중"}</p>
+            {progress?.message && (
+              <p className="text-xs text-foreground/60 mt-1 max-w-[250px] truncate">
+                {progress.message}
+              </p>
+            )}
           </div>
-          <Progress value={percentage} className="h-2" />
         </div>
 
-        {/* Details */}
+        {/* Linear Progress Bar */}
+        <div className="space-y-2">
+          <div className="h-2 rounded-full border border-foreground overflow-hidden">
+            <div
+              className="h-full brand-gradient rounded-full transition-all duration-500 ease-out"
+              style={{ width: `${percentage}%` }}
+            />
+          </div>
+        </div>
+
+        {/* Stat Cards */}
         {progress && (
-          <div className="grid grid-cols-2 gap-4 text-sm">
+          <div className="grid grid-cols-2 gap-3">
             {progress.total_batches > 0 && (
-              <div>
-                <span className="text-muted-foreground">배치: </span>
-                <span className="font-medium">
-                  {progress.current_batch} / {progress.total_batches}
-                </span>
-              </div>
+              <StatCard
+                icon={<FileStack className="w-4 h-4" />}
+                label="배치"
+                value={`${progress.current_batch} / ${progress.total_batches}`}
+              />
             )}
             {progress.total_sentences > 0 && (
-              <div>
-                <span className="text-muted-foreground">문장: </span>
-                <span className="font-medium">
-                  {progress.current_sentence} / {progress.total_sentences}
-                </span>
-              </div>
+              <StatCard
+                icon={<MessageSquare className="w-4 h-4" />}
+                label="문장"
+                value={`${progress.current_sentence} / ${progress.total_sentences}`}
+              />
+            )}
+            {startTime && status === "translating" && (
+              <StatCard
+                icon={<Clock className="w-4 h-4" />}
+                label="경과 시간"
+                value={getElapsedTime()}
+              />
             )}
           </div>
-        )}
-
-        {/* Status Message */}
-        {progress?.message && (
-          <p className="text-sm text-muted-foreground bg-muted/50 p-2 rounded">
-            {progress.message}
-          </p>
-        )}
-
-        {/* Elapsed Time */}
-        {startTime && status === "translating" && (
-          <p className="text-xs text-muted-foreground">경과 시간: {getElapsedTime()}</p>
         )}
       </CardContent>
     </Card>

@@ -50,8 +50,8 @@ export function SettingsPanel({
   }
 
   return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-2 gap-4">
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3">
         {/* Source Language */}
         <div className="space-y-2">
           <Label htmlFor="source-lang">소스 언어</Label>
@@ -95,7 +95,7 @@ export function SettingsPanel({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-2 gap-3">
         {/* Provider */}
         <div className="space-y-2">
           <Label htmlFor="provider">Provider</Label>
@@ -152,7 +152,7 @@ export function SettingsPanel({
       </div>
 
       {/* User Prompt */}
-      <div className="space-y-2">
+      <div className="space-y-1.5">
         <Label htmlFor="user-prompt">사용자 프롬프트 (선택)</Label>
         <Textarea
           id="user-prompt"
@@ -160,7 +160,8 @@ export function SettingsPanel({
           value={settings.userPrompt}
           onChange={(e) => onSettingsChange({ userPrompt: e.target.value })}
           disabled={disabled}
-          rows={3}
+          rows={2}
+          className="resize-none"
         />
       </div>
 

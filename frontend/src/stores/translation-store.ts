@@ -60,7 +60,7 @@ const DEFAULT_SETTINGS: TranslationSettings = {
   provider: "openai",
   model: "gpt-5.2",
   userPrompt: "",
-  preprocessRepetitions: false,
+  preprocessRepetitions: true,
 };
 
 const MAX_LOGS = 400;

@@ -2,6 +2,7 @@
 
 import { useCallback, useState } from "react";
 import { useDropzone, type FileRejection } from "react-dropzone";
+import { Upload, FileText, X, CloudUpload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 
@@ -77,69 +78,78 @@ export function FileUploader({
       <Card
         {...getRootProps()}
         className={`
-          p-6 border-2 border-dashed cursor-pointer transition-colors
-          ${isDragActive ? "border-primary bg-primary/5" : "border-muted-foreground/25"}
-          ${disabled ? "opacity-50 cursor-not-allowed" : "hover:border-primary/50"}
+          relative p-4 border-2 border-dashed cursor-pointer transition-all duration-300
+          overflow-hidden
+          ${isDragActive ? "border-foreground scale-[1.01]" : "border-border"}
+          ${disabled ? "opacity-50 cursor-not-allowed" : "hover:border-foreground"}
           ${error ? "border-destructive" : ""}
+          ${selectedFile ? "border-foreground" : ""}
         `}
       >
         <input {...getInputProps()} />
-        <div className="flex flex-col items-center justify-center text-center">
+
+        {/* Background decoration */}
+        {isDragActive && (
+          <div className="absolute inset-0 brand-gradient opacity-5 animate-pulse" />
+        )}
+
+        <div className="relative z-10">
           {selectedFile ? (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <svg
-                  className="w-8 h-8 text-primary"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                  />
-                </svg>
-                <div className="text-left">
-                  <p className="font-medium text-sm truncate max-w-[200px]">{selectedFile.name}</p>
-                  <p className="text-xs text-muted-foreground">
+            <div className="flex items-center justify-between gap-3 animate-scale-in">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="p-1.5 rounded brand-gradient flex-shrink-0">
+                  <FileText className="w-4 h-4 text-background" />
+                </div>
+                <div className="text-left min-w-0">
+                  <p className="font-medium text-sm truncate">
+                    {selectedFile.name}
+                  </p>
+                  <p className="text-xs text-foreground/60">
                     {formatFileSize(selectedFile.size)}
                   </p>
                 </div>
               </div>
               {!disabled && (
-                <Button variant="outline" size="sm" onClick={handleRemove}>
-                  파일 제거
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleRemove}
+                  className="h-8 w-8 p-0 hover:bg-destructive/10 hover:text-destructive flex-shrink-0"
+                >
+                  <X className="w-4 h-4" />
                 </Button>
               )}
             </div>
           ) : (
-            <div className="space-y-2">
-              <svg
-                className="w-10 h-10 mx-auto text-muted-foreground"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
-                />
-              </svg>
-              <div>
-                <p className="text-sm font-medium">
-                  {isDragActive ? "파일을 여기에 놓으세요" : "파일을 드래그하거나 클릭하세요"}
+            <div className="flex items-center gap-3">
+              <div className={`
+                p-2 rounded-lg border border-border
+                ${isDragActive ? "animate-bounce-subtle border-foreground" : ""}
+              `}>
+                {isDragActive ? (
+                  <CloudUpload className="w-5 h-5 text-foreground animate-pulse" />
+                ) : (
+                  <Upload className="w-5 h-5 text-foreground" />
+                )}
+              </div>
+              <div className="text-left">
+                <p className={`text-sm font-medium transition-colors ${isDragActive ? "text-foreground" : ""}`}>
+                  {isDragActive ? "파일을 여기에 놓으세요" : "클릭 또는 드래그"}
                 </p>
-                {description && <p className="text-xs text-muted-foreground mt-1">{description}</p>}
+                {description && (
+                  <p className="text-xs text-foreground/60">{description}</p>
+                )}
               </div>
             </div>
           )}
         </div>
       </Card>
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      {error && (
+        <p className="text-sm text-destructive flex items-center gap-2 animate-slide-in">
+          <span className="w-1 h-1 rounded-full bg-destructive" />
+          {error}
+        </p>
+      )}
     </div>
   );
 }

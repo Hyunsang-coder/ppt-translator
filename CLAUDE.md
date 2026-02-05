@@ -4,29 +4,47 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-PPT 번역캣 is a PowerPoint translation application using LangChain with OpenAI GPT and Anthropic Claude models. It provides both a Streamlit web UI and FastAPI REST API. Features include slide text translation while preserving original formatting, glossary support, auto language detection, and detailed progress tracking.
+PPT 번역캣 is a PowerPoint translation application using LangChain with OpenAI GPT and Anthropic Claude models. It provides:
+- **Streamlit web UI** (legacy, `app.py`)
+- **FastAPI REST API** (`api.py`) with async job management
+- **Next.js frontend** (`frontend/`) - modern React-based UI (migration in progress)
+
+Features include slide text translation while preserving original formatting, glossary support, auto language detection, real-time progress streaming via SSE, and detailed logging.
 
 ## Development Commands
 
 ```bash
-# Run the Streamlit app
+# Backend - Run the Streamlit app (legacy)
 streamlit run app.py
 
-# Run the FastAPI server
+# Backend - Run the FastAPI server
 uvicorn api:app --reload --port 8000
 
-# Run all tests
+# Backend - Run all tests
 pytest tests/ -v
 
-# Run a specific test
+# Backend - Run a specific test
 pytest tests/test_translation.py::HelperTestCase::test_chunk_paragraphs_preserves_order -v
 
-# Run slow tests (require API calls)
+# Backend - Run slow tests (require API calls)
 pytest tests/ -v -m slow
+
+# Frontend - Install dependencies
+cd frontend && npm install
+
+# Frontend - Run development server
+cd frontend && npm run dev
+
+# Frontend - Build for production
+cd frontend && npm run build
+
+# Frontend - Type check
+cd frontend && npm run lint
 ```
 
 ## Environment Setup
 
+### Backend (.env)
 1. Create `.env` from `.env.example` and set API keys:
    - `OPENAI_API_KEY` - Required for OpenAI models (GPT)
    - `ANTHROPIC_API_KEY` - Required for Anthropic models (Claude)
@@ -39,6 +57,9 @@ pytest tests/ -v -m slow
    - `TRANSLATION_RATE_LIMIT_CHECK_INTERVAL` (default: 0.1) - Rate check interval in seconds
    - `TRANSLATION_RATE_LIMIT_MAX_BUCKET` (default: 10) - Token bucket size for rate limiting
 
+### Frontend (.env.local)
+- `NEXT_PUBLIC_API_URL` - Backend API URL (default: `http://localhost:8000`)
+
 ## Architecture
 
 ### Entry Points
@@ -47,19 +68,32 @@ pytest tests/ -v -m slow
   - Text Extraction (PPT → Markdown)
 - `api.py`: FastAPI REST API server
   - `GET /health`: Health check endpoint
-  - `POST /translate`: PPT translation endpoint (multipart/form-data)
+  - `GET /api/v1/config`: Configuration (models, languages)
+  - `GET /api/v1/models`: Available models list
+  - `GET /api/v1/languages`: Supported languages list
+  - `POST /api/v1/jobs`: Create translation job
+  - `GET /api/v1/jobs/{job_id}`: Get job status
+  - `GET /api/v1/jobs/{job_id}/stream`: SSE progress stream
+  - `GET /api/v1/jobs/{job_id}/download`: Download result
+  - `DELETE /api/v1/jobs/{job_id}`: Cancel job
+  - `POST /api/v1/translate`: Synchronous translation (legacy)
+  - `POST /api/v1/extract`: Text extraction endpoint
   - Supports AWS Lambda deployment via Mangum
 
 ### Core Components (`src/core/`)
 - `ppt_parser.py`: Extracts `ParagraphInfo` objects from PPTX (handles shapes, tables, groups)
 - `ppt_writer.py`: Applies translations back using run-based text distribution to preserve formatting
-- `text_extractor.py`: Converts PPTX to structured markdown
+- `text_extractor.py`: Converts PPTX to structured markdown with `ExtractionOptions`
 
 ### Service Layer (`src/services/`)
 - `models.py`: Data models (`TranslationRequest`, `TranslationResult`, `TranslationProgress`, `TranslationStatus`)
 - `translation_service.py`: `TranslationService` class encapsulating translation workflow logic
   - Shared by both Streamlit (`app.py`) and FastAPI (`api.py`)
   - Progress callback support for real-time updates
+- `job_manager.py`: Async job management for FastAPI
+  - `JobManager`: In-memory job store with event streaming
+  - `Job`: Job state tracking (pending/running/completed/failed/cancelled)
+  - `JobEvent`: SSE event types for progress updates
 
 ### Translation Chain (`src/chains/`)
 - `llm_factory.py`: Factory for creating LLM instances (OpenAI/Anthropic) with provider-specific configuration, includes built-in rate limiting via `InMemoryRateLimiter`
@@ -80,8 +114,45 @@ pytest tests/ -v -m slow
 - `file_handler.py`: Upload validation and buffer management
 - `extraction_settings.py`: Text extraction options UI
 
+### Frontend (`frontend/`)
+Next.js 16 with React 19, TypeScript, Tailwind CSS 4, and Zustand state management.
+
+#### Pages (`src/app/`)
+- `page.tsx`: Home page (redirects to translate)
+- `translate/page.tsx`: Translation workflow page
+- `extract/page.tsx`: Text extraction page
+- `layout.tsx`: Root layout with ThemeProvider
+
+#### Components (`src/components/`)
+- **shared/**: `Header.tsx` (navigation + theme toggle), `FileUploader.tsx` (drag & drop)
+- **translation/**: `TranslationForm.tsx`, `SettingsPanel.tsx`, `ProgressPanel.tsx`, `LogViewer.tsx`
+- **extraction/**: `ExtractionForm.tsx`, `MarkdownPreview.tsx`
+- **ui/**: Shadcn/Radix UI components (button, card, input, select, etc.)
+
+#### State Management (`src/stores/`)
+- `translation-store.ts`: Zustand store for translation state (file, settings, progress, logs)
+- `extraction-store.ts`: Zustand store for extraction state
+
+#### API Integration (`src/lib/`)
+- `api-client.ts`: REST API client with typed endpoints
+- `sse-client.ts`: Server-Sent Events client for real-time updates
+- `utils.ts`: Utility functions (cn for classnames)
+
+#### Hooks (`src/hooks/`)
+- `useTranslation.ts`: Translation workflow logic
+- `useExtraction.ts`: Extraction workflow logic
+- `useConfig.ts`: Configuration data fetching
+
+#### Styling (`src/app/globals.css`)
+Centralized color management with CSS variables:
+- **Semantic tokens**: `--background`, `--foreground`, `--primary`, `--secondary`, `--destructive`, `--success`, `--warning`, `--info`
+- **Brand colors**: `--brand-black`, `--brand-white`
+- **Glass morphism**: `--glass-bg`, `--glass-border`, `--glass-shadow`
+- All colors defined in OKLch color space with light/dark mode variants
+
 ### Tests (`tests/`)
 - `test_translation.py`: Unit tests for translation helpers and language detection
+- `test_api.py`: FastAPI endpoint tests
 
 ## Key Patterns
 
@@ -93,6 +164,14 @@ pytest tests/ -v -m slow
 5. `translate_with_progress()` handles concurrent API calls
 6. `expand_translations()` maps unique results back to duplicates
 7. `PPTWriter.apply_translations()` writes back preserving run formatting
+
+### Async Job Flow (FastAPI + Next.js)
+1. Frontend calls `POST /api/v1/jobs` with file and settings
+2. Backend creates job, returns `job_id`
+3. Frontend connects to `GET /api/v1/jobs/{job_id}/stream` (SSE)
+4. Backend streams progress events (`status`, `progress`, `log`, `complete`, `error`)
+5. Frontend polls or uses SSE to track completion
+6. Frontend calls `GET /api/v1/jobs/{job_id}/download` to get result
 
 ### Formatting Preservation
 `PPTWriter` uses `split_text_into_segments()` with character-length weights to distribute translated text across original runs, preserving bold/italic/font styling.
@@ -107,16 +186,24 @@ pytest tests/ -v -m slow
 # Health check
 curl http://localhost:8000/health
 
-# Translate PPT with OpenAI
-curl -X POST http://localhost:8000/translate \
-  -F "ppt_file=@presentation.pptx" \
-  -F "target_lang=한국어" \
-  -F "provider=openai" \
-  -F "model=gpt-5.2" \
-  -o translated.pptx
+# Get available models
+curl http://localhost:8000/api/v1/models
 
-# Translate PPT with Anthropic Claude
-curl -X POST http://localhost:8000/translate \
+# Create translation job
+curl -X POST http://localhost:8000/api/v1/jobs \
+  -F "file=@presentation.pptx" \
+  -F "target_language=한국어" \
+  -F "provider=openai" \
+  -F "model=gpt-4o"
+
+# Stream job progress (SSE)
+curl -N http://localhost:8000/api/v1/jobs/{job_id}/stream
+
+# Download result
+curl http://localhost:8000/api/v1/jobs/{job_id}/download -o translated.pptx
+
+# Legacy synchronous translation
+curl -X POST http://localhost:8000/api/v1/translate \
   -F "ppt_file=@presentation.pptx" \
   -F "target_lang=한국어" \
   -F "provider=anthropic" \
@@ -125,6 +212,8 @@ curl -X POST http://localhost:8000/translate \
 ```
 
 ## Libraries
+
+### Backend
 - **LangChain**: Translation chain with `ChatOpenAI`/`ChatAnthropic` and `PromptTemplate`
 - **langchain-anthropic**: Anthropic Claude model integration
 - **python-pptx**: PPTX parsing and writing
@@ -133,6 +222,16 @@ curl -X POST http://localhost:8000/translate \
 - **Mangum**: AWS Lambda adapter for FastAPI
 - **tenacity**: Retry logic with exponential backoff
 - **langdetect**: Automatic language detection
+
+### Frontend
+- **Next.js 16**: React framework with App Router
+- **React 19**: UI library
+- **TypeScript**: Type safety
+- **Tailwind CSS 4**: Utility-first CSS
+- **Zustand**: Lightweight state management
+- **Radix UI**: Accessible component primitives
+- **Lucide React**: Icon library
+- **react-dropzone**: File upload handling
 
 ## Claude Code Customization Best Practices
 
