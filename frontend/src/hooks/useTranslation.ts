@@ -8,11 +8,18 @@ import { createSSEClient, SSEClient } from "@/lib/sse-client";
 import { useTranslationStore } from "@/stores/translation-store";
 import type { JobProgress, SSEEvent } from "@/types/api";
 
+// Generate a unique key for a file (for caching)
+function getFileKey(file: File): string {
+  return `${file.name}|${file.size}|${file.lastModified}`;
+}
+
 export function useTranslation() {
   const {
     pptFile,
     glossaryFile,
     settings,
+    cachedMarkdown,
+    cachedMarkdownFileKey,
     generatedContext,
     isGeneratingContext,
     generatedInstructions,
@@ -26,6 +33,7 @@ export function useTranslation() {
     setPptFile,
     setGlossaryFile,
     updateSettings,
+    setCachedMarkdown,
     setGeneratedContext,
     setIsGeneratingContext,
     setGeneratedInstructions,
@@ -42,6 +50,34 @@ export function useTranslation() {
 
   const sseClientRef = useRef<SSEClient | null>(null);
 
+  // Extract markdown with caching
+  const extractMarkdown = useCallback(async (): Promise<string | null> => {
+    if (!pptFile) return null;
+
+    const fileKey = getFileKey(pptFile);
+
+    // Check cache
+    if (cachedMarkdown && cachedMarkdownFileKey === fileKey) {
+      addLog("캐시된 마크다운 사용", "info");
+      return cachedMarkdown;
+    }
+
+    // Extract new markdown
+    addLog("PPT에서 텍스트를 추출하는 중...", "info");
+    const extractionResult = await apiClient.extractText(pptFile, {
+      figures: "omit",
+      charts: "labels",
+      withNotes: false,
+      tableHeader: true,
+    });
+    addLog(`${extractionResult.slide_count}개 슬라이드에서 텍스트 추출 완료`, "info");
+
+    // Cache the result
+    setCachedMarkdown(extractionResult.markdown, fileKey);
+
+    return extractionResult.markdown;
+  }, [pptFile, cachedMarkdown, cachedMarkdownFileKey, setCachedMarkdown, addLog]);
+
   const generateContext = useCallback(async () => {
     if (!pptFile) return;
 
@@ -49,20 +85,16 @@ export function useTranslation() {
       setIsGeneratingContext(true);
       addLog("컨텍스트 생성을 시작합니다...", "info");
 
-      // Step 1: Extract text from PPT
-      addLog("PPT에서 텍스트를 추출하는 중...", "info");
-      const extractionResult = await apiClient.extractText(pptFile, {
-        figures: "omit",
-        charts: "labels",
-        withNotes: false,
-        tableHeader: true,
-      });
-      addLog(`${extractionResult.slide_count}개 슬라이드에서 텍스트 추출 완료`, "info");
+      // Step 1: Extract text from PPT (with caching)
+      const markdown = await extractMarkdown();
+      if (!markdown) {
+        throw new Error("마크다운 추출 실패");
+      }
 
       // Step 2: Summarize the extracted text
       addLog("AI가 프레젠테이션 내용을 요약하는 중...", "info");
       const summaryResult = await apiClient.summarizeText(
-        extractionResult.markdown,
+        markdown,
         settings.provider,
         "gpt-4o-mini"  // Use fast model for summarization
       );
@@ -75,18 +107,26 @@ export function useTranslation() {
     } finally {
       setIsGeneratingContext(false);
     }
-  }, [pptFile, settings.provider, addLog, setGeneratedContext, setIsGeneratingContext]);
+  }, [pptFile, settings.provider, extractMarkdown, addLog, setGeneratedContext, setIsGeneratingContext]);
 
   const generateInstructions = useCallback(async () => {
-    if (!settings.targetLang) return;
+    if (!settings.targetLang || !pptFile) return;
 
     try {
       setIsGeneratingInstructions(true);
       addLog("번역 지침을 생성합니다...", "info");
 
-      // Call API to generate instructions based on target language
+      // Step 1: Extract text from PPT (with caching)
+      const markdown = await extractMarkdown();
+      if (!markdown) {
+        throw new Error("마크다운 추출 실패");
+      }
+
+      // Step 2: Generate instructions based on target language and document content
+      addLog("AI가 문서에 맞는 번역 지침을 생성하는 중...", "info");
       const response = await apiClient.generateInstructions(
         settings.targetLang,
+        markdown,
         settings.provider,
         "gpt-4o-mini"
       );
@@ -99,7 +139,7 @@ export function useTranslation() {
     } finally {
       setIsGeneratingInstructions(false);
     }
-  }, [settings.targetLang, settings.provider, addLog, setGeneratedInstructions, setIsGeneratingInstructions]);
+  }, [pptFile, settings.targetLang, settings.provider, extractMarkdown, addLog, setGeneratedInstructions, setIsGeneratingInstructions]);
 
   const startTranslation = useCallback(async () => {
     if (!pptFile) {

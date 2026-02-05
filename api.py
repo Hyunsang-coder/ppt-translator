@@ -778,6 +778,7 @@ class GenerateInstructionsRequest(BaseModel):
     """Request for generating translation instructions."""
 
     target_lang: str
+    markdown: str
     provider: str = "openai"
     model: str = "gpt-4o-mini"
 
@@ -832,23 +833,32 @@ async def generate_instructions(request: GenerateInstructionsRequest) -> Generat
                 temperature=0.7,
             )
 
+        # Truncate markdown if too long (keep first ~2000 chars for context)
+        markdown_preview = request.markdown[:2000] if len(request.markdown) > 2000 else request.markdown
+
         # Create prompt
         prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a translation style expert. Generate concise translation guidelines for the target language.
+            ("system", """You are a translation style expert. Analyze the document content and generate translation guidelines tailored to this specific document and target language.
 
 Focus on:
-1. Formality level appropriate for business/professional documents
-2. Cultural considerations specific to the target language
-3. Tone recommendations (direct vs. indirect communication style)
-4. Any language-specific best practices
+1. Document type/domain (technical, marketing, academic, etc.) and appropriate terminology handling
+2. Formality level appropriate for the content and target audience
+3. Cultural considerations specific to the target language
+4. Tone recommendations based on the document's purpose
+5. Any language-specific best practices
 
 Keep the response concise (3-5 bullet points). Write in Korean."""),
-            ("user", "타겟 언어: {target_lang}\n\n이 언어로 번역할 때 적합한 스타일 가이드라인을 생성해주세요."),
+            ("user", """타겟 언어: {target_lang}
+
+문서 내용 미리보기:
+{markdown}
+
+이 문서를 위 타겟 언어로 번역할 때 적합한 스타일 가이드라인을 생성해주세요."""),
         ])
 
         # Generate instructions
         chain = prompt | llm
-        result = await chain.ainvoke({"target_lang": request.target_lang})
+        result = await chain.ainvoke({"target_lang": request.target_lang, "markdown": markdown_preview})
 
         instructions = result.content if hasattr(result, "content") else str(result)
 

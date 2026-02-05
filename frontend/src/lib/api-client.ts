@@ -202,10 +202,11 @@ export const apiClient = {
   },
 
   /**
-   * Generate translation instructions based on target language
+   * Generate translation instructions based on target language and document content
    */
   async generateInstructions(
     targetLang: string,
+    markdown: string,
     provider?: string,
     model?: string
   ): Promise<{ instructions: string }> {
@@ -214,6 +215,7 @@ export const apiClient = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         target_lang: targetLang,
+        markdown,
         ...(provider && { provider }),
         ...(model && { model }),
       }),

@@ -28,6 +28,10 @@ interface TranslationState {
   // Settings
   settings: TranslationSettings;
 
+  // Markdown cache (for context/instructions generation)
+  cachedMarkdown: string | null;
+  cachedMarkdownFileKey: string | null; // file name + size + lastModified
+
   // Context generation
   generatedContext: string;
   isGeneratingContext: boolean;
@@ -52,6 +56,7 @@ interface TranslationState {
   setPptFile: (file: File | null) => void;
   setGlossaryFile: (file: File | null) => void;
   updateSettings: (settings: Partial<TranslationSettings>) => void;
+  setCachedMarkdown: (markdown: string | null, fileKey: string | null) => void;
   setGeneratedContext: (context: string) => void;
   setIsGeneratingContext: (loading: boolean) => void;
   setGeneratedInstructions: (instructions: string) => void;
@@ -91,6 +96,8 @@ export const useTranslationStore = create<TranslationState>((set) => ({
   pptFile: null,
   glossaryFile: null,
   settings: DEFAULT_SETTINGS,
+  cachedMarkdown: null,
+  cachedMarkdownFileKey: null,
   generatedContext: "",
   isGeneratingContext: false,
   generatedInstructions: "",
@@ -110,6 +117,9 @@ export const useTranslationStore = create<TranslationState>((set) => ({
     set((state) => ({
       settings: { ...state.settings, ...newSettings },
     })),
+
+  setCachedMarkdown: (markdown, fileKey) =>
+    set({ cachedMarkdown: markdown, cachedMarkdownFileKey: fileKey }),
 
   setGeneratedContext: (context) => set({ generatedContext: context }),
   setIsGeneratingContext: (loading) => set({ isGeneratingContext: loading }),
@@ -141,6 +151,8 @@ export const useTranslationStore = create<TranslationState>((set) => ({
     set({
       pptFile: null,
       glossaryFile: null,
+      cachedMarkdown: null,
+      cachedMarkdownFileKey: null,
       generatedContext: "",
       isGeneratingContext: false,
       generatedInstructions: "",
