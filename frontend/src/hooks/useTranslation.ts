@@ -13,6 +13,10 @@ export function useTranslation() {
     pptFile,
     glossaryFile,
     settings,
+    generatedContext,
+    isGeneratingContext,
+    generatedInstructions,
+    isGeneratingInstructions,
     jobId,
     status,
     progress,
@@ -22,6 +26,10 @@ export function useTranslation() {
     setPptFile,
     setGlossaryFile,
     updateSettings,
+    setGeneratedContext,
+    setIsGeneratingContext,
+    setGeneratedInstructions,
+    setIsGeneratingInstructions,
     setJobId,
     setStatus,
     setProgress,
@@ -33,6 +41,65 @@ export function useTranslation() {
   } = useTranslationStore();
 
   const sseClientRef = useRef<SSEClient | null>(null);
+
+  const generateContext = useCallback(async () => {
+    if (!pptFile) return;
+
+    try {
+      setIsGeneratingContext(true);
+      addLog("컨텍스트 생성을 시작합니다...", "info");
+
+      // Step 1: Extract text from PPT
+      addLog("PPT에서 텍스트를 추출하는 중...", "info");
+      const extractionResult = await apiClient.extractText(pptFile, {
+        figures: "omit",
+        charts: "labels",
+        withNotes: false,
+        tableHeader: true,
+      });
+      addLog(`${extractionResult.slide_count}개 슬라이드에서 텍스트 추출 완료`, "info");
+
+      // Step 2: Summarize the extracted text
+      addLog("AI가 프레젠테이션 내용을 요약하는 중...", "info");
+      const summaryResult = await apiClient.summarizeText(
+        extractionResult.markdown,
+        settings.provider,
+        "gpt-4o-mini"  // Use fast model for summarization
+      );
+
+      setGeneratedContext(summaryResult.summary);
+      addLog("컨텍스트 생성 완료!", "success");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "컨텍스트 생성 실패";
+      addLog(`컨텍스트 생성 실패: ${message}`, "error");
+    } finally {
+      setIsGeneratingContext(false);
+    }
+  }, [pptFile, settings.provider, addLog, setGeneratedContext, setIsGeneratingContext]);
+
+  const generateInstructions = useCallback(async () => {
+    if (!settings.targetLang) return;
+
+    try {
+      setIsGeneratingInstructions(true);
+      addLog("번역 지침을 생성합니다...", "info");
+
+      // Call API to generate instructions based on target language
+      const response = await apiClient.generateInstructions(
+        settings.targetLang,
+        settings.provider,
+        "gpt-4o-mini"
+      );
+
+      setGeneratedInstructions(response.instructions);
+      addLog("번역 지침 생성 완료!", "success");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "지침 생성 실패";
+      addLog(`지침 생성 실패: ${message}`, "error");
+    } finally {
+      setIsGeneratingInstructions(false);
+    }
+  }, [settings.targetLang, settings.provider, addLog, setGeneratedInstructions, setIsGeneratingInstructions]);
 
   const startTranslation = useCallback(async () => {
     if (!pptFile) {
@@ -46,8 +113,15 @@ export function useTranslation() {
       clearLogs();
       addLog("번역 작업을 시작합니다...", "info");
 
+      // Merge generated context and instructions into settings if available
+      const effectiveSettings = {
+        ...settings,
+        context: generatedContext || settings.context,
+        instructions: generatedInstructions || settings.instructions,
+      };
+
       // Create job
-      const response = await apiClient.createJob(pptFile, settings, glossaryFile ?? undefined);
+      const response = await apiClient.createJob(pptFile, effectiveSettings, glossaryFile ?? undefined);
       setJobId(response.job_id);
       addLog(`작업 생성 완료 (ID: ${response.job_id.slice(0, 8)}...)`, "info");
 
@@ -110,6 +184,8 @@ export function useTranslation() {
     pptFile,
     glossaryFile,
     settings,
+    generatedContext,
+    generatedInstructions,
     setStatus,
     setErrorMessage,
     clearLogs,
@@ -168,6 +244,10 @@ export function useTranslation() {
     pptFile,
     glossaryFile,
     settings,
+    generatedContext,
+    isGeneratingContext,
+    generatedInstructions,
+    isGeneratingInstructions,
     jobId,
     status,
     progress,
@@ -180,7 +260,17 @@ export function useTranslation() {
     isTranslating: status === "uploading" || status === "translating",
     isCompleted: status === "completed",
     isFailed: status === "failed",
-    canStart: pptFile !== null && status === "idle",
+    canStart:
+      pptFile !== null &&
+      status === "idle" &&
+      !isGeneratingContext &&
+      !isGeneratingInstructions &&
+      // 타겟 언어 필수 선택
+      settings.targetLang !== "" &&
+      settings.targetLang !== "Auto" &&
+      // 직접 입력 모드일 때 파일명 필수
+      (settings.filenameSettings.mode !== "custom" ||
+        settings.filenameSettings.customName.trim() !== ""),
     canCancel: status === "uploading" || status === "translating",
     canDownload: status === "completed" && jobId !== null,
 
@@ -188,6 +278,10 @@ export function useTranslation() {
     setPptFile,
     setGlossaryFile,
     updateSettings,
+    setGeneratedContext,
+    generateContext,
+    setGeneratedInstructions,
+    generateInstructions,
     startTranslation,
     cancelTranslation,
     downloadResult,

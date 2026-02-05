@@ -381,7 +381,8 @@ class TranslationService:
             model_name=request.model,
             source_lang=source_language,
             target_lang=target_language,
-            user_prompt=request.user_prompt,
+            context=request.context,
+            instructions=request.instructions,
             provider=request.provider,
         )
 

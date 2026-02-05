@@ -28,6 +28,14 @@ interface TranslationState {
   // Settings
   settings: TranslationSettings;
 
+  // Context generation
+  generatedContext: string;
+  isGeneratingContext: boolean;
+
+  // Instructions generation
+  generatedInstructions: string;
+  isGeneratingInstructions: boolean;
+
   // Job state
   jobId: string | null;
   status: TranslationStatus;
@@ -44,6 +52,10 @@ interface TranslationState {
   setPptFile: (file: File | null) => void;
   setGlossaryFile: (file: File | null) => void;
   updateSettings: (settings: Partial<TranslationSettings>) => void;
+  setGeneratedContext: (context: string) => void;
+  setIsGeneratingContext: (loading: boolean) => void;
+  setGeneratedInstructions: (instructions: string) => void;
+  setIsGeneratingInstructions: (loading: boolean) => void;
   setJobId: (jobId: string | null) => void;
   setStatus: (status: TranslationStatus) => void;
   setProgress: (progress: JobProgress | null) => void;
@@ -56,11 +68,20 @@ interface TranslationState {
 
 const DEFAULT_SETTINGS: TranslationSettings = {
   sourceLang: "Auto",
-  targetLang: "Auto",
+  targetLang: "", // 타겟 언어는 필수 선택
   provider: "openai",
   model: "gpt-5.2",
-  userPrompt: "",
+  context: "",
+  instructions: "",
   preprocessRepetitions: true,
+  filenameSettings: {
+    mode: "auto",
+    includeLanguage: true,
+    includeOriginalName: true,
+    includeModel: false,
+    includeDate: true,
+    customName: "",
+  },
 };
 
 const MAX_LOGS = 400;
@@ -70,6 +91,10 @@ export const useTranslationStore = create<TranslationState>((set) => ({
   pptFile: null,
   glossaryFile: null,
   settings: DEFAULT_SETTINGS,
+  generatedContext: "",
+  isGeneratingContext: false,
+  generatedInstructions: "",
+  isGeneratingInstructions: false,
   jobId: null,
   status: "idle",
   progress: null,
@@ -85,6 +110,11 @@ export const useTranslationStore = create<TranslationState>((set) => ({
     set((state) => ({
       settings: { ...state.settings, ...newSettings },
     })),
+
+  setGeneratedContext: (context) => set({ generatedContext: context }),
+  setIsGeneratingContext: (loading) => set({ isGeneratingContext: loading }),
+  setGeneratedInstructions: (instructions) => set({ generatedInstructions: instructions }),
+  setIsGeneratingInstructions: (loading) => set({ isGeneratingInstructions: loading }),
 
   setJobId: (jobId) => set({ jobId }),
   setStatus: (status) => set({ status }),
@@ -111,6 +141,10 @@ export const useTranslationStore = create<TranslationState>((set) => ({
     set({
       pptFile: null,
       glossaryFile: null,
+      generatedContext: "",
+      isGeneratingContext: false,
+      generatedInstructions: "",
+      isGeneratingInstructions: false,
       jobId: null,
       status: "idle",
       progress: null,

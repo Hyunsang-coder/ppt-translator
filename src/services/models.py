@@ -30,7 +30,8 @@ class TranslationRequest:
     target_lang: str = "Auto"
     model: str = "gpt-5.2"
     provider: str = "openai"
-    user_prompt: Optional[str] = None
+    context: Optional[str] = None
+    instructions: Optional[str] = None
     glossary: Optional[Dict[str, str]] = None
     preprocess_repetitions: bool = False
 

@@ -27,15 +27,19 @@ You are a professional translator specializing in PowerPoint presentations.
 **Context (Full Presentation):**
 {ppt_context}
 
+**Background Information:**
+{context}
+
 **Glossary:**
 {glossary_terms}
 
-**User Instructions:**
-{user_prompt}
+**Translation Style/Tone Guidelines:**
+{instructions}
 
 **Task:**
 Translate the following texts from {source_lang} to {target_lang}.
-Maintain consistency with the context and glossary.
+Maintain consistency with the context, background information, and glossary.
+Follow the translation style/tone guidelines if provided.
 If a sentence or phrase appears more than once in the source, translate it identically every time unless the glossary overrides it.
 Return exactly {expected_count} translated texts in the translations array.
 
@@ -48,8 +52,11 @@ def create_translation_chain(
     model_name: str,
     source_lang: str,
     target_lang: str,
-    user_prompt: str | None,
+    context: str | None = None,
+    instructions: str | None = None,
     provider: Provider = "openai",
+    *,
+    user_prompt: str | None = None,  # Deprecated: for backward compatibility
 ):
     """Create a LangChain sequence for translation.
 
@@ -57,8 +64,11 @@ def create_translation_chain(
         model_name: Model identifier (e.g., gpt-5.2, claude-sonnet-4-5-20250929).
         source_lang: Display name of the source language.
         target_lang: Display name of the target language.
-        user_prompt: Optional custom instruction string.
+        context: Optional background information about the presentation.
+        instructions: Optional translation style/tone guidelines.
         provider: LLM provider ("openai" or "anthropic").
+        user_prompt: Deprecated. Use 'instructions' instead. If provided and
+            'instructions' is not set, this value will be used as instructions.
 
     Returns:
         Configured LangChain runnable sequence with structured output.
@@ -68,7 +78,13 @@ def create_translation_chain(
     # Wrap LLM with structured output for type-safe parsing
     structured_llm = llm.with_structured_output(TranslationOutput)
 
-    default_prompt = user_prompt or "Translate naturally and professionally."
+    # Backward compatibility: use user_prompt as instructions if instructions not provided
+    if instructions is None and user_prompt is not None:
+        instructions = user_prompt
+
+    # Use provided values or sensible defaults
+    context_text = context or "No additional background information provided."
+    instructions_text = instructions or "Translate naturally and professionally."
 
     chain = (
         RunnablePassthrough.assign(
@@ -76,7 +92,8 @@ def create_translation_chain(
             glossary_terms=lambda x: x.get("glossary_terms", "None"),
             source_lang=lambda _: source_lang,
             target_lang=lambda _: target_lang,
-            user_prompt=lambda _: default_prompt,
+            context=lambda _: context_text,
+            instructions=lambda _: instructions_text,
             expected_count=lambda x: int(x.get("expected_count", 0)),
         )
         | PromptTemplate.from_template(PROMPT_TEMPLATE)

@@ -4,20 +4,25 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { FileUploader } from "@/components/shared/FileUploader";
-import { SettingsPanel } from "./SettingsPanel";
+import { SettingsPanel, FilenameSettingsSection } from "./SettingsPanel";
 import { ProgressPanel } from "./ProgressPanel";
 import { LogViewer } from "./LogViewer";
 import { useTranslation } from "@/hooks/useTranslation";
 import { useConfig } from "@/hooks/useConfig";
-import { Play, XCircle, Download, RefreshCw } from "lucide-react";
+import { Play, XCircle, Download, RefreshCw, AlertCircle } from "lucide-react";
 
 export function TranslationForm() {
   const [startTime, setStartTime] = useState<number | null>(null);
+  const [filenameError, setFilenameError] = useState<string | null>(null);
   const { config } = useConfig();
   const {
     pptFile,
     glossaryFile,
     settings,
+    generatedContext,
+    isGeneratingContext,
+    generatedInstructions,
+    isGeneratingInstructions,
     status,
     progress,
     errorMessage,
@@ -31,19 +36,41 @@ export function TranslationForm() {
     setPptFile,
     setGlossaryFile,
     updateSettings,
+    setGeneratedContext,
+    generateContext,
+    setGeneratedInstructions,
+    generateInstructions,
     startTranslation,
     cancelTranslation,
     downloadResult,
     reset,
   } = useTranslation();
 
+  // 검증 체크
+  const isCustomFilenameEmpty =
+    settings.filenameSettings.mode === "custom" &&
+    settings.filenameSettings.customName.trim() === "";
+  const isTargetLangEmpty = !settings.targetLang || settings.targetLang === "Auto";
+
   const handleStart = async () => {
+    // 타겟 언어 미선택 시 경고
+    if (isTargetLangEmpty) {
+      setFilenameError("타겟 언어를 선택해주세요.");
+      return;
+    }
+    // 직접 입력 모드인데 파일명이 비어있으면 경고
+    if (isCustomFilenameEmpty) {
+      setFilenameError("출력 파일명을 입력해주세요.");
+      return;
+    }
+    setFilenameError(null);
     setStartTime(Date.now());
     await startTranslation();
   };
 
   const handleReset = () => {
     setStartTime(null);
+    setFilenameError(null);
     reset();
   };
 
@@ -68,18 +95,33 @@ export function TranslationForm() {
 
         <SettingsPanel
           settings={settings}
-          onSettingsChange={updateSettings}
+          onSettingsChange={(newSettings) => {
+            updateSettings(newSettings);
+            // 파일명 설정이 변경되면 에러 클리어
+            if (newSettings.filenameSettings) {
+              setFilenameError(null);
+            }
+          }}
           glossaryFile={glossaryFile}
           onGlossaryFileChange={setGlossaryFile}
+          pptFile={pptFile}
+          generatedContext={generatedContext}
+          generatedInstructions={generatedInstructions}
+          isGeneratingContext={isGeneratingContext}
+          isGeneratingInstructions={isGeneratingInstructions}
+          onGenerateContext={generateContext}
+          onGenerateInstructions={generateInstructions}
+          onContextChange={setGeneratedContext}
+          onInstructionsChange={setGeneratedInstructions}
           disabled={isTranslating}
         />
       </div>
 
-      {/* Right Column: Progress & Actions */}
-      <div className="space-y-6">
+      {/* Right Column: Actions, Filename Settings, Progress */}
+      <div className="space-y-4">
         {/* Action Buttons */}
         <Card className="border-border overflow-hidden">
-          <CardContent className="pt-6">
+          <CardContent className="p-4">
             <div className="flex flex-wrap gap-3">
               {isIdle && (
                 <Button
@@ -137,14 +179,40 @@ export function TranslationForm() {
               )}
             </div>
 
+            {filenameError && (
+              <div className="mt-3 p-3 rounded-lg border border-warning/30 bg-warning/10 animate-slide-in">
+                <p className="text-sm text-warning flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                  <span>{filenameError}</span>
+                </p>
+              </div>
+            )}
+
             {errorMessage && (
-              <div className="mt-4 p-3 rounded-lg border border-destructive/30 bg-destructive/10 animate-slide-in">
+              <div className="mt-3 p-3 rounded-lg border border-destructive/30 bg-destructive/10 animate-slide-in">
                 <p className="text-sm text-destructive flex items-start gap-2">
                   <XCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
                   <span>{errorMessage}</span>
                 </p>
               </div>
             )}
+          </CardContent>
+        </Card>
+
+        {/* Filename Settings */}
+        <Card className="border-border overflow-hidden">
+          <CardContent className="p-4">
+            <FilenameSettingsSection
+              settings={settings.filenameSettings}
+              onChange={(filenameSettings) => {
+                updateSettings({ filenameSettings });
+                setFilenameError(null);
+              }}
+              pptFile={pptFile}
+              targetLang={settings.targetLang}
+              model={settings.model}
+              disabled={isTranslating}
+            />
           </CardContent>
         </Card>
 

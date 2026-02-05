@@ -11,15 +11,28 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Button } from "@/components/ui/button";
 import { FileUploader } from "@/components/shared/FileUploader";
 import { useConfig } from "@/hooks/useConfig";
-import type { TranslationSettings } from "@/types/api";
+import type { TranslationSettings, FilenameSettings } from "@/types/api";
+import { Sparkles, Loader2, FileText } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 
 interface SettingsPanelProps {
   settings: TranslationSettings;
   onSettingsChange: (settings: Partial<TranslationSettings>) => void;
   glossaryFile: File | null;
   onGlossaryFileChange: (file: File | null) => void;
+  pptFile: File | null;
+  generatedContext: string;
+  generatedInstructions: string;
+  isGeneratingContext: boolean;
+  isGeneratingInstructions: boolean;
+  onGenerateContext: () => void;
+  onGenerateInstructions: () => void;
+  onContextChange: (context: string) => void;
+  onInstructionsChange: (instructions: string) => void;
   disabled?: boolean;
 }
 
@@ -28,6 +41,15 @@ export function SettingsPanel({
   onSettingsChange,
   glossaryFile,
   onGlossaryFileChange,
+  pptFile,
+  generatedContext,
+  generatedInstructions,
+  isGeneratingContext,
+  isGeneratingInstructions,
+  onGenerateContext,
+  onGenerateInstructions,
+  onContextChange,
+  onInstructionsChange,
   disabled = false,
 }: SettingsPanelProps) {
   const { languages, getModelsForProvider, isLoading, error } = useConfig();
@@ -73,7 +95,7 @@ export function SettingsPanel({
           </Select>
         </div>
 
-        {/* Target Language */}
+        {/* Target Language - Auto 제외 (타겟 언어는 필수 선택) */}
         <div className="space-y-2">
           <Label htmlFor="target-lang">타겟 언어</Label>
           <Select
@@ -85,11 +107,13 @@ export function SettingsPanel({
               <SelectValue placeholder="언어 선택" />
             </SelectTrigger>
             <SelectContent>
-              {languages.map((lang) => (
-                <SelectItem key={lang.code} value={lang.code}>
-                  {lang.name}
-                </SelectItem>
-              ))}
+              {languages
+                .filter((lang) => lang.code !== "Auto")
+                .map((lang) => (
+                  <SelectItem key={lang.code} value={lang.code}>
+                    {lang.name}
+                  </SelectItem>
+                ))}
             </SelectContent>
           </Select>
         </div>
@@ -151,18 +175,98 @@ export function SettingsPanel({
         </Label>
       </div>
 
-      {/* User Prompt */}
-      <div className="space-y-1.5">
-        <Label htmlFor="user-prompt">사용자 프롬프트 (선택)</Label>
+      {/* Context (Background Information) */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <Label htmlFor="context">컨텍스트 (배경 정보)</Label>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={onGenerateContext}
+            disabled={disabled || isGeneratingContext || !pptFile}
+            className="h-7 text-xs gap-1.5"
+          >
+            {isGeneratingContext ? (
+              <>
+                <Loader2 className="w-3 h-3 animate-spin" />
+                생성 중...
+              </>
+            ) : (
+              <>
+                <Sparkles className="w-3 h-3" />
+                자동 생성
+              </>
+            )}
+          </Button>
+        </div>
         <Textarea
-          id="user-prompt"
-          placeholder="번역 시 참고할 추가 지침을 입력하세요..."
-          value={settings.userPrompt}
-          onChange={(e) => onSettingsChange({ userPrompt: e.target.value })}
-          disabled={disabled}
-          rows={2}
+          id="context"
+          placeholder="문서의 주제, 도메인, 대상 독자 등 배경 정보를 입력하세요."
+          value={generatedContext || settings.context}
+          onChange={(e) => {
+            if (generatedContext) {
+              onContextChange(e.target.value);
+            } else {
+              onSettingsChange({ context: e.target.value });
+            }
+          }}
+          disabled={disabled || isGeneratingContext}
+          rows={3}
           className="resize-none"
         />
+        {generatedContext && (
+          <p className="text-xs text-foreground/60">
+            * 자동 생성된 컨텍스트입니다. 필요에 따라 수정할 수 있습니다.
+          </p>
+        )}
+      </div>
+
+      {/* Instructions (Style/Tone) */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <Label htmlFor="instructions">번역 지침 (스타일/톤)</Label>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={onGenerateInstructions}
+            disabled={disabled || isGeneratingInstructions || !pptFile}
+            className="h-7 text-xs gap-1.5"
+          >
+            {isGeneratingInstructions ? (
+              <>
+                <Loader2 className="w-3 h-3 animate-spin" />
+                생성 중...
+              </>
+            ) : (
+              <>
+                <Sparkles className="w-3 h-3" />
+                자동 생성
+              </>
+            )}
+          </Button>
+        </div>
+        <Textarea
+          id="instructions"
+          placeholder="격식체/비격식체, 직역/의역 선호, 특정 용어 처리 방식 등을 입력하세요."
+          value={generatedInstructions || settings.instructions}
+          onChange={(e) => {
+            if (generatedInstructions) {
+              onInstructionsChange(e.target.value);
+            } else {
+              onSettingsChange({ instructions: e.target.value });
+            }
+          }}
+          disabled={disabled || isGeneratingInstructions}
+          rows={3}
+          className="resize-none"
+        />
+        {generatedInstructions && (
+          <p className="text-xs text-foreground/60">
+            * 자동 생성된 지침입니다. 필요에 따라 수정할 수 있습니다.
+          </p>
+        )}
       </div>
 
       {/* Glossary File */}
@@ -178,6 +282,180 @@ export function SettingsPanel({
         onFileSelect={onGlossaryFileChange}
         disabled={disabled}
       />
+    </div>
+  );
+}
+
+export interface FilenameSettingsSectionProps {
+  settings: FilenameSettings;
+  onChange: (settings: FilenameSettings) => void;
+  pptFile: File | null;
+  targetLang: string;
+  model: string;
+  disabled?: boolean;
+}
+
+// Language code mapping for filenames
+const LANGUAGE_CODE_MAP: Record<string, string> = {
+  "한국어": "KR",
+  "영어": "EN",
+  "일본어": "JP",
+  "중국어": "CN",
+  "스페인어": "ES",
+  "프랑스어": "FR",
+  "독일어": "DE",
+};
+
+export function FilenameSettingsSection({
+  settings,
+  onChange,
+  pptFile,
+  targetLang,
+  model,
+  disabled = false,
+}: FilenameSettingsSectionProps) {
+  const originalName = pptFile?.name.replace(/\.[^/.]+$/, "") || "presentation";
+  const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+
+  const generatePreview = () => {
+    if (settings.mode === "custom") {
+      const customName = settings.customName.trim() || "파일명을 입력하세요";
+      return `${customName}.pptx`;
+    }
+
+    const parts: string[] = [];
+    if (settings.includeLanguage && targetLang) {
+      const langCode = LANGUAGE_CODE_MAP[targetLang] || targetLang;
+      parts.push(langCode);
+    }
+    if (settings.includeOriginalName) parts.push(originalName);
+    if (settings.includeModel) parts.push(model);
+    if (settings.includeDate) parts.push(today);
+
+    if (parts.length === 0) {
+      return "translated.pptx";
+    }
+    return `${parts.join("_")}.pptx`;
+  };
+
+  const updateSetting = <K extends keyof FilenameSettings>(
+    key: K,
+    value: FilenameSettings[K]
+  ) => {
+    onChange({ ...settings, [key]: value });
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <FileText className="w-4 h-4 text-foreground/60" />
+        <Label>출력 파일명 설정</Label>
+      </div>
+
+      <RadioGroup
+        value={settings.mode}
+        onValueChange={(value) => updateSetting("mode", value as "auto" | "custom")}
+        disabled={disabled}
+        className="space-y-3"
+      >
+        {/* Auto mode */}
+        <div className="space-y-2">
+          <div className="flex items-center space-x-2">
+            <RadioGroupItem value="auto" id="filename-auto" />
+            <Label htmlFor="filename-auto" className="font-normal cursor-pointer">
+              자동 생성
+            </Label>
+          </div>
+
+          {settings.mode === "auto" && (
+            <div className="ml-6 space-y-2">
+              <div className="grid grid-cols-2 gap-2">
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="include-language"
+                    checked={settings.includeLanguage}
+                    onCheckedChange={(checked) =>
+                      updateSetting("includeLanguage", checked === true)
+                    }
+                    disabled={disabled}
+                  />
+                  <Label htmlFor="include-language" className="text-sm font-normal cursor-pointer">
+                    대상 언어
+                  </Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="include-original"
+                    checked={settings.includeOriginalName}
+                    onCheckedChange={(checked) =>
+                      updateSetting("includeOriginalName", checked === true)
+                    }
+                    disabled={disabled}
+                  />
+                  <Label htmlFor="include-original" className="text-sm font-normal cursor-pointer">
+                    원본 파일명
+                  </Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="include-model"
+                    checked={settings.includeModel}
+                    onCheckedChange={(checked) =>
+                      updateSetting("includeModel", checked === true)
+                    }
+                    disabled={disabled}
+                  />
+                  <Label htmlFor="include-model" className="text-sm font-normal cursor-pointer">
+                    모델명
+                  </Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="include-date"
+                    checked={settings.includeDate}
+                    onCheckedChange={(checked) =>
+                      updateSetting("includeDate", checked === true)
+                    }
+                    disabled={disabled}
+                  />
+                  <Label htmlFor="include-date" className="text-sm font-normal cursor-pointer">
+                    날짜
+                  </Label>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Custom mode */}
+        <div className="space-y-2">
+          <div className="flex items-center space-x-2">
+            <RadioGroupItem value="custom" id="filename-custom" />
+            <Label htmlFor="filename-custom" className="font-normal cursor-pointer">
+              직접 입력
+            </Label>
+          </div>
+
+          {settings.mode === "custom" && (
+            <div className="ml-6">
+              <Input
+                placeholder="파일명 입력 (확장자 제외)"
+                value={settings.customName}
+                onChange={(e) => updateSetting("customName", e.target.value)}
+                disabled={disabled}
+                className="h-8 text-sm"
+              />
+            </div>
+          )}
+        </div>
+      </RadioGroup>
+
+      {/* Preview */}
+      <div className="p-2 bg-secondary/50 rounded-md">
+        <p className="text-xs text-foreground/60">
+          미리보기: <span className="font-mono text-foreground">{generatePreview()}</span>
+        </p>
+      </div>
     </div>
   );
 }

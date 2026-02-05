@@ -10,6 +10,7 @@ import type {
   JobStatusResponse,
   LanguageInfo,
   ModelInfo,
+  SummarizeResponse,
   TranslationSettings,
 } from "@/types/api";
 
@@ -90,12 +91,17 @@ export const apiClient = {
     formData.append("provider", settings.provider);
     formData.append("model", settings.model);
     formData.append("preprocess_repetitions", String(settings.preprocessRepetitions));
-    if (settings.userPrompt) {
-      formData.append("user_prompt", settings.userPrompt);
+    if (settings.context) {
+      formData.append("context", settings.context);
+    }
+    if (settings.instructions) {
+      formData.append("instructions", settings.instructions);
     }
     if (glossaryFile) {
       formData.append("glossary_file", glossaryFile);
     }
+    // Filename settings
+    formData.append("filename_settings", JSON.stringify(settings.filenameSettings));
 
     const response = await fetch(`${API_BASE}/api/v1/jobs`, {
       method: "POST",
@@ -171,6 +177,48 @@ export const apiClient = {
       body: formData,
     });
     return handleResponse<ExtractionResponse>(response);
+  },
+
+  /**
+   * Summarize presentation content for translation context
+   */
+  async summarizeText(
+    markdown: string,
+    provider?: string,
+    model?: string
+  ): Promise<SummarizeResponse> {
+    const response = await fetch(`${API_BASE}/api/v1/summarize`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        markdown,
+        ...(provider && { provider }),
+        ...(model && { model }),
+      }),
+    });
+    return handleResponse<SummarizeResponse>(response);
+  },
+
+  /**
+   * Generate translation instructions based on target language
+   */
+  async generateInstructions(
+    targetLang: string,
+    provider?: string,
+    model?: string
+  ): Promise<{ instructions: string }> {
+    const response = await fetch(`${API_BASE}/api/v1/generate-instructions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        target_lang: targetLang,
+        ...(provider && { provider }),
+        ...(model && { model }),
+      }),
+    });
+    return handleResponse<{ instructions: string }>(response);
   },
 
   /**

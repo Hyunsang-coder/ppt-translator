@@ -140,7 +140,7 @@ export function ExtractionForm() {
       <div className="space-y-4">
         {/* Action Buttons */}
         <Card className="border-border overflow-hidden">
-          <CardContent className="pt-6">
+          <CardContent className="p-4">
             <div className="flex flex-wrap gap-3">
               {!hasResult ? (
                 <Button
@@ -181,7 +181,7 @@ export function ExtractionForm() {
             </div>
 
             {errorMessage && (
-              <div className="mt-4 p-3 rounded-lg border border-destructive/30 bg-destructive/10">
+              <div className="mt-3 p-3 rounded-lg border border-destructive/30 bg-destructive/10">
                 <p className="text-sm text-destructive flex items-start gap-2">
                   <XCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
                   <span>{errorMessage}</span>

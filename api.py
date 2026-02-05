@@ -149,6 +149,82 @@ class ExtractionResponse(BaseModel):
     slide_count: int
 
 
+class SummarizeRequest(BaseModel):
+    """Summarization request."""
+
+    markdown: str
+    provider: str = "openai"
+    model: str = "gpt-4o-mini"
+
+
+class SummarizeResponse(BaseModel):
+    """Summarization response."""
+
+    summary: str
+
+
+class FilenameSettings(BaseModel):
+    """Filename generation settings."""
+
+    mode: Literal["auto", "custom"] = "auto"
+    includeLanguage: bool = True
+    includeOriginalName: bool = True
+    includeModel: bool = False
+    includeDate: bool = True
+    customName: str = ""
+
+
+def get_language_code(language: str) -> str:
+    """Convert language name to English abbreviation for filenames."""
+    # Import here to avoid circular dependency (LANGUAGE_CODE_MAP defined later)
+    code_map = {
+        "한국어": "KR",
+        "영어": "EN",
+        "일본어": "JP",
+        "중국어": "CN",
+        "스페인어": "ES",
+        "프랑스어": "FR",
+        "독일어": "DE",
+    }
+    return code_map.get(language, language)
+
+
+def generate_output_filename(
+    filename_settings: FilenameSettings,
+    original_filename: str,
+    target_language: str,
+    model: str,
+) -> str:
+    """Generate output filename based on settings."""
+    if filename_settings.mode == "custom" and filename_settings.customName.strip():
+        safe_custom = sanitize_filename(filename_settings.customName.strip(), fallback="translated")
+        return f"{safe_custom}.pptx"
+
+    # Auto mode
+    parts: list[str] = []
+    timestamp = datetime.now().strftime("%Y%m%d")
+
+    original_name = Path(original_filename).stem
+    safe_original = sanitize_filename(original_name, fallback="presentation")
+    # Use English abbreviation for language code
+    lang_code = get_language_code(target_language)
+    safe_model = sanitize_filename(model, fallback="model")
+
+    if filename_settings.includeLanguage:
+        parts.append(lang_code)
+    if filename_settings.includeOriginalName:
+        parts.append(safe_original)
+    if filename_settings.includeModel:
+        parts.append(safe_model)
+    if filename_settings.includeDate:
+        parts.append(timestamp)
+
+    if not parts:
+        return "translated.pptx"
+
+    return f"{'_'.join(parts)}.pptx"
+
+
 # ============================================================================
 # Configuration Data
 # ============================================================================
@@ -180,6 +256,17 @@ SUPPORTED_LANGUAGES: List[LanguageInfo] = [
     LanguageInfo(code="프랑스어", name="Français"),
     LanguageInfo(code="독일어", name="Deutsch"),
 ]
+
+# Language code mapping for filenames (Korean name -> English abbreviation)
+LANGUAGE_CODE_MAP: Dict[str, str] = {
+    "한국어": "KR",
+    "영어": "EN",
+    "일본어": "JP",
+    "중국어": "CN",
+    "스페인어": "ES",
+    "프랑스어": "FR",
+    "독일어": "DE",
+}
 
 
 # ============================================================================
@@ -257,9 +344,11 @@ async def _run_translation_job(
     target_lang: str,
     provider: str,
     model: str,
-    user_prompt: Optional[str],
+    context: Optional[str],
+    instructions: Optional[str],
     preprocess_repetitions: bool,
     glossary: Optional[Dict[str, str]],
+    filename_settings: FilenameSettings,
 ) -> None:
     """Run translation job in background."""
     job_manager = get_job_manager()
@@ -272,7 +361,8 @@ async def _run_translation_job(
             target_lang=target_lang,
             provider=provider,
             model=model,
-            user_prompt=user_prompt,
+            context=context,
+            instructions=instructions,
             glossary=glossary,
             preprocess_repetitions=preprocess_repetitions,
         )
@@ -292,13 +382,13 @@ async def _run_translation_job(
             job_manager.fail_job(job_id, "Translation succeeded but no output file was generated")
             return
 
-        # Generate output filename
-        original_name = Path(filename).stem
-        safe_name = sanitize_filename(original_name, fallback="presentation")
-        safe_model = sanitize_filename(model, fallback="model")
-        safe_target = sanitize_filename(result.target_language_used, fallback="target")
-        timestamp = datetime.now().strftime("%Y%m%d")
-        download_name = f"{safe_target}_{safe_name}_{safe_model}_{timestamp}.pptx"
+        # Generate output filename using settings
+        download_name = generate_output_filename(
+            filename_settings=filename_settings,
+            original_filename=filename,
+            target_language=result.target_language_used,
+            model=model,
+        )
 
         job_manager.complete_job(
             job_id,
@@ -321,8 +411,10 @@ async def create_job(
     target_lang: str = Form("Auto", description="Target language"),
     provider: str = Form("openai", description="LLM provider"),
     model: str = Form("gpt-5.2", description="Model to use"),
-    user_prompt: Optional[str] = Form(None, description="Custom translation instructions"),
+    context: Optional[str] = Form(None, description="Background information about the presentation"),
+    instructions: Optional[str] = Form(None, description="Translation style/tone guidelines"),
     preprocess_repetitions: bool = Form(False, description="Deduplicate repeated phrases"),
+    filename_settings: Optional[str] = Form(None, description="Filename settings as JSON"),
 ) -> JobCreateResponse:
     """Create a new translation job."""
     settings = get_settings()
@@ -389,6 +481,15 @@ async def create_job(
             LOGGER.exception("Failed to load glossary: %s", exc)
             raise HTTPException(status_code=400, detail="Failed to load glossary file")
 
+    # Parse filename settings
+    parsed_filename_settings = FilenameSettings()
+    if filename_settings:
+        try:
+            settings_data = json.loads(filename_settings)
+            parsed_filename_settings = FilenameSettings(**settings_data)
+        except (json.JSONDecodeError, ValueError) as exc:
+            LOGGER.warning("Invalid filename_settings JSON, using defaults: %s", exc)
+
     # Create job
     job = job_manager.create_job(JobType.TRANSLATION)
 
@@ -402,9 +503,11 @@ async def create_job(
             target_lang=target_lang,
             provider=provider,
             model=model,
-            user_prompt=user_prompt,
+            context=context,
+            instructions=instructions,
             preprocess_repetitions=preprocess_repetitions,
             glossary=glossary,
+            filename_settings=parsed_filename_settings,
         )
     )
     job_manager.start_job(job.id, task)
@@ -612,6 +715,158 @@ async def extract_text(
 
 
 # ============================================================================
+# Summarization Endpoint
+# ============================================================================
+
+
+@app.post("/api/v1/summarize", response_model=SummarizeResponse)
+async def summarize_text(request: SummarizeRequest) -> SummarizeResponse:
+    """Summarize presentation content for translation context.
+
+    Takes extracted markdown text and generates a concise summary
+    that helps maintain consistency during translation.
+    """
+    from src.chains.summarization_chain import summarize_presentation
+
+    settings = get_settings()
+
+    # Validate provider
+    if request.provider not in SUPPORTED_MODELS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid provider: {request.provider}. Must be one of: {list(SUPPORTED_MODELS.keys())}",
+        )
+
+    # Validate API key
+    if request.provider == "openai" and not settings.openai_api_key:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY is not configured")
+    if request.provider == "anthropic" and not settings.anthropic_api_key:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not configured")
+
+    # Validate markdown
+    if not request.markdown or not request.markdown.strip():
+        raise HTTPException(status_code=400, detail="Markdown content is empty")
+
+    try:
+        summary = await summarize_presentation(
+            markdown=request.markdown,
+            provider=request.provider,
+            model=request.model,
+        )
+        LOGGER.info(
+            "Generated summary: provider=%s, model=%s, input_chars=%d, output_chars=%d",
+            request.provider,
+            request.model,
+            len(request.markdown),
+            len(summary),
+        )
+        return SummarizeResponse(summary=summary)
+
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        LOGGER.exception("Failed to summarize text: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Failed to summarize text: {str(exc)}")
+
+
+# ============================================================================
+# Instructions Generation Endpoint
+# ============================================================================
+
+
+class GenerateInstructionsRequest(BaseModel):
+    """Request for generating translation instructions."""
+
+    target_lang: str
+    provider: str = "openai"
+    model: str = "gpt-4o-mini"
+
+
+class GenerateInstructionsResponse(BaseModel):
+    """Response with generated translation instructions."""
+
+    instructions: str
+
+
+@app.post("/api/v1/generate-instructions", response_model=GenerateInstructionsResponse)
+async def generate_instructions(request: GenerateInstructionsRequest) -> GenerateInstructionsResponse:
+    """Generate translation instructions based on target language.
+
+    Creates style/tone guidelines appropriate for the target language and culture.
+    """
+    from langchain_openai import ChatOpenAI
+    from langchain_anthropic import ChatAnthropic
+    from langchain_core.prompts import ChatPromptTemplate
+
+    settings = get_settings()
+
+    # Validate provider
+    if request.provider not in SUPPORTED_MODELS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid provider: {request.provider}. Must be one of: {list(SUPPORTED_MODELS.keys())}",
+        )
+
+    # Validate API key
+    if request.provider == "openai" and not settings.openai_api_key:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY is not configured")
+    if request.provider == "anthropic" and not settings.anthropic_api_key:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not configured")
+
+    # Validate target language
+    if not request.target_lang or request.target_lang == "Auto":
+        raise HTTPException(status_code=400, detail="Target language must be specified")
+
+    try:
+        # Create LLM
+        if request.provider == "openai":
+            llm = ChatOpenAI(
+                model=request.model,
+                api_key=settings.openai_api_key,
+                temperature=0.7,
+            )
+        else:
+            llm = ChatAnthropic(
+                model=request.model,
+                api_key=settings.anthropic_api_key,
+                temperature=0.7,
+            )
+
+        # Create prompt
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", """You are a translation style expert. Generate concise translation guidelines for the target language.
+
+Focus on:
+1. Formality level appropriate for business/professional documents
+2. Cultural considerations specific to the target language
+3. Tone recommendations (direct vs. indirect communication style)
+4. Any language-specific best practices
+
+Keep the response concise (3-5 bullet points). Write in Korean."""),
+            ("user", "타겟 언어: {target_lang}\n\n이 언어로 번역할 때 적합한 스타일 가이드라인을 생성해주세요."),
+        ])
+
+        # Generate instructions
+        chain = prompt | llm
+        result = await chain.ainvoke({"target_lang": request.target_lang})
+
+        instructions = result.content if hasattr(result, "content") else str(result)
+
+        LOGGER.info(
+            "Generated instructions: target_lang=%s, provider=%s, model=%s",
+            request.target_lang,
+            request.provider,
+            request.model,
+        )
+
+        return GenerateInstructionsResponse(instructions=instructions)
+
+    except Exception as exc:
+        LOGGER.exception("Failed to generate instructions: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Failed to generate instructions: {str(exc)}")
+
+
+# ============================================================================
 # Legacy Sync Translate Endpoint (kept for backwards compatibility)
 # ============================================================================
 
@@ -626,7 +881,8 @@ async def translate_ppt(
     target_lang: str = Form("Auto", description="Target language (Auto for inference)"),
     provider: str = Form("openai", description="LLM provider (openai or anthropic)"),
     model: str = Form("gpt-5.2", description="Model to use (depends on provider)"),
-    user_prompt: Optional[str] = Form(None, description="Custom translation instructions"),
+    context: Optional[str] = Form(None, description="Background information about the presentation"),
+    instructions: Optional[str] = Form(None, description="Translation style/tone guidelines"),
     preprocess_repetitions: bool = Form(
         False, description="Deduplicate repeated phrases"
     ),
@@ -714,7 +970,8 @@ async def translate_ppt(
         target_lang=target_lang,
         provider=provider,
         model=model,
-        user_prompt=user_prompt,
+        context=context,
+        instructions=instructions,
         glossary=glossary,
         preprocess_repetitions=preprocess_repetitions,
     )

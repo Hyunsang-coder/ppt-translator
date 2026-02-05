@@ -56,13 +56,24 @@ export interface SSEEvent {
   timestamp: number;
 }
 
+export interface FilenameSettings {
+  mode: "auto" | "custom";
+  includeLanguage: boolean;
+  includeOriginalName: boolean;
+  includeModel: boolean;
+  includeDate: boolean;
+  customName: string;
+}
+
 export interface TranslationSettings {
   sourceLang: string;
   targetLang: string;
   provider: string;
   model: string;
-  userPrompt: string;
+  context: string;
+  instructions: string;
   preprocessRepetitions: boolean;
+  filenameSettings: FilenameSettings;
 }
 
 export interface ExtractionSettings {
@@ -70,4 +81,14 @@ export interface ExtractionSettings {
   charts: "labels" | "placeholder" | "omit";
   withNotes: boolean;
   tableHeader: boolean;
+}
+
+export interface SummarizeRequest {
+  markdown: string;
+  provider?: string;
+  model?: string;
+}
+
+export interface SummarizeResponse {
+  summary: string;
 }
