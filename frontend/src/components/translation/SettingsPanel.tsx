@@ -179,26 +179,31 @@ export function SettingsPanel({
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <Label htmlFor="context">컨텍스트 (배경 정보)</Label>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={onGenerateContext}
-            disabled={disabled || isGeneratingContext || !pptFile}
-            className="h-7 text-xs gap-1.5"
-          >
-            {isGeneratingContext ? (
-              <>
-                <Loader2 className="w-3 h-3 animate-spin" />
-                생성 중...
-              </>
-            ) : (
-              <>
-                <Sparkles className="w-3 h-3" />
-                자동 생성
-              </>
-            )}
-          </Button>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-foreground/40">
+              using {settings.provider === "openai" ? "GPT-5 Mini" : "Haiku 4.5"}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onGenerateContext}
+              disabled={disabled || isGeneratingContext || !pptFile}
+              className="h-7 text-xs gap-1.5"
+            >
+              {isGeneratingContext ? (
+                <>
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  생성 중...
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-3 h-3" />
+                  자동 생성
+                </>
+              )}
+            </Button>
+          </div>
         </div>
         <Textarea
           id="context"
@@ -226,26 +231,31 @@ export function SettingsPanel({
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <Label htmlFor="instructions">번역 지침 (스타일/톤)</Label>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={onGenerateInstructions}
-            disabled={disabled || isGeneratingInstructions || !pptFile}
-            className="h-7 text-xs gap-1.5"
-          >
-            {isGeneratingInstructions ? (
-              <>
-                <Loader2 className="w-3 h-3 animate-spin" />
-                생성 중...
-              </>
-            ) : (
-              <>
-                <Sparkles className="w-3 h-3" />
-                자동 생성
-              </>
-            )}
-          </Button>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-foreground/40">
+              using {settings.provider === "openai" ? "GPT-5 Mini" : "Haiku 4.5"}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onGenerateInstructions}
+              disabled={disabled || isGeneratingInstructions || !pptFile || !settings.targetLang}
+              className="h-7 text-xs gap-1.5"
+            >
+              {isGeneratingInstructions ? (
+                <>
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  생성 중...
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-3 h-3" />
+                  자동 생성
+                </>
+              )}
+            </Button>
+          </div>
         </div>
         <Textarea
           id="instructions"
@@ -291,7 +301,7 @@ export interface FilenameSettingsSectionProps {
   onChange: (settings: FilenameSettings) => void;
   pptFile: File | null;
   targetLang: string;
-  model: string;
+  modelName: string;
   disabled?: boolean;
 }
 
@@ -311,7 +321,7 @@ export function FilenameSettingsSection({
   onChange,
   pptFile,
   targetLang,
-  model,
+  modelName,
   disabled = false,
 }: FilenameSettingsSectionProps) {
   const originalName = pptFile?.name.replace(/\.[^/.]+$/, "") || "presentation";
@@ -329,7 +339,7 @@ export function FilenameSettingsSection({
       parts.push(langCode);
     }
     if (settings.includeOriginalName) parts.push(originalName);
-    if (settings.includeModel) parts.push(model);
+    if (settings.includeModel) parts.push(modelName);
     if (settings.includeDate) parts.push(today);
 
     if (parts.length === 0) {

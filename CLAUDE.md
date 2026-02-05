@@ -73,11 +73,13 @@ cd frontend && npm run lint
   - `GET /api/v1/languages`: Supported languages list
   - `POST /api/v1/jobs`: Create translation job
   - `GET /api/v1/jobs/{job_id}`: Get job status
-  - `GET /api/v1/jobs/{job_id}/stream`: SSE progress stream
-  - `GET /api/v1/jobs/{job_id}/download`: Download result
+  - `GET /api/v1/jobs/{job_id}/events`: SSE progress stream
+  - `GET /api/v1/jobs/{job_id}/result`: Download result
   - `DELETE /api/v1/jobs/{job_id}`: Cancel job
   - `POST /api/v1/translate`: Synchronous translation (legacy)
   - `POST /api/v1/extract`: Text extraction endpoint
+  - `POST /api/v1/summarize`: Generate context summary for translation
+  - `POST /api/v1/generate-instructions`: Generate translation style instructions
   - Supports AWS Lambda deployment via Mangum
 
 ### Core Components (`src/core/`)
@@ -99,6 +101,7 @@ cd frontend && npm run lint
 - `llm_factory.py`: Factory for creating LLM instances (OpenAI/Anthropic) with provider-specific configuration, includes built-in rate limiting via `InMemoryRateLimiter`
 - `translation_chain.py`: LangChain pipeline using structured output (`TranslationOutput` Pydantic model) for type-safe parsing, LangChain batch API for concurrent execution with tenacity retry logic
 - `context_manager.py`: Builds global presentation context for consistent translations
+- `summarization_chain.py`: AI-powered context and instructions generation (uses lightweight models: GPT-5 Mini / Haiku 4.5)
 
 ### Utilities (`src/utils/`)
 - `config.py`: Settings dataclass loaded from environment
@@ -139,9 +142,12 @@ Next.js 16 with React 19, TypeScript, Tailwind CSS 4, and Zustand state manageme
 - `utils.ts`: Utility functions (cn for classnames)
 
 #### Hooks (`src/hooks/`)
-- `useTranslation.ts`: Translation workflow logic
+- `useTranslation.ts`: Translation workflow logic (includes auto context/instructions generation with markdown caching)
 - `useExtraction.ts`: Extraction workflow logic
 - `useConfig.ts`: Configuration data fetching
+
+#### Types (`src/types/`)
+- `api.ts`: TypeScript type definitions for API responses, settings, and job states
 
 #### Styling (`src/app/globals.css`)
 Centralized color management with CSS variables:
@@ -191,25 +197,51 @@ curl http://localhost:8000/api/v1/models
 
 # Create translation job
 curl -X POST http://localhost:8000/api/v1/jobs \
-  -F "file=@presentation.pptx" \
-  -F "target_language=한국어" \
+  -F "ppt_file=@presentation.pptx" \
+  -F "target_lang=한국어" \
   -F "provider=openai" \
-  -F "model=gpt-4o"
+  -F "model=gpt-5.2"
 
 # Stream job progress (SSE)
-curl -N http://localhost:8000/api/v1/jobs/{job_id}/stream
+curl -N http://localhost:8000/api/v1/jobs/{job_id}/events
 
 # Download result
-curl http://localhost:8000/api/v1/jobs/{job_id}/download -o translated.pptx
+curl http://localhost:8000/api/v1/jobs/{job_id}/result -o translated.pptx
 
 # Legacy synchronous translation
-curl -X POST http://localhost:8000/api/v1/translate \
+curl -X POST http://localhost:8000/translate \
   -F "ppt_file=@presentation.pptx" \
   -F "target_lang=한국어" \
   -F "provider=anthropic" \
   -F "model=claude-sonnet-4-5-20250929" \
   -o translated.pptx
+
+# Generate context summary
+curl -X POST http://localhost:8000/api/v1/summarize \
+  -H "Content-Type: application/json" \
+  -d '{"markdown": "...", "provider": "openai", "model": "gpt-5-mini"}'
+
+# Generate translation instructions
+curl -X POST http://localhost:8000/api/v1/generate-instructions \
+  -H "Content-Type: application/json" \
+  -d '{"target_lang": "한국어", "markdown": "...", "provider": "openai", "model": "gpt-5-mini"}'
 ```
+
+## Supported Models
+
+### Translation Models
+| Provider | Model ID | Display Name |
+|----------|----------|--------------|
+| OpenAI | `gpt-5.2` | GPT-5.2 |
+| OpenAI | `gpt-5-mini` | GPT-5 Mini |
+| Anthropic | `claude-opus-4-5-20251101` | Claude Opus 4.5 |
+| Anthropic | `claude-sonnet-4-5-20250929` | Claude Sonnet 4.5 |
+| Anthropic | `claude-haiku-4-5-20251001` | Claude Haiku 4.5 |
+
+### Context/Instructions Generation
+Lightweight models are used for auto-generating context and instructions:
+- **OpenAI**: GPT-5 Mini
+- **Anthropic**: Claude Haiku 4.5
 
 ## Libraries
 

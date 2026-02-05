@@ -14,7 +14,7 @@ import { Play, XCircle, Download, RefreshCw, AlertCircle } from "lucide-react";
 export function TranslationForm() {
   const [startTime, setStartTime] = useState<number | null>(null);
   const [filenameError, setFilenameError] = useState<string | null>(null);
-  const { config } = useConfig();
+  const { config, getModelsForProvider } = useConfig();
   const {
     pptFile,
     glossaryFile,
@@ -45,6 +45,10 @@ export function TranslationForm() {
     downloadResult,
     reset,
   } = useTranslation();
+
+  // 현재 선택한 모델의 표시 이름 가져오기
+  const providerModels = getModelsForProvider(settings.provider);
+  const currentModelName = providerModels.find((m) => m.id === settings.model)?.name || settings.model;
 
   // 검증 체크
   const isCustomFilenameEmpty =
@@ -210,7 +214,7 @@ export function TranslationForm() {
               }}
               pptFile={pptFile}
               targetLang={settings.targetLang}
-              model={settings.model}
+              modelName={currentModelName}
               disabled={isTranslating}
             />
           </CardContent>

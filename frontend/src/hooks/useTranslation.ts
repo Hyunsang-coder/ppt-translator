@@ -96,7 +96,7 @@ export function useTranslation() {
       const summaryResult = await apiClient.summarizeText(
         markdown,
         settings.provider,
-        "gpt-4o-mini"  // Use fast model for summarization
+        settings.provider === "openai" ? "gpt-5-mini" : "claude-haiku-4-5-20251001"
       );
 
       setGeneratedContext(summaryResult.summary);
@@ -110,7 +110,14 @@ export function useTranslation() {
   }, [pptFile, settings.provider, extractMarkdown, addLog, setGeneratedContext, setIsGeneratingContext]);
 
   const generateInstructions = useCallback(async () => {
-    if (!settings.targetLang || !pptFile) return;
+    if (!pptFile) {
+      addLog("PPT 파일을 먼저 업로드해주세요.", "warning");
+      return;
+    }
+    if (!settings.targetLang) {
+      addLog("타겟 언어를 먼저 선택해주세요.", "warning");
+      return;
+    }
 
     try {
       setIsGeneratingInstructions(true);
@@ -128,7 +135,7 @@ export function useTranslation() {
         settings.targetLang,
         markdown,
         settings.provider,
-        "gpt-4o-mini"
+        settings.provider === "openai" ? "gpt-5-mini" : "claude-haiku-4-5-20251001"
       );
 
       setGeneratedInstructions(response.instructions);

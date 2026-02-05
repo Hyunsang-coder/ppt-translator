@@ -154,7 +154,7 @@ class SummarizeRequest(BaseModel):
 
     markdown: str
     provider: str = "openai"
-    model: str = "gpt-4o-mini"
+    model: str = "gpt-5-mini"
 
 
 class SummarizeResponse(BaseModel):
@@ -176,7 +176,6 @@ class FilenameSettings(BaseModel):
 
 def get_language_code(language: str) -> str:
     """Convert language name to English abbreviation for filenames."""
-    # Import here to avoid circular dependency (LANGUAGE_CODE_MAP defined later)
     code_map = {
         "한국어": "KR",
         "영어": "EN",
@@ -187,6 +186,15 @@ def get_language_code(language: str) -> str:
         "독일어": "DE",
     }
     return code_map.get(language, language)
+
+
+def get_model_display_name(model_id: str) -> str:
+    """Convert model ID to display name for filenames."""
+    for models in SUPPORTED_MODELS.values():
+        for model in models:
+            if model.id == model_id:
+                return model.name
+    return model_id
 
 
 def generate_output_filename(
@@ -208,7 +216,9 @@ def generate_output_filename(
     safe_original = sanitize_filename(original_name, fallback="presentation")
     # Use English abbreviation for language code
     lang_code = get_language_code(target_language)
-    safe_model = sanitize_filename(model, fallback="model")
+    # Use display name instead of model ID
+    model_display_name = get_model_display_name(model)
+    safe_model = sanitize_filename(model_display_name, fallback="model")
 
     if filename_settings.includeLanguage:
         parts.append(lang_code)
@@ -232,17 +242,12 @@ def generate_output_filename(
 SUPPORTED_MODELS: Dict[str, List[ModelInfo]] = {
     "openai": [
         ModelInfo(id="gpt-5.2", name="GPT-5.2", provider="openai"),
-        ModelInfo(id="gpt-4.1", name="GPT-4.1", provider="openai"),
-        ModelInfo(id="gpt-4.1-mini", name="GPT-4.1 Mini", provider="openai"),
-        ModelInfo(id="gpt-4.1-nano", name="GPT-4.1 Nano", provider="openai"),
-        ModelInfo(id="gpt-4o", name="GPT-4o", provider="openai"),
-        ModelInfo(id="gpt-4o-mini", name="GPT-4o Mini", provider="openai"),
+        ModelInfo(id="gpt-5-mini", name="GPT-5 Mini", provider="openai"),
     ],
     "anthropic": [
+        ModelInfo(id="claude-opus-4-5-20251101", name="Claude Opus 4.5", provider="anthropic"),
         ModelInfo(id="claude-sonnet-4-5-20250929", name="Claude Sonnet 4.5", provider="anthropic"),
-        ModelInfo(id="claude-sonnet-4-20250514", name="Claude Sonnet 4", provider="anthropic"),
-        ModelInfo(id="claude-3-5-sonnet-20241022", name="Claude 3.5 Sonnet", provider="anthropic"),
-        ModelInfo(id="claude-3-5-haiku-20241022", name="Claude 3.5 Haiku", provider="anthropic"),
+        ModelInfo(id="claude-haiku-4-5-20251001", name="Claude Haiku 4.5", provider="anthropic"),
     ],
 }
 
@@ -780,7 +785,7 @@ class GenerateInstructionsRequest(BaseModel):
     target_lang: str
     markdown: str
     provider: str = "openai"
-    model: str = "gpt-4o-mini"
+    model: str = "gpt-5-mini"
 
 
 class GenerateInstructionsResponse(BaseModel):
@@ -819,18 +824,20 @@ async def generate_instructions(request: GenerateInstructionsRequest) -> Generat
         raise HTTPException(status_code=400, detail="Target language must be specified")
 
     try:
-        # Create LLM
+        # Create LLM with max_tokens limit
         if request.provider == "openai":
             llm = ChatOpenAI(
                 model=request.model,
                 api_key=settings.openai_api_key,
                 temperature=0.7,
+                max_tokens=512,  # Limit for concise output (~300 chars)
             )
         else:
             llm = ChatAnthropic(
                 model=request.model,
                 api_key=settings.anthropic_api_key,
                 temperature=0.7,
+                max_tokens=512,  # Limit for concise output (~300 chars)
             )
 
         # Truncate markdown if too long (keep first ~2000 chars for context)
@@ -838,22 +845,23 @@ async def generate_instructions(request: GenerateInstructionsRequest) -> Generat
 
         # Create prompt
         prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a translation style expert. Analyze the document content and generate translation guidelines tailored to this specific document and target language.
+            ("system", """번역 스타일 전문가로서 문서에 맞는 번역 지침을 **300자 이내**로 생성하세요.
 
-Focus on:
-1. Document type/domain (technical, marketing, academic, etc.) and appropriate terminology handling
-2. Formality level appropriate for the content and target audience
-3. Cultural considerations specific to the target language
-4. Tone recommendations based on the document's purpose
-5. Any language-specific best practices
+**출력 형식 (한국어, 3-4개 bullet):**
+- 톤/문체 (격식체/비격식체 등)
+- 용어 처리 방침 (원문 유지할 용어, 번역할 용어)
+- 문장 스타일 (간결하게, 자연스럽게 등)
 
-Keep the response concise (3-5 bullet points). Write in Korean."""),
+**예시:**
+- 격식체, 전문적 톤 유지
+- 게임 용어(Binary Spot, Heist Royale) 원문 유지
+- 간결한 문장, 명확한 표현 사용"""),
             ("user", """타겟 언어: {target_lang}
 
-문서 내용 미리보기:
+문서 내용:
 {markdown}
 
-이 문서를 위 타겟 언어로 번역할 때 적합한 스타일 가이드라인을 생성해주세요."""),
+번역 지침:"""),
         ])
 
         # Generate instructions
@@ -861,13 +869,21 @@ Keep the response concise (3-5 bullet points). Write in Korean."""),
         result = await chain.ainvoke({"target_lang": request.target_lang, "markdown": markdown_preview})
 
         instructions = result.content if hasattr(result, "content") else str(result)
+        instructions = instructions.strip()
 
         LOGGER.info(
-            "Generated instructions: target_lang=%s, provider=%s, model=%s",
+            "Generated instructions: target_lang=%s, provider=%s, model=%s, result_length=%d, result=%s",
             request.target_lang,
             request.provider,
             request.model,
+            len(instructions),
+            instructions[:200] if instructions else "(empty)",
         )
+
+        # Fallback if empty
+        if not instructions:
+            LOGGER.warning("Empty instructions generated, using default")
+            instructions = f"- {request.target_lang}에 적합한 자연스러운 표현 사용\n- 전문 용어는 문맥에 맞게 번역\n- 명확하고 간결한 문장 유지"
 
         return GenerateInstructionsResponse(instructions=instructions)
 
