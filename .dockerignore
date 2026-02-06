@@ -1,0 +1,53 @@
+# Version control
+.git
+.gitignore
+
+# Virtual environments
+.venv/
+venv/
+
+# Frontend (deployed separately)
+frontend/
+
+# Streamlit app (not needed for API)
+app.py
+assets/
+
+# Tests
+tests/
+pytest.ini
+.pytest_cache/
+
+# IDE and editor
+.cursor/
+.claude/
+.devcontainer/
+.vscode/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment files (injected via docker-compose)
+.env
+.env.*
+!.env.example
+
+# Documentation
+*.md
+
+# Build artifacts
+*.egg-info/
+dist/
+build/
+
+# Misc
+main.py
+pyproject.toml
+.python-version
+.vercel/

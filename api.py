@@ -6,6 +6,7 @@ import asyncio
 import io
 import json
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
@@ -42,13 +43,16 @@ app = FastAPI(
     version="2.4.0",
 )
 
-# CORS middleware for Next.js frontend
+# CORS middleware - read allowed origins from environment
+_default_origins = "http://localhost:3000,http://127.0.0.1:3000"
+_cors_origins = [
+    origin.strip()
+    for origin in os.getenv("CORS_ALLOWED_ORIGINS", _default_origins).split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",  # Next.js dev server
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
