@@ -54,26 +54,41 @@ export const apiClient = {
     if (provider) {
       url.searchParams.set("provider", provider);
     }
-    const response = await fetch(url.toString());
-    const data = await handleResponse<{ models: ModelInfo[] }>(response);
-    return data.models;
+    try {
+      const response = await fetch(url.toString());
+      const data = await handleResponse<{ models: ModelInfo[] }>(response);
+      return data.models;
+    } catch {
+      // Return empty array when backend is unavailable
+      return [];
+    }
   },
 
   /**
    * Get supported languages
    */
   async getLanguages(): Promise<LanguageInfo[]> {
-    const response = await fetch(`${API_BASE}/api/v1/languages`);
-    const data = await handleResponse<{ languages: LanguageInfo[] }>(response);
-    return data.languages;
+    try {
+      const response = await fetch(`${API_BASE}/api/v1/languages`);
+      const data = await handleResponse<{ languages: LanguageInfo[] }>(response);
+      return data.languages;
+    } catch {
+      // Return empty array when backend is unavailable
+      return [];
+    }
   },
 
   /**
    * Get application config
    */
-  async getConfig(): Promise<ConfigResponse> {
-    const response = await fetch(`${API_BASE}/api/v1/config`);
-    return handleResponse<ConfigResponse>(response);
+  async getConfig(): Promise<ConfigResponse | null> {
+    try {
+      const response = await fetch(`${API_BASE}/api/v1/config`);
+      return handleResponse<ConfigResponse>(response);
+    } catch {
+      // Return null when backend is unavailable
+      return null;
+    }
   },
 
   /**
