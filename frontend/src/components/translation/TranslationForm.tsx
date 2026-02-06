@@ -9,7 +9,7 @@ import { ProgressPanel } from "./ProgressPanel";
 import { LogViewer } from "./LogViewer";
 import { useTranslation } from "@/hooks/useTranslation";
 import { useConfig } from "@/hooks/useConfig";
-import { Play, XCircle, Download, RefreshCw, AlertCircle, WifiOff } from "lucide-react";
+import { Play, XCircle, Download, RefreshCw, AlertCircle } from "lucide-react";
 
 export function TranslationForm() {
   const [startTime, setStartTime] = useState<number | null>(null);
@@ -85,21 +85,6 @@ export function TranslationForm() {
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      {/* Backend Connection Warning */}
-      {!isBackendConnected && (
-        <div className="col-span-full">
-          <div className="p-3 rounded-lg border border-warning/30 bg-warning/10 flex items-center gap-3">
-            <WifiOff className="w-5 h-5 text-warning flex-shrink-0" />
-            <div className="text-sm">
-              <span className="font-medium text-warning">백엔드 미연결</span>
-              <span className="text-muted-foreground ml-2">
-                서버가 연결되면 번역 기능을 사용할 수 있습니다.
-              </span>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Left Column: File Upload & Settings */}
       <div className="space-y-4">
         <FileUploader
