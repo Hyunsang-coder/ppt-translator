@@ -66,7 +66,7 @@ def render_settings(container: Optional[DeltaGenerator] = None) -> Dict[str, Any
 
     model_options = ANTHROPIC_MODELS if provider == "anthropic" else OPENAI_MODELS
     model_help = (
-        "Claude Sonnet 4.5: 추천 (균형) | Claude Opus 4.5: 최고 품질 | Claude Haiku 4.5: 빠르고 저렴"
+        "Claude Sonnet 4.5: 추천 (균형) | Claude Opus 4.6: 최고 품질 | Claude Haiku 4.5: 빠르고 저렴"
         if provider == "anthropic"
         else "gpt-5.2: 최고 품질 (느림, 비쌈) | gpt-5-mini: 빠르고 저렴"
     )

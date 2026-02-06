@@ -38,8 +38,8 @@ cd frontend && npm run dev
 # Frontend - Build for production
 cd frontend && npm run build
 
-# Frontend - Type check
-cd frontend && npm run lint
+# Frontend - Type check & lint
+cd frontend && npx tsc --noEmit
 ```
 
 ## Environment Setup
@@ -51,8 +51,10 @@ cd frontend && npm run lint
 2. Optional environment variables for tuning:
    - `TRANSLATION_MAX_CONCURRENCY` (default: 8)
    - `TRANSLATION_BATCH_SIZE` (default: 80)
-   - `TRANSLATION_MIN_BATCH_SIZE` / `TRANSLATION_MAX_BATCH_SIZE`
-   - `TRANSLATION_TPM_LIMIT` (default: 30000)
+   - `TRANSLATION_MIN_BATCH_SIZE` (default: 60) / `TRANSLATION_MAX_BATCH_SIZE` (default: 100)
+   - `TRANSLATION_TARGET_BATCH_COUNT` (default: 5) - Target number of batches for batch size calculation
+   - `TRANSLATION_WAVE_MULTIPLIER` (default: 1.2) - Wave multiplier for concurrency scheduling
+   - `TRANSLATION_TPM_LIMIT` (default: 30000) - Tokens per minute limit
    - `TRANSLATION_RATE_LIMIT_RPS` (default: 1.0) - Requests per second
    - `TRANSLATION_RATE_LIMIT_CHECK_INTERVAL` (default: 0.1) - Rate check interval in seconds
    - `TRANSLATION_RATE_LIMIT_MAX_BUCKET` (default: 10) - Token bucket size for rate limiting
@@ -88,14 +90,18 @@ cd frontend && npm run lint
 - `text_extractor.py`: Converts PPTX to structured markdown with `ExtractionOptions`
 
 ### Service Layer (`src/services/`)
-- `models.py`: Data models (`TranslationRequest`, `TranslationResult`, `TranslationProgress`, `TranslationStatus`)
+- `models.py`: Data models (`TranslationRequest`, `TranslationResult`, `TranslationProgress`, `TranslationStatus`, `ProgressCallback`)
 - `translation_service.py`: `TranslationService` class encapsulating translation workflow logic
   - Shared by both Streamlit (`app.py`) and FastAPI (`api.py`)
+  - `ServiceProgressTracker`: Adapter for progress callbacks in service layer
   - Progress callback support for real-time updates
 - `job_manager.py`: Async job management for FastAPI
-  - `JobManager`: In-memory job store with event streaming
+  - `JobManager`: In-memory job store with event streaming (max 100 jobs, 1h cleanup)
   - `Job`: Job state tracking (pending/running/completed/failed/cancelled)
+  - `JobType`: TRANSLATION / EXTRACTION
+  - `JobState`: PENDING / RUNNING / COMPLETED / FAILED / CANCELLED
   - `JobEvent`: SSE event types for progress updates
+  - `get_job_manager()`: Global singleton accessor
 
 ### Translation Chain (`src/chains/`)
 - `llm_factory.py`: Factory for creating LLM instances (OpenAI/Anthropic) with provider-specific configuration, includes built-in rate limiting via `InMemoryRateLimiter`
@@ -118,7 +124,7 @@ cd frontend && npm run lint
 - `extraction_settings.py`: Text extraction options UI
 
 ### Frontend (`frontend/`)
-Next.js 16 with React 19, TypeScript, Tailwind CSS 4, and Zustand state management.
+Next.js 16 with React 19, TypeScript 5, Tailwind CSS 4, and Zustand 5 state management. Includes graceful fallback when backend is unavailable.
 
 #### Pages (`src/app/`)
 - `page.tsx`: Home page (redirects to translate)
@@ -128,9 +134,9 @@ Next.js 16 with React 19, TypeScript, Tailwind CSS 4, and Zustand state manageme
 
 #### Components (`src/components/`)
 - **shared/**: `Header.tsx` (navigation + theme toggle), `FileUploader.tsx` (drag & drop)
-- **translation/**: `TranslationForm.tsx`, `SettingsPanel.tsx`, `ProgressPanel.tsx`, `LogViewer.tsx`
+- **translation/**: `TranslationForm.tsx`, `SettingsPanel.tsx` (includes `FilenameSettingsSection`), `ProgressPanel.tsx`, `LogViewer.tsx`
 - **extraction/**: `ExtractionForm.tsx`, `MarkdownPreview.tsx`
-- **ui/**: Shadcn/Radix UI components (button, card, input, select, etc.)
+- **ui/**: Shadcn/Radix UI components (button, card, checkbox, input, label, progress, radio-group, select, separator, sonner, switch, tabs, textarea)
 
 #### State Management (`src/stores/`)
 - `translation-store.ts`: Zustand store for translation state (file, settings, progress, logs)
@@ -142,9 +148,9 @@ Next.js 16 with React 19, TypeScript, Tailwind CSS 4, and Zustand state manageme
 - `utils.ts`: Utility functions (cn for classnames)
 
 #### Hooks (`src/hooks/`)
-- `useTranslation.ts`: Translation workflow logic (includes auto context/instructions generation with markdown caching)
+- `useTranslation.ts`: Translation workflow logic (includes auto context/instructions generation with markdown caching via file key)
 - `useExtraction.ts`: Extraction workflow logic
-- `useConfig.ts`: Configuration data fetching
+- `useConfig.ts`: Configuration data fetching with graceful fallback (fallback models/languages when backend unavailable, `isBackendConnected` state)
 
 #### Types (`src/types/`)
 - `api.ts`: TypeScript type definitions for API responses, settings, and job states
@@ -172,12 +178,13 @@ Centralized color management with CSS variables:
 7. `PPTWriter.apply_translations()` writes back preserving run formatting
 
 ### Async Job Flow (FastAPI + Next.js)
-1. Frontend calls `POST /api/v1/jobs` with file and settings
+1. Frontend calls `POST /api/v1/jobs` with file, settings, and filename_settings (JSON)
 2. Backend creates job, returns `job_id`
-3. Frontend connects to `GET /api/v1/jobs/{job_id}/stream` (SSE)
-4. Backend streams progress events (`status`, `progress`, `log`, `complete`, `error`)
-5. Frontend polls or uses SSE to track completion
-6. Frontend calls `GET /api/v1/jobs/{job_id}/download` to get result
+3. Frontend connects to `GET /api/v1/jobs/{job_id}/events` (SSE)
+4. Backend streams events: `started`, `progress`, `complete`, `error`, `cancelled`, `keepalive`
+5. Frontend tracks progress via SSE events and updates UI
+6. Frontend calls `GET /api/v1/jobs/{job_id}/result` to download translated file
+7. Output filename generated server-side based on `FilenameSettings` (auto/custom mode)
 
 ### Formatting Preservation
 `PPTWriter` uses `split_text_into_segments()` with character-length weights to distribute translated text across original runs, preserving bold/italic/font styling.
@@ -250,20 +257,27 @@ Lightweight models are used for auto-generating context and instructions:
 - **langchain-anthropic**: Anthropic Claude model integration
 - **python-pptx**: PPTX parsing and writing
 - **Streamlit**: Web UI with session state management
-- **FastAPI**: REST API server with automatic OpenAPI docs
+- **FastAPI**: REST API server with automatic OpenAPI docs (v2.4.0)
 - **Mangum**: AWS Lambda adapter for FastAPI
 - **tenacity**: Retry logic with exponential backoff
 - **langdetect**: Automatic language detection
+- **sse-starlette**: Server-Sent Events for streaming
+- **Pillow**: Image processing
+- **pandas + openpyxl**: Excel glossary file handling
+- **PyMuPDF + pytesseract + opencv-python-headless**: PDF/image extraction support
 
 ### Frontend
-- **Next.js 16**: React framework with App Router
-- **React 19**: UI library
-- **TypeScript**: Type safety
-- **Tailwind CSS 4**: Utility-first CSS
-- **Zustand**: Lightweight state management
-- **Radix UI**: Accessible component primitives
+- **Next.js 16**: React framework with App Router (`next@16.1.6`)
+- **React 19**: UI library (`react@19.2.3`)
+- **TypeScript 5**: Type safety
+- **Tailwind CSS 4**: Utility-first CSS with `@tailwindcss/postcss`
+- **Zustand 5**: Lightweight state management
+- **Radix UI**: Accessible component primitives (via `radix-ui` package)
 - **Lucide React**: Icon library
 - **react-dropzone**: File upload handling
+- **next-themes**: Dark/light mode toggle
+- **sonner**: Toast notifications
+- **class-variance-authority + tailwind-merge + clsx**: Component styling utilities
 
 ## Claude Code Customization Best Practices
 
