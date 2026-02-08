@@ -25,6 +25,7 @@ class TranslationStatus(Enum):
     DETECTING_LANGUAGE = "detecting_language"
     PREPARING_BATCHES = "preparing_batches"
     TRANSLATING = "translating"
+    FIXING_COLORS = "fixing_colors"
     APPLYING_TRANSLATIONS = "applying_translations"
     COMPLETED = "completed"
     FAILED = "failed"

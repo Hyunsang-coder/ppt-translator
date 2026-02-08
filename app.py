@@ -637,8 +637,27 @@ def _run_translation_workflow(
                 for text in translated_texts
             ]
 
+        # Fix color distributions for multi-color paragraphs
+        from src.services.translation_service import TranslationService
+
+        LOGGER.info("다색 문단 서식 분석 중...")
+        _refresh_ui_logs(log_placeholder, log_buffer)
+        color_distributions = TranslationService._fix_color_distributions(
+            paragraphs, translated_texts,
+            settings_state.get("provider", "openai"),
+            model_name=settings_state.get("model", "gpt-5.2"),
+        )
+        if color_distributions:
+            LOGGER.info("다색 문단 %d개 서식 보정 완료.", len(color_distributions))
+        else:
+            LOGGER.info("다색 문단 없음 — 서식 보정 생략.")
+        _refresh_ui_logs(log_placeholder, log_buffer)
+
         writer = PPTWriter()
-        output_buffer = writer.apply_translations(paragraphs, translated_texts, presentation)
+        output_buffer = writer.apply_translations(
+            paragraphs, translated_texts, presentation,
+            color_distributions=color_distributions,
+        )
         _refresh_ui_logs(log_placeholder, log_buffer)
 
         total_elapsed = progress_tracker.finish()

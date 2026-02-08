@@ -12,11 +12,6 @@ from src.chains.llm_factory import Provider, create_llm
 
 LOGGER = logging.getLogger(__name__)
 
-LIGHTWEIGHT_MODELS = {
-    "openai": "gpt-5-mini",
-    "anthropic": "claude-haiku-4-5",
-}
-
 
 class ColoredSegment(BaseModel):
     """A segment of translated text mapped to a format group."""
@@ -74,13 +69,17 @@ def distribute_colors(
     original_groups: list[list[str]],
     translated_texts: list[str],
     provider: Provider = "openai",
+    model_name: str | None = None,
 ) -> list[list[ColoredSegment]] | None:
-    """Call lightweight LLM to distribute translated text across format groups.
+    """Call LLM to distribute translated text across format groups.
+
+    Uses the same model as the main translation for best accuracy.
 
     Args:
         original_groups: For each paragraph, list of group texts.
         translated_texts: Translated text for each paragraph.
         provider: LLM provider to use.
+        model_name: Model to use. If None, defaults to provider's default.
 
     Returns:
         List of distributions (one per paragraph, each a list of ColoredSegment),
@@ -89,18 +88,17 @@ def distribute_colors(
     if not original_groups:
         return None
 
-    model = LIGHTWEIGHT_MODELS.get(provider, "gpt-5-mini")
     items_str = _format_items(original_groups, translated_texts)
 
     LOGGER.info(
         "Distributing colors for %d paragraphs with provider=%s, model=%s",
         len(original_groups),
         provider,
-        model,
+        model_name,
     )
 
     try:
-        llm = create_llm(provider=provider, model_name=model, max_tokens=4096)
+        llm = create_llm(provider=provider, model_name=model_name, max_tokens=4096)
         structured_llm = llm.with_structured_output(ColorDistributionOutput)
 
         prompt = PromptTemplate(

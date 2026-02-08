@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2, CheckCircle2, XCircle, Clock, FileStack, MessageSquare } from "lucide-react";
 import type { JobProgress } from "@/types/api";
@@ -17,6 +18,7 @@ const STATUS_LABELS: Record<string, string> = {
   detecting_language: "언어 감지 중",
   preparing_batches: "배치 준비 중",
   translating: "번역 중",
+  fixing_colors: "서식 보정 중",
   applying_translations: "번역 적용 중",
   completed: "완료",
   failed: "실패",
@@ -96,7 +98,31 @@ function StatCard({ icon, label, value, subValue }: StatCardProps) {
   );
 }
 
+function formatElapsed(seconds: number): string {
+  const minutes = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return minutes > 0 ? `${minutes}분 ${secs}초` : `${secs}초`;
+}
+
 export function ProgressPanel({ status, progress, startTime }: ProgressPanelProps) {
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+
+  useEffect(() => {
+    if (!startTime) return;
+
+    // Calculate initial elapsed time
+    setElapsedSeconds(Math.floor((Date.now() - startTime) / 1000));
+
+    // Only tick while translating
+    if (status !== "translating" && status !== "uploading") return;
+
+    const interval = setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - startTime) / 1000));
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [startTime, status]);
+
   const getProgressPercentage = (): number => {
     if (!progress) return 0;
 
@@ -128,14 +154,6 @@ export function ProgressPanel({ status, progress, startTime }: ProgressPanelProp
     }
   };
 
-  const getElapsedTime = (): string => {
-    if (!startTime) return "-";
-    const elapsed = Math.floor((Date.now() - startTime) / 1000);
-    const minutes = Math.floor(elapsed / 60);
-    const seconds = elapsed % 60;
-    return minutes > 0 ? `${minutes}분 ${seconds}초` : `${seconds}초`;
-  };
-
   const percentage = getProgressPercentage();
   const statusLabel = progress?.status ? STATUS_LABELS[progress.status] || progress.status : "";
 
@@ -147,7 +165,7 @@ export function ProgressPanel({ status, progress, startTime }: ProgressPanelProp
           <span>번역 진행 상황</span>
           {status === "translating" && (
             <span className="ml-auto text-xs font-normal text-muted-foreground animate-pulse">
-              진행 중...
+              진행 중... ({formatElapsed(elapsedSeconds)})
             </span>
           )}
         </CardTitle>
@@ -191,13 +209,6 @@ export function ProgressPanel({ status, progress, startTime }: ProgressPanelProp
                 icon={<MessageSquare className="w-4 h-4" />}
                 label="문장"
                 value={`${progress.current_sentence} / ${progress.total_sentences}`}
-              />
-            )}
-            {startTime && status === "translating" && (
-              <StatCard
-                icon={<Clock className="w-4 h-4" />}
-                label="경과 시간"
-                value={getElapsedTime()}
               />
             )}
           </div>

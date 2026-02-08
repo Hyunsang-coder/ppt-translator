@@ -371,8 +371,15 @@ class TranslationService:
         paragraphs,
         translated_texts: list[str],
         provider: str,
+        model_name: str | None = None,
     ) -> dict[int, list[ColoredSegment]] | None:
         """Detect multi-color paragraphs and distribute translated text by meaning.
+
+        Args:
+            paragraphs: List of ParagraphInfo objects.
+            translated_texts: Translated text for each paragraph.
+            provider: LLM provider ("openai" or "anthropic").
+            model_name: Model to use. Uses the same model as main translation.
 
         Returns:
             Mapping from paragraph index to list of ColoredSegment, or None if
@@ -404,7 +411,10 @@ class TranslationService:
         original_groups = [c[1] for c in candidates]
         translations_for_dist = [c[2] for c in candidates]
 
-        distributions = distribute_colors(original_groups, translations_for_dist, provider=provider)
+        distributions = distribute_colors(
+            original_groups, translations_for_dist,
+            provider=provider, model_name=model_name,
+        )
 
         if distributions is None:
             LOGGER.warning("Color distribution chain returned None; using fallback for all.")
@@ -654,13 +664,28 @@ class TranslationService:
         # Phase 9.5: Fix color distributions for multi-color paragraphs
         self._notify_progress(
             TranslationProgress(
-                status=TranslationStatus.APPLYING_TRANSLATIONS,
-                message="다색 문단 서식 보정 중...",
+                status=TranslationStatus.FIXING_COLORS,
+                message="다색 문단 서식 분석 중...",
             )
         )
         color_distributions = self._fix_color_distributions(
             paragraphs, translated_texts, request.provider,
+            model_name=request.model,
         )
+        if color_distributions:
+            self._notify_progress(
+                TranslationProgress(
+                    status=TranslationStatus.FIXING_COLORS,
+                    message=f"다색 문단 {len(color_distributions)}개 서식 보정 완료",
+                )
+            )
+        else:
+            self._notify_progress(
+                TranslationProgress(
+                    status=TranslationStatus.FIXING_COLORS,
+                    message="다색 문단 없음 — 서식 보정 생략",
+                )
+            )
 
         # Phase 10: Write output
         self._notify_progress(
