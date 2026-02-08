@@ -725,23 +725,29 @@ class RuleBasedDistributionTestCase(unittest.TestCase):
         from src.services.translation_service import TranslationService
         return TranslationService._try_rule_based_distribution(group_texts, translation)
 
-    def test_number_anchor_at_end(self) -> None:
-        """Number/symbol token at end should be matched deterministically."""
+    def test_anchor_at_end(self) -> None:
+        """Anchor token at end of translation should be matched."""
         result = self._try(["Total: ", "$1,500"], "합계: $1,500")
         self.assertIsNotNone(result)
-        joined = "".join(s.text for s in result)
-        self.assertEqual(joined, "합계: $1,500")
-        # $1,500 should map to group 1
-        for seg in result:
-            if "$1,500" in seg.text:
-                self.assertEqual(seg.group_index, 1)
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0].text, "합계: ")
+        self.assertEqual(result[0].group_index, 0)
+        self.assertEqual(result[1].text, "$1,500")
+        self.assertEqual(result[1].group_index, 1)
 
-    def test_percentage_anchor(self) -> None:
-        """Percentage value should be matched."""
-        result = self._try(["Revenue increased by ", "20%"], "매출이 20% 증가했습니다")
+    def test_anchor_at_start(self) -> None:
+        """Anchor token at start of translation should be matched."""
+        result = self._try(["$500", " discount"], "$500 할인")
         self.assertIsNotNone(result)
-        joined = "".join(s.text for s in result)
-        self.assertEqual(joined, "매출이 20% 증가했습니다")
+        self.assertEqual(result[0].text, "$500")
+        self.assertEqual(result[0].group_index, 0)
+        self.assertEqual(result[1].text, " 할인")
+        self.assertEqual(result[1].group_index, 1)
+
+    def test_anchor_in_middle_returns_none(self) -> None:
+        """Anchor in the middle of translation is ambiguous — should NOT match."""
+        result = self._try(["Revenue increased by ", "20%"], "매출이 20% 증가했습니다")
+        self.assertIsNone(result)
 
     def test_no_anchor_returns_none(self) -> None:
         """Pure text groups without numbers/symbols should not be rule-matched."""

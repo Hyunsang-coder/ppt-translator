@@ -8,7 +8,7 @@ import math
 import time
 from typing import Dict, List, Optional
 
-from src.chains.color_distribution_chain import ColoredSegment, distribute_colors, _invoke_batch
+from src.chains.color_distribution_chain import ColoredSegment, distribute_colors
 from src.chains.context_manager import ContextManager
 from src.chains.translation_chain import create_translation_chain, translate_with_progress
 from src.core.ppt_parser import PPTParser
@@ -382,8 +382,9 @@ class TranslationService:
     ) -> list[ColoredSegment] | None:
         """Try to distribute translated text using deterministic string matching.
 
-        Handles simple cases where tokens (numbers, symbols, proper nouns) survive
-        translation unchanged, so we can split without LLM.
+        Only handles the simple case where a numeric/symbol token from one group
+        appears verbatim at the START or END of the translated text, so the split
+        point is unambiguous.
 
         Returns:
             List of ColoredSegment if rule-based split succeeded, else None.
@@ -391,56 +392,34 @@ class TranslationService:
         if len(group_texts) != 2:
             return None
 
-        # Find which group's text appears verbatim in the translation
         for anchor_idx in range(2):
             anchor = group_texts[anchor_idx].strip()
             if not anchor or len(anchor) < 2:
                 continue
-            # Only match tokens unlikely to be translated: numbers, symbols, etc.
             if not any(ch.isdigit() or ch in "$%€£¥#@&+" for ch in anchor):
-                continue
-            pos = translation.find(anchor)
-            if pos == -1:
                 continue
 
             other_idx = 1 - anchor_idx
-            if anchor_idx == 0:
-                # anchor at the start side
-                before = translation[:pos]
-                anchor_and_after = translation[pos:]
-                # Check if the anchor is at a natural boundary
-                if before:
-                    segments = [
-                        ColoredSegment(text=before, group_index=other_idx),
-                        ColoredSegment(text=anchor_and_after, group_index=anchor_idx),
-                    ]
-                else:
-                    after = translation[pos + len(anchor):]
-                    segments = [
-                        ColoredSegment(text=anchor, group_index=anchor_idx),
-                    ]
-                    if after:
-                        segments.append(ColoredSegment(text=after, group_index=other_idx))
-                    else:
-                        segments.append(ColoredSegment(text="", group_index=other_idx))
-            else:
-                # anchor_idx == 1
-                before = translation[:pos]
-                anchor_text = translation[pos:pos + len(anchor)]
-                after = translation[pos + len(anchor):]
-                segments = []
-                if before:
-                    segments.append(ColoredSegment(text=before, group_index=other_idx))
-                segments.append(
-                    ColoredSegment(text=anchor_text + after, group_index=anchor_idx)
-                )
-                if not before:
-                    segments.insert(0, ColoredSegment(text="", group_index=other_idx))
 
-            # Verify concatenation
-            joined = "".join(s.text for s in segments)
-            if joined == translation:
-                return segments
+            # Case 1: anchor at the end of translation
+            if translation.endswith(anchor):
+                before = translation[: len(translation) - len(anchor)]
+                segments = [
+                    ColoredSegment(text=before, group_index=other_idx),
+                    ColoredSegment(text=anchor, group_index=anchor_idx),
+                ]
+                if "".join(s.text for s in segments) == translation:
+                    return segments
+
+            # Case 2: anchor at the start of translation
+            if translation.startswith(anchor):
+                after = translation[len(anchor):]
+                segments = [
+                    ColoredSegment(text=anchor, group_index=anchor_idx),
+                    ColoredSegment(text=after, group_index=other_idx),
+                ]
+                if "".join(s.text for s in segments) == translation:
+                    return segments
 
         return None
 
@@ -520,15 +499,11 @@ class TranslationService:
             provider=provider, model_name=model_name,
         )
 
-        failed_for_retry: list[tuple[int, list[str], str]] = []
-
         if distributions is None:
-            LOGGER.warning("Color distribution chain returned None; all LLM candidates will retry.")
-            failed_for_retry = llm_candidates
+            LOGGER.warning("Color distribution chain returned None; using fallback for all.")
         else:
             for (para_idx, group_texts, translation), dist in zip(llm_candidates, distributions):
                 if dist is None:
-                    failed_for_retry.append((para_idx, group_texts, translation))
                     continue
                 validated = _validate_colored_segments(
                     segments=dist,
@@ -538,41 +513,9 @@ class TranslationService:
                 )
                 if validated is not None:
                     result[para_idx] = validated
-                else:
-                    failed_for_retry.append((para_idx, group_texts, translation))
-
-        # --- Tier 3: Retry failed paragraphs once ---
-        if failed_for_retry:
-            LOGGER.info(
-                "Retrying color distribution for %d failed paragraphs.",
-                len(failed_for_retry),
-            )
-            retry_groups = [c[1] for c in failed_for_retry]
-            retry_texts = [c[2] for c in failed_for_retry]
-
-            retry_distributions = _invoke_batch(
-                retry_groups, retry_texts,
-                provider=provider, model_name=model_name,
-            )
-
-            retry_success = 0
-            if retry_distributions and len(retry_distributions) == len(failed_for_retry):
-                for (para_idx, group_texts, translation), dist in zip(failed_for_retry, retry_distributions):
-                    validated = _validate_colored_segments(
-                        segments=dist,
-                        translation=translation,
-                        num_groups=len(group_texts),
-                        para_idx=para_idx,
-                    )
-                    if validated is not None:
-                        result[para_idx] = validated
-                        retry_success += 1
-            LOGGER.info(
-                "Retry recovered %d/%d paragraphs.", retry_success, len(failed_for_retry),
-            )
 
         LOGGER.info(
-            "Color distribution validated %d/%d paragraphs total.",
+            "Color distribution validated %d/%d paragraphs.",
             len(result), len(candidates),
         )
         return result if result else None
