@@ -219,6 +219,13 @@ class ServiceProgressTracker:
         self._start_time = time.time()
         self.total_elapsed: float = 0.0
 
+    def _calc_percent(self) -> int:
+        """Calculate overall percent (translation phase spans 10-80%)."""
+        if self.total_batches <= 0:
+            return 10
+        ratio = self._completed_batches / self.total_batches
+        return 10 + int(ratio * 70)
+
     def reset(self, total_batches: int, total_sentences: int) -> None:
         """Reset tracker state for a new translation run."""
         self.total_batches = total_batches
@@ -235,6 +242,7 @@ class ServiceProgressTracker:
                     total_batches=total_batches,
                     current_sentence=0,
                     total_sentences=total_sentences,
+                    percent=10,
                     message=f"번역 대기 중... (0/{total_batches} 배치)",
                 )
             )
@@ -265,6 +273,7 @@ class ServiceProgressTracker:
                     total_batches=self.total_batches,
                     current_sentence=self._current_sentence,
                     total_sentences=self.total_sentences,
+                    percent=self._calc_percent(),
                     message=message,
                 )
             )
@@ -466,6 +475,7 @@ class TranslationService:
         self._notify_progress(
             TranslationProgress(
                 status=TranslationStatus.PARSING,
+                percent=2,
                 message="PPT 파일 분석 중...",
             )
         )
@@ -531,6 +541,7 @@ class TranslationService:
         self._notify_progress(
             TranslationProgress(
                 status=TranslationStatus.DETECTING_LANGUAGE,
+                percent=5,
                 message="언어 감지 중...",
             )
         )
@@ -557,6 +568,7 @@ class TranslationService:
         self._notify_progress(
             TranslationProgress(
                 status=TranslationStatus.PREPARING_BATCHES,
+                percent=8,
                 message="번역 배치 준비 중...",
             )
         )
@@ -612,6 +624,7 @@ class TranslationService:
                 total_batches=len(batches),
                 current_sentence=0,
                 total_sentences=len(target_paragraphs),
+                percent=10,
                 message="번역 시작...",
             )
         )
@@ -665,6 +678,7 @@ class TranslationService:
         self._notify_progress(
             TranslationProgress(
                 status=TranslationStatus.FIXING_COLORS,
+                percent=80,
                 message="다색 문단 서식 분석 중...",
             )
         )
@@ -676,6 +690,7 @@ class TranslationService:
             self._notify_progress(
                 TranslationProgress(
                     status=TranslationStatus.FIXING_COLORS,
+                    percent=90,
                     message=f"다색 문단 {len(color_distributions)}개 서식 보정 완료",
                 )
             )
@@ -683,6 +698,7 @@ class TranslationService:
             self._notify_progress(
                 TranslationProgress(
                     status=TranslationStatus.FIXING_COLORS,
+                    percent=90,
                     message="다색 문단 없음 — 서식 보정 생략",
                 )
             )
@@ -691,6 +707,7 @@ class TranslationService:
         self._notify_progress(
             TranslationProgress(
                 status=TranslationStatus.APPLYING_TRANSLATIONS,
+                percent=95,
                 message="번역 결과 적용 중...",
             )
         )
@@ -715,6 +732,7 @@ class TranslationService:
                 total_batches=len(batches),
                 current_sentence=len(target_paragraphs),
                 total_sentences=len(target_paragraphs),
+                percent=100,
                 message="번역 완료",
             )
         )

@@ -26,8 +26,8 @@ const FALLBACK_LANGUAGES: LanguageInfo[] = [
 const FALLBACK_CONFIG: ConfigResponse = {
   max_upload_size_mb: 200,
   providers: ["openai", "anthropic"],
-  default_provider: "openai",
-  default_model: "gpt-5.2",
+  default_provider: "anthropic",
+  default_model: "claude-sonnet-4-5-20250929",
 };
 
 interface ConfigState {

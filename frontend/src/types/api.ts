@@ -31,6 +31,7 @@ export interface JobProgress {
   total_batches: number;
   current_sentence: number;
   total_sentences: number;
+  percent: number;
   message: string;
 }
 

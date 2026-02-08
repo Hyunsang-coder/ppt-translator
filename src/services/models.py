@@ -73,6 +73,7 @@ class TranslationProgress:
     total_batches: int = 0
     current_sentence: int = 0
     total_sentences: int = 0
+    percent: int = 0
     message: str = ""
     details: Dict[str, object] = field(default_factory=dict)
 

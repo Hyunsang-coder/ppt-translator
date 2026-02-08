@@ -17,6 +17,12 @@ import { useConfig } from "@/hooks/useConfig";
 import type { TranslationSettings, FilenameSettings, TextFitMode } from "@/types/api";
 import { Sparkles, Loader2, FileText, Type } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 
@@ -200,58 +206,74 @@ export function SettingsPanel({
       <Separator />
       <div className="space-y-3">
         <Label className="text-sm font-medium">스타일 옵션</Label>
-        <div className="flex items-center gap-6">
-          <div className="flex items-center gap-3">
-            <div className="flex items-center space-x-2">
-              <Checkbox
-                id="text-fit-shrink"
-                checked={settings.textFitMode === "auto_shrink" || settings.textFitMode === "shrink_then_expand"}
-                onCheckedChange={(checked) => {
-                  const shrink = checked === true;
-                  const expand = settings.textFitMode === "expand_box" || settings.textFitMode === "shrink_then_expand";
-                  const mode: TextFitMode = shrink && expand ? "shrink_then_expand" : shrink ? "auto_shrink" : expand ? "expand_box" : "none";
-                  onSettingsChange({ textFitMode: mode });
-                }}
-                disabled={disabled}
-              />
-              <Label htmlFor="text-fit-shrink" className="text-sm font-normal cursor-pointer">
-                폰트 자동 축소
-              </Label>
+        <TooltipProvider delayDuration={300}>
+          <div className="flex items-center gap-6">
+            <div className="flex items-center gap-3">
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="text-fit-shrink"
+                  checked={settings.textFitMode === "auto_shrink" || settings.textFitMode === "shrink_then_expand"}
+                  onCheckedChange={(checked) => {
+                    const shrink = checked === true;
+                    const expand = settings.textFitMode === "expand_box" || settings.textFitMode === "shrink_then_expand";
+                    const mode: TextFitMode = shrink && expand ? "shrink_then_expand" : shrink ? "auto_shrink" : expand ? "expand_box" : "none";
+                    onSettingsChange({ textFitMode: mode });
+                  }}
+                  disabled={disabled}
+                />
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Label htmlFor="text-fit-shrink" className="text-sm font-normal cursor-pointer">
+                      폰트 자동 축소
+                    </Label>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    번역문이 길어지면 글자 크기를 줄여 텍스트 박스 안에 맞춥니다.
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+              {(settings.textFitMode === "auto_shrink" || settings.textFitMode === "shrink_then_expand") && (
+                <Select
+                  value={String(settings.minFontRatio)}
+                  onValueChange={(value) => onSettingsChange({ minFontRatio: Number(value) })}
+                  disabled={disabled}
+                >
+                  <SelectTrigger id="min-font-ratio" className="w-[140px] h-8 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="90">90%</SelectItem>
+                    <SelectItem value="80">80% (기본)</SelectItem>
+                    <SelectItem value="70">70%</SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
             </div>
-            {(settings.textFitMode === "auto_shrink" || settings.textFitMode === "shrink_then_expand") && (
-              <Select
-                value={String(settings.minFontRatio)}
-                onValueChange={(value) => onSettingsChange({ minFontRatio: Number(value) })}
-                disabled={disabled}
-              >
-                <SelectTrigger id="min-font-ratio" className="w-[140px] h-8 text-sm">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="90">90%</SelectItem>
-                  <SelectItem value="80">80% (기본)</SelectItem>
-                  <SelectItem value="70">70%</SelectItem>
-                </SelectContent>
-              </Select>
-            )}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="text-fit-expand"
+                    checked={settings.textFitMode === "expand_box" || settings.textFitMode === "shrink_then_expand"}
+                    onCheckedChange={(checked) => {
+                      const expand = checked === true;
+                      const shrink = settings.textFitMode === "auto_shrink" || settings.textFitMode === "shrink_then_expand";
+                      const mode: TextFitMode = shrink && expand ? "shrink_then_expand" : shrink ? "auto_shrink" : expand ? "expand_box" : "none";
+                      onSettingsChange({ textFitMode: mode });
+                    }}
+                    disabled={disabled}
+                  />
+                  <Label htmlFor="text-fit-expand" className="text-sm font-normal cursor-pointer">
+                    텍스트 박스 확장
+                  </Label>
+                </div>
+              </TooltipTrigger>
+              <TooltipContent>
+                번역문이 길어지면 박스 너비를 넓혀 텍스트가 잘리지 않게 합니다.
+              </TooltipContent>
+            </Tooltip>
           </div>
-          <div className="flex items-center space-x-2">
-            <Checkbox
-              id="text-fit-expand"
-              checked={settings.textFitMode === "expand_box" || settings.textFitMode === "shrink_then_expand"}
-              onCheckedChange={(checked) => {
-                const expand = checked === true;
-                const shrink = settings.textFitMode === "auto_shrink" || settings.textFitMode === "shrink_then_expand";
-                const mode: TextFitMode = shrink && expand ? "shrink_then_expand" : shrink ? "auto_shrink" : expand ? "expand_box" : "none";
-                onSettingsChange({ textFitMode: mode });
-              }}
-              disabled={disabled}
-            />
-            <Label htmlFor="text-fit-expand" className="text-sm font-normal cursor-pointer">
-              텍스트 박스 확장
-            </Label>
-          </div>
-        </div>
+        </TooltipProvider>
       </div>
 
       {/* Context (Background Information) */}

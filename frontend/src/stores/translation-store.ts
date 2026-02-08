@@ -88,7 +88,7 @@ const DEFAULT_SETTINGS: TranslationSettings = {
     includeDate: true,
     customName: "",
   },
-  textFitMode: "none",
+  textFitMode: "expand_box",
   minFontRatio: 80,
 };
 

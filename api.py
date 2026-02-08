@@ -326,8 +326,8 @@ async def get_config() -> ConfigResponse:
     return ConfigResponse(
         max_upload_size_mb=settings.max_upload_size_mb,
         providers=list(SUPPORTED_MODELS.keys()),
-        default_provider="openai",
-        default_model="gpt-5.2",
+        default_provider="anthropic",
+        default_model="claude-sonnet-4-5-20250929",
     )
 
 

@@ -131,6 +131,7 @@ class JobManager:
                 "total_batches": progress.total_batches,
                 "current_sentence": progress.current_sentence,
                 "total_sentences": progress.total_sentences,
+                "percent": progress.percent,
                 "message": progress.message,
             },
         )

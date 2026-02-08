@@ -113,7 +113,7 @@ export function ProgressPanel({ status, progress, startTime }: ProgressPanelProp
     // Calculate initial elapsed time
     setElapsedSeconds(Math.floor((Date.now() - startTime) / 1000));
 
-    // Only tick while translating
+    // Only tick while actively processing
     if (status !== "translating" && status !== "uploading") return;
 
     const interval = setInterval(() => {
@@ -125,16 +125,7 @@ export function ProgressPanel({ status, progress, startTime }: ProgressPanelProp
 
   const getProgressPercentage = (): number => {
     if (!progress) return 0;
-
-    if (progress.total_batches > 0) {
-      return Math.round((progress.current_batch / progress.total_batches) * 100);
-    }
-
-    if (progress.total_sentences > 0) {
-      return Math.round((progress.current_sentence / progress.total_sentences) * 100);
-    }
-
-    return 0;
+    return progress.percent ?? 0;
   };
 
   const getStatusIcon = () => {
