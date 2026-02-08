@@ -8,6 +8,14 @@ from enum import Enum
 from typing import Callable, Dict, Optional
 
 
+class TextFitMode(Enum):
+    """Text fitting mode for translated text boxes."""
+
+    NONE = "none"
+    AUTO_SHRINK = "auto_shrink"
+    EXPAND_BOX = "expand_box"
+
+
 class TranslationStatus(Enum):
     """Translation workflow status."""
 
@@ -35,6 +43,8 @@ class TranslationRequest:
     glossary: Optional[Dict[str, str]] = None
     preprocess_repetitions: bool = False
     translate_notes: bool = False
+    text_fit_mode: TextFitMode = TextFitMode.NONE
+    min_font_ratio: int = 70
 
 
 @dataclass

@@ -171,7 +171,7 @@ export function TranslationForm() {
                     className="flex-1 gap-2"
                   >
                     <RefreshCw className="w-4 h-4" />
-                    새 번역
+                    재번역
                   </Button>
                 </>
               )}

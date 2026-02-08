@@ -186,7 +186,7 @@ export function SettingsPanel({
           disabled={disabled}
         />
         <Label htmlFor="translate-notes" className="text-sm font-normal cursor-pointer">
-          슬라이드 노트 번역 (발표자 노트도 함께 번역)
+          슬라이드 노트 번역
         </Label>
       </div>
 
