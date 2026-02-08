@@ -88,6 +88,8 @@ const DEFAULT_SETTINGS: TranslationSettings = {
     includeDate: true,
     customName: "",
   },
+  textFitMode: "none",
+  minFontRatio: 80,
 };
 
 const MAX_LOGS = 400;

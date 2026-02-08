@@ -28,6 +28,7 @@ from src.services import (
     JobState,
     JobType,
 )
+from src.services.models import TextFitMode
 from src.utils.config import get_settings
 from src.utils.glossary_loader import GlossaryLoader
 from src.utils.security import sanitize_filename, validate_pptx_file
@@ -359,6 +360,8 @@ async def _run_translation_job(
     translate_notes: bool,
     glossary: Optional[Dict[str, str]],
     filename_settings: FilenameSettings,
+    text_fit_mode: TextFitMode = TextFitMode.NONE,
+    min_font_ratio: int = 80,
 ) -> None:
     """Run translation job in background."""
     job_manager = get_job_manager()
@@ -376,6 +379,8 @@ async def _run_translation_job(
             glossary=glossary,
             preprocess_repetitions=preprocess_repetitions,
             translate_notes=translate_notes,
+            text_fit_mode=text_fit_mode,
+            min_font_ratio=min_font_ratio,
         )
 
         progress_callback = _create_progress_callback(job_id)
@@ -427,6 +432,8 @@ async def create_job(
     preprocess_repetitions: bool = Form(False, description="Deduplicate repeated phrases"),
     translate_notes: bool = Form(False, description="Also translate speaker notes"),
     filename_settings: Optional[str] = Form(None, description="Filename settings as JSON"),
+    text_fit_mode: str = Form("none", description="Text fitting mode: none, auto_shrink, expand_box"),
+    min_font_ratio: int = Form(80, description="Minimum font size ratio (50-100) for auto_shrink mode"),
 ) -> JobCreateResponse:
     """Create a new translation job."""
     settings = get_settings()
@@ -502,6 +509,16 @@ async def create_job(
         except (json.JSONDecodeError, ValueError) as exc:
             LOGGER.warning("Invalid filename_settings JSON, using defaults: %s", exc)
 
+    # Parse text fit mode
+    try:
+        parsed_text_fit_mode = TextFitMode(text_fit_mode)
+    except ValueError:
+        LOGGER.warning("Invalid text_fit_mode '%s', using default 'none'", text_fit_mode)
+        parsed_text_fit_mode = TextFitMode.NONE
+
+    # Clamp min_font_ratio
+    clamped_min_font_ratio = max(50, min(100, min_font_ratio))
+
     # Create job
     job = job_manager.create_job(JobType.TRANSLATION)
 
@@ -521,6 +538,8 @@ async def create_job(
             translate_notes=translate_notes,
             glossary=glossary,
             filename_settings=parsed_filename_settings,
+            text_fit_mode=parsed_text_fit_mode,
+            min_font_ratio=clamped_min_font_ratio,
         )
     )
     job_manager.start_job(job.id, task)

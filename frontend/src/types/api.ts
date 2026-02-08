@@ -65,6 +65,8 @@ export interface FilenameSettings {
   customName: string;
 }
 
+export type TextFitMode = "none" | "auto_shrink" | "expand_box" | "shrink_then_expand";
+
 export interface TranslationSettings {
   sourceLang: string;
   targetLang: string;
@@ -75,6 +77,8 @@ export interface TranslationSettings {
   preprocessRepetitions: boolean;
   translateNotes: boolean;
   filenameSettings: FilenameSettings;
+  textFitMode: TextFitMode;
+  minFontRatio: number;
 }
 
 export interface ExtractionSettings {

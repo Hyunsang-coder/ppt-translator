@@ -430,7 +430,11 @@ class TranslationService:
 
         writer = PPTWriter()
         output_buffer = writer.apply_translations(
-            paragraphs, translated_texts, presentation
+            paragraphs,
+            translated_texts,
+            presentation,
+            text_fit_mode=request.text_fit_mode.value,
+            min_font_ratio=request.min_font_ratio,
         )
 
         elapsed = progress_tracker.finish()

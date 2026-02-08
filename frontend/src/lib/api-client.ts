@@ -118,6 +118,9 @@ export const apiClient = {
     }
     // Filename settings
     formData.append("filename_settings", JSON.stringify(settings.filenameSettings));
+    // Text fitting settings
+    formData.append("text_fit_mode", settings.textFitMode);
+    formData.append("min_font_ratio", String(settings.minFontRatio));
 
     const response = await fetch(`${API_BASE}/api/v1/jobs`, {
       method: "POST",

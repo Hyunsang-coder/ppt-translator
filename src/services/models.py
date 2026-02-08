@@ -14,6 +14,7 @@ class TextFitMode(Enum):
     NONE = "none"
     AUTO_SHRINK = "auto_shrink"
     EXPAND_BOX = "expand_box"
+    SHRINK_THEN_EXPAND = "shrink_then_expand"
 
 
 class TranslationStatus(Enum):
@@ -44,7 +45,7 @@ class TranslationRequest:
     preprocess_repetitions: bool = False
     translate_notes: bool = False
     text_fit_mode: TextFitMode = TextFitMode.NONE
-    min_font_ratio: int = 70
+    min_font_ratio: int = 80
 
 
 @dataclass
