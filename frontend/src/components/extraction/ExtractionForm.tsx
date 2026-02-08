@@ -205,7 +205,7 @@ export function ExtractionForm() {
             )}
 
             {slideCount !== null && (
-              <p className="mt-3 text-sm text-foreground/60">
+              <p className="mt-3 text-sm text-muted-foreground">
                 {slideCount}개 슬라이드에서 텍스트를 추출했습니다.
               </p>
             )}

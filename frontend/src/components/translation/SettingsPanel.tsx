@@ -180,7 +180,7 @@ export function SettingsPanel({
         <div className="flex items-center justify-between">
           <Label htmlFor="context">컨텍스트 (배경 정보)</Label>
           <div className="flex items-center gap-2">
-            <span className="text-[10px] text-foreground/40">
+            <span className="text-[10px] text-muted-foreground">
               using {settings.provider === "openai" ? "GPT-5 Mini" : "Haiku 4.5"}
             </span>
             <Button
@@ -221,7 +221,7 @@ export function SettingsPanel({
           className="resize-none"
         />
         {generatedContext && (
-          <p className="text-xs text-foreground/60">
+          <p className="text-xs text-muted-foreground">
             * 자동 생성된 컨텍스트입니다. 필요에 따라 수정할 수 있습니다.
           </p>
         )}
@@ -232,7 +232,7 @@ export function SettingsPanel({
         <div className="flex items-center justify-between">
           <Label htmlFor="instructions">번역 지침 (스타일/톤)</Label>
           <div className="flex items-center gap-2">
-            <span className="text-[10px] text-foreground/40">
+            <span className="text-[10px] text-muted-foreground">
               using {settings.provider === "openai" ? "GPT-5 Mini" : "Haiku 4.5"}
             </span>
             <Button
@@ -273,7 +273,7 @@ export function SettingsPanel({
           className="resize-none"
         />
         {generatedInstructions && (
-          <p className="text-xs text-foreground/60">
+          <p className="text-xs text-muted-foreground">
             * 자동 생성된 지침입니다. 필요에 따라 수정할 수 있습니다.
           </p>
         )}
@@ -358,7 +358,7 @@ export function FilenameSettingsSection({
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
-        <FileText className="w-4 h-4 text-foreground/60" />
+        <FileText className="w-4 h-4 text-muted-foreground" />
         <Label>출력 파일명 설정</Label>
       </div>
 
@@ -461,8 +461,8 @@ export function FilenameSettingsSection({
       </RadioGroup>
 
       {/* Preview */}
-      <div className="p-2 bg-secondary/50 rounded-md">
-        <p className="text-xs text-foreground/60">
+      <div className="p-2 bg-muted rounded-md border border-border">
+        <p className="text-xs text-muted-foreground">
           미리보기: <span className="font-mono text-foreground">{generatePreview()}</span>
         </p>
       </div>

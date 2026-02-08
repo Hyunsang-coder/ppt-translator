@@ -14,8 +14,8 @@ export default function ExtractPage() {
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-border mt-auto">
-        <div className="container mx-auto px-4 py-4 text-center text-sm text-foreground/60">
+      <footer className="border-t border-border/50 mt-auto">
+        <div className="container mx-auto px-4 py-4 text-center text-sm text-muted-foreground">
           <span className="font-medium text-foreground">PPT 번역캣</span>
           <span className="mx-2">-</span>
           <span>PowerPoint 텍스트 추출 도구</span>

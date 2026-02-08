@@ -18,28 +18,28 @@ const LOG_TYPE_STYLES: Record<LogEntry["type"], {
   icon: React.ReactNode;
 }> = {
   info: {
-    textColor: "text-foreground",
-    borderColor: "border-l-foreground",
-    bgColor: "",
-    icon: <Info className="w-3.5 h-3.5 text-foreground" />,
+    textColor: "text-info",
+    borderColor: "border-l-info",
+    bgColor: "bg-info/5",
+    icon: <Info className="w-3.5 h-3.5 text-info" />,
   },
   success: {
-    textColor: "text-foreground",
-    borderColor: "border-l-foreground",
-    bgColor: "",
-    icon: <CheckCircle className="w-3.5 h-3.5 text-foreground" />,
+    textColor: "text-success",
+    borderColor: "border-l-success",
+    bgColor: "bg-success/5",
+    icon: <CheckCircle className="w-3.5 h-3.5 text-success" />,
   },
   error: {
     textColor: "text-destructive",
     borderColor: "border-l-destructive",
-    bgColor: "",
+    bgColor: "bg-destructive/5",
     icon: <XCircle className="w-3.5 h-3.5 text-destructive" />,
   },
   warning: {
-    textColor: "text-foreground",
-    borderColor: "border-l-foreground",
-    bgColor: "",
-    icon: <AlertTriangle className="w-3.5 h-3.5 text-foreground" />,
+    textColor: "text-warning",
+    borderColor: "border-l-warning",
+    bgColor: "bg-warning/5",
+    icon: <AlertTriangle className="w-3.5 h-3.5 text-warning" />,
   },
 };
 
@@ -64,10 +64,10 @@ export function LogViewer({ logs, onClear }: LogViewerProps) {
     <Card className="border-border overflow-hidden">
       <CardHeader className="pb-2 flex flex-row items-center justify-between">
         <CardTitle className="text-lg flex items-center gap-2">
-          <ScrollText className="w-5 h-5 text-foreground" />
+          <ScrollText className="w-5 h-5 text-primary" />
           <span>로그</span>
           {logs.length > 0 && (
-            <span className="text-xs font-normal text-foreground/60 ml-2">
+            <span className="text-xs font-normal text-muted-foreground ml-2">
               ({logs.length})
             </span>
           )}
@@ -87,10 +87,10 @@ export function LogViewer({ logs, onClear }: LogViewerProps) {
       <CardContent>
         <div
           ref={containerRef}
-          className="h-48 overflow-y-auto font-mono text-xs rounded-lg border border-border p-2 space-y-1"
+          className="h-48 overflow-y-auto font-mono text-xs rounded-lg bg-muted/30 border border-border p-2 space-y-1"
         >
           {logs.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-foreground/60">
+            <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
               <ScrollText className="w-8 h-8 mb-2 opacity-50" />
               <p>로그가 없습니다.</p>
             </div>
@@ -107,7 +107,7 @@ export function LogViewer({ logs, onClear }: LogViewerProps) {
                   style={{ animationDelay: `${Math.min(index * 0.05, 0.3)}s` }}
                 >
                   <span className="flex-shrink-0 mt-0.5">{style.icon}</span>
-                  <span className="text-foreground/60 flex-shrink-0 tabular-nums">
+                  <span className="text-muted-foreground flex-shrink-0 tabular-nums">
                     {formatTime(log.timestamp)}
                   </span>
                   <span className={`break-all ${style.textColor}`}>{log.message}</span>

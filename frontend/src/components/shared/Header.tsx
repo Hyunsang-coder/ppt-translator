@@ -25,13 +25,13 @@ export function Header({ activeTab }: HeaderProps) {
   };
 
   return (
-    <header className="sticky top-0 z-50 border-b border-border bg-foreground text-background">
+    <header className="sticky top-0 z-50 border-b border-border/50 bg-background/80 backdrop-blur-xl text-foreground">
       <div className="container mx-auto px-4 py-3">
         <div className="flex items-center justify-between">
           {/* Logo and Title */}
           <Link href="/translate" className="flex items-center gap-3 group">
             <div className="relative">
-              <div className="absolute inset-0 brand-gradient rounded-xl blur-lg opacity-50 group-hover:opacity-75 transition-opacity" />
+              <div className="absolute inset-0 bg-primary/20 rounded-xl blur-lg opacity-50 group-hover:opacity-75 transition-opacity" />
               <Image
                 src="/cat-logo.png"
                 alt="번역캣"
@@ -41,10 +41,10 @@ export function Header({ activeTab }: HeaderProps) {
               />
             </div>
             <div className="flex flex-col">
-              <h1 className="text-xl font-bold text-background">
+              <h1 className="text-xl font-bold text-foreground">
                 PPT 번역캣
               </h1>
-              <span className="text-xs text-background/60 hidden sm:block">
+              <span className="text-xs text-muted-foreground hidden sm:block">
                 AI 기반 PowerPoint 번역
               </span>
             </div>
@@ -54,14 +54,14 @@ export function Header({ activeTab }: HeaderProps) {
           <div className="flex items-center gap-4">
             {/* Tab Navigation */}
             <Tabs value={activeTab} className="hidden sm:block">
-              <TabsList className="bg-background/10 border-0">
-                <TabsTrigger value="translate" asChild className="data-[state=active]:bg-background data-[state=active]:text-foreground text-background/70">
+              <TabsList className="bg-muted/60 border border-border/50">
+                <TabsTrigger value="translate" asChild className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-muted-foreground">
                   <Link href="/translate" className="flex items-center gap-2">
                     <Languages className="w-4 h-4" />
                     <span>번역</span>
                   </Link>
                 </TabsTrigger>
-                <TabsTrigger value="extract" asChild className="data-[state=active]:bg-background data-[state=active]:text-foreground text-background/70">
+                <TabsTrigger value="extract" asChild className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-muted-foreground">
                   <Link href="/extract" className="flex items-center gap-2">
                     <FileText className="w-4 h-4" />
                     <span>텍스트 추출</span>
@@ -73,13 +73,13 @@ export function Header({ activeTab }: HeaderProps) {
             {/* Mobile Navigation */}
             <div className="flex sm:hidden">
               <Tabs value={activeTab}>
-                <TabsList className="bg-background/10 border-0">
-                  <TabsTrigger value="translate" asChild className="data-[state=active]:bg-background data-[state=active]:text-foreground text-background/70">
+                <TabsList className="bg-muted/60 border border-border/50">
+                  <TabsTrigger value="translate" asChild className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-muted-foreground">
                     <Link href="/translate" className="px-3">
                       <Languages className="w-4 h-4" />
                     </Link>
                   </TabsTrigger>
-                  <TabsTrigger value="extract" asChild className="data-[state=active]:bg-background data-[state=active]:text-foreground text-background/70">
+                  <TabsTrigger value="extract" asChild className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-muted-foreground">
                     <Link href="/extract" className="px-3">
                       <FileText className="w-4 h-4" />
                     </Link>
@@ -93,14 +93,14 @@ export function Header({ activeTab }: HeaderProps) {
               variant="ghost"
               size="icon"
               onClick={toggleTheme}
-              className="relative overflow-hidden hover:bg-background/10"
+              className="relative overflow-hidden hover:bg-accent"
               aria-label="테마 변경"
             >
               {mounted ? (
                 theme === "dark" ? (
-                  <Sun className="w-5 h-5 text-background animate-scale-in" />
+                  <Sun className="w-5 h-5 text-foreground animate-scale-in" />
                 ) : (
-                  <Moon className="w-5 h-5 text-background animate-scale-in" />
+                  <Moon className="w-5 h-5 text-foreground animate-scale-in" />
                 )
               ) : (
                 <div className="w-5 h-5" />

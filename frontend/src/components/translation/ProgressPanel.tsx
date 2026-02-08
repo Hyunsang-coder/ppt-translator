@@ -48,9 +48,9 @@ function CircularProgress({ percentage, size = 120, strokeWidth = 8 }: CircularP
           stroke="currentColor"
           strokeWidth={strokeWidth}
           fill="none"
-          className="text-foreground/20"
+          className="text-primary/20"
         />
-        {/* Progress circle - solid color */}
+        {/* Progress circle */}
         <circle
           cx={size / 2}
           cy={size / 2}
@@ -61,7 +61,7 @@ function CircularProgress({ percentage, size = 120, strokeWidth = 8 }: CircularP
           strokeDasharray={circumference}
           strokeDashoffset={strokeDashoffset}
           strokeLinecap="round"
-          className="text-foreground transition-all duration-500 ease-out progress-ring-animate"
+          className="text-primary transition-all duration-500 ease-out progress-ring-animate"
         />
       </svg>
       {/* Center content */}
@@ -82,14 +82,14 @@ interface StatCardProps {
 function StatCard({ icon, label, value, subValue }: StatCardProps) {
   return (
     <div className="stat-card glass-card p-3 flex items-center gap-3">
-      <div className="p-2 rounded-lg border border-foreground text-foreground">
+      <div className="p-2 rounded-lg bg-primary/10 text-primary">
         {icon}
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-xs text-foreground/60">{label}</p>
+        <p className="text-xs text-muted-foreground">{label}</p>
         <p className="text-sm font-semibold truncate">{value}</p>
         {subValue && (
-          <p className="text-xs text-foreground/60">{subValue}</p>
+          <p className="text-xs text-muted-foreground">{subValue}</p>
         )}
       </div>
     </div>
@@ -114,17 +114,17 @@ export function ProgressPanel({ status, progress, startTime }: ProgressPanelProp
   const getStatusIcon = () => {
     switch (status) {
       case "idle":
-        return <Clock className="w-5 h-5 text-foreground" />;
+        return <Clock className="w-5 h-5 text-muted-foreground" />;
       case "uploading":
       case "translating":
-        return <Loader2 className="w-5 h-5 text-foreground animate-spin" />;
+        return <Loader2 className="w-5 h-5 text-primary animate-spin" />;
       case "completed":
         return <CheckCircle2 className="w-5 h-5 text-success" />;
       case "failed":
       case "cancelled":
         return <XCircle className="w-5 h-5 text-destructive" />;
       default:
-        return <Clock className="w-5 h-5 text-foreground" />;
+        return <Clock className="w-5 h-5 text-muted-foreground" />;
     }
   };
 
@@ -146,7 +146,7 @@ export function ProgressPanel({ status, progress, startTime }: ProgressPanelProp
           {getStatusIcon()}
           <span>번역 진행 상황</span>
           {status === "translating" && (
-            <span className="ml-auto text-xs font-normal text-foreground/60 animate-pulse">
+            <span className="ml-auto text-xs font-normal text-muted-foreground animate-pulse">
               진행 중...
             </span>
           )}
@@ -159,7 +159,7 @@ export function ProgressPanel({ status, progress, startTime }: ProgressPanelProp
           <div className="text-center">
             <p className="text-sm font-medium">{statusLabel || "준비 중"}</p>
             {progress?.message && (
-              <p className="text-xs text-foreground/60 mt-1 max-w-[250px] truncate">
+              <p className="text-xs text-muted-foreground mt-1 max-w-[250px] truncate">
                 {progress.message}
               </p>
             )}
@@ -168,7 +168,7 @@ export function ProgressPanel({ status, progress, startTime }: ProgressPanelProp
 
         {/* Linear Progress Bar */}
         <div className="space-y-2">
-          <div className="h-2 rounded-full border border-foreground overflow-hidden">
+          <div className="h-2 rounded-full bg-muted overflow-hidden">
             <div
               className="h-full brand-gradient rounded-full transition-all duration-500 ease-out"
               style={{ width: `${percentage}%` }}

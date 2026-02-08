@@ -80,17 +80,17 @@ export function FileUploader({
         className={`
           relative p-4 border-2 border-dashed cursor-pointer transition-all duration-300
           overflow-hidden
-          ${isDragActive ? "border-foreground scale-[1.01]" : "border-border"}
-          ${disabled ? "opacity-50 cursor-not-allowed" : "hover:border-foreground"}
+          ${isDragActive ? "border-primary bg-primary/5 scale-[1.01]" : "border-border"}
+          ${disabled ? "opacity-50 cursor-not-allowed" : "hover:border-primary"}
           ${error ? "border-destructive" : ""}
-          ${selectedFile ? "border-foreground" : ""}
+          ${selectedFile ? "border-primary" : ""}
         `}
       >
         <input {...getInputProps()} />
 
         {/* Background decoration */}
         {isDragActive && (
-          <div className="absolute inset-0 brand-gradient opacity-5 animate-pulse" />
+          <div className="absolute inset-0 bg-primary/5 animate-pulse" />
         )}
 
         <div className="relative z-10">
@@ -98,13 +98,13 @@ export function FileUploader({
             <div className="flex items-center justify-between gap-3 animate-scale-in">
               <div className="flex items-center gap-2 min-w-0">
                 <div className="p-1.5 rounded brand-gradient flex-shrink-0">
-                  <FileText className="w-4 h-4 text-background" />
+                  <FileText className="w-4 h-4 text-primary-foreground" />
                 </div>
                 <div className="text-left min-w-0">
                   <p className="font-medium text-sm truncate">
                     {selectedFile.name}
                   </p>
-                  <p className="text-xs text-foreground/60">
+                  <p className="text-xs text-muted-foreground">
                     {formatFileSize(selectedFile.size)}
                   </p>
                 </div>
@@ -124,20 +124,20 @@ export function FileUploader({
             <div className="flex items-center gap-3">
               <div className={`
                 p-2 rounded-lg border border-border
-                ${isDragActive ? "animate-bounce-subtle border-foreground" : ""}
+                ${isDragActive ? "animate-bounce-subtle border-primary bg-primary/10" : ""}
               `}>
                 {isDragActive ? (
-                  <CloudUpload className="w-5 h-5 text-foreground animate-pulse" />
+                  <CloudUpload className="w-5 h-5 text-primary animate-pulse" />
                 ) : (
-                  <Upload className="w-5 h-5 text-foreground" />
+                  <Upload className="w-5 h-5 text-primary" />
                 )}
               </div>
               <div className="text-left">
-                <p className={`text-sm font-medium transition-colors ${isDragActive ? "text-foreground" : ""}`}>
+                <p className={`text-sm font-medium transition-colors ${isDragActive ? "text-primary" : ""}`}>
                   {isDragActive ? "파일을 여기에 놓으세요" : "클릭 또는 드래그"}
                 </p>
                 {description && (
-                  <p className="text-xs text-foreground/60">{description}</p>
+                  <p className="text-xs text-muted-foreground">{description}</p>
                 )}
               </div>
             </div>
