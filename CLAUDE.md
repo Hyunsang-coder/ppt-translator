@@ -102,11 +102,11 @@ cd frontend && npx tsc --noEmit
 
 ### Core Components (`src/core/`)
 - `ppt_parser.py`: Extracts `ParagraphInfo` objects from PPTX (handles shapes, tables, groups)
-- `ppt_writer.py`: Applies translations back using run-based text distribution to preserve formatting
+- `ppt_writer.py`: Applies translations back using run-based text distribution to preserve formatting; includes text fit (auto-shrink, expand-box) and color distribution support
 - `text_extractor.py`: Converts PPTX to structured markdown with `ExtractionOptions`
 
 ### Service Layer (`src/services/`)
-- `models.py`: Data models (`TranslationRequest`, `TranslationResult`, `TranslationProgress`, `TranslationStatus`, `ProgressCallback`)
+- `models.py`: Data models (`TranslationRequest`, `TranslationResult`, `TranslationProgress`, `TranslationStatus`, `TextFitMode`, `ProgressCallback`)
 - `translation_service.py`: `TranslationService` class encapsulating translation workflow logic
   - Shared by both Streamlit (`app.py`) and FastAPI (`api.py`)
   - `ServiceProgressTracker`: Adapter for progress callbacks in service layer
@@ -122,6 +122,7 @@ cd frontend && npx tsc --noEmit
 ### Translation Chain (`src/chains/`)
 - `llm_factory.py`: Factory for creating LLM instances (OpenAI/Anthropic) with provider-specific configuration, includes built-in rate limiting via `InMemoryRateLimiter`
 - `translation_chain.py`: LangChain pipeline using structured output (`TranslationOutput` Pydantic model) for type-safe parsing, LangChain batch API for concurrent execution with tenacity retry logic
+- `color_distribution_chain.py`: LLM-based color/format distribution for multi-color paragraphs — maps translated text segments back to original format groups
 - `context_manager.py`: Builds global presentation context for consistent translations
 - `summarization_chain.py`: AI-powered context and instructions generation (uses lightweight models: GPT-5 Mini / Haiku 4.5)
 
@@ -152,7 +153,7 @@ Next.js 16 with React 19, TypeScript 5, Tailwind CSS 4, and Zustand 5 state mana
 - **shared/**: `Header.tsx` (navigation + theme toggle), `FileUploader.tsx` (drag & drop)
 - **translation/**: `TranslationForm.tsx`, `SettingsPanel.tsx` (includes `FilenameSettingsSection`), `ProgressPanel.tsx`, `LogViewer.tsx`
 - **extraction/**: `ExtractionForm.tsx`, `MarkdownPreview.tsx`
-- **ui/**: Shadcn/Radix UI components (button, card, checkbox, input, label, progress, radio-group, select, separator, sonner, switch, tabs, textarea)
+- **ui/**: Shadcn/Radix UI components (button, card, checkbox, input, label, progress, radio-group, select, separator, sonner, switch, tabs, textarea, tooltip)
 
 #### State Management (`src/stores/`)
 - `translation-store.ts`: Zustand store for translation state (file, settings, progress, logs)
@@ -184,6 +185,8 @@ Centralized color management with CSS variables:
 ### Tests (`tests/`)
 - `test_translation.py`: Unit tests for translation helpers and language detection
 - `test_api.py`: FastAPI endpoint tests
+- `test_color_distribution.py`: Color distribution validation and format grouping tests
+- `test_text_fit.py`: Text fit modes (auto_shrink, expand_box, shrink_then_expand) and width expansion tests
 
 ## Key Patterns
 
@@ -194,7 +197,8 @@ Centralized color management with CSS variables:
 4. `chunk_paragraphs()` creates batches with context/glossary
 5. `translate_with_progress()` handles concurrent API calls
 6. `expand_translations()` maps unique results back to duplicates
-7. `PPTWriter.apply_translations()` writes back preserving run formatting
+7. `_fix_color_distributions()` preserves multi-color formatting via LLM-based segment mapping
+8. `PPTWriter.apply_translations()` writes back preserving run formatting, applies text fit and color distributions
 
 ### Async Job Flow (FastAPI + Next.js)
 1. Frontend calls `POST /api/v1/jobs` with file, settings, and filename_settings (JSON)
@@ -206,7 +210,20 @@ Centralized color management with CSS variables:
 7. Output filename generated server-side based on `FilenameSettings` (auto/custom mode)
 
 ### Formatting Preservation
-`PPTWriter` uses `split_text_into_segments()` with character-length weights to distribute translated text across original runs, preserving bold/italic/font styling.
+`PPTWriter` uses `split_text_into_segments()` with character-length weights to distribute translated text across original runs, preserving bold/italic/font styling. For multi-color paragraphs, `color_distribution_chain` uses LLM to split translated text by meaning and map segments back to original format groups.
+
+### Text Fit
+`TextFitMode` controls how translated text fits in text boxes:
+- `none`: No adjustment
+- `auto_shrink`: Reduce font size (down to `min_font_ratio`%) if text overflows
+- `expand_box`: Widen text box to accommodate longer text (skips rotated/grouped/table shapes)
+- `shrink_then_expand`: Try shrinking first, then expand if still overflowing
+
+Width expansion is applied before text fit for all non-NONE modes.
+
+### Progress Tracking
+`TranslationProgress.percent` provides monotonic overall progress (never resets between phases):
+- Parsing 2% → Language detection 5% → Batch prep 8% → Translation 10–80% → Color fix 80–90% → Apply 95% → Complete 100%
 
 ### Error Handling
 - Translation chain uses tenacity with exponential backoff (3 attempts)
@@ -225,8 +242,8 @@ curl http://localhost:8000/api/v1/models
 curl -X POST http://localhost:8000/api/v1/jobs \
   -F "ppt_file=@presentation.pptx" \
   -F "target_lang=한국어" \
-  -F "provider=openai" \
-  -F "model=gpt-5.2"
+  -F "provider=anthropic" \
+  -F "model=claude-sonnet-4-5-20250929"
 
 # Stream job progress (SSE)
 curl -N http://localhost:8000/api/v1/jobs/{job_id}/events
