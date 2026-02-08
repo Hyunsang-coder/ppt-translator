@@ -11,6 +11,8 @@ PPT 번역캣 is a PowerPoint translation application using LangChain with OpenA
 
 Features include slide text translation while preserving original formatting, glossary support, auto language detection, real-time progress streaming via SSE, and detailed logging.
 
+**Requires Python >= 3.12** (see `pyproject.toml`)
+
 ## Development Commands
 
 ```bash
@@ -48,7 +50,9 @@ cd frontend && npx tsc --noEmit
 1. Create `.env` from `.env.example` and set API keys:
    - `OPENAI_API_KEY` - Required for OpenAI models (GPT)
    - `ANTHROPIC_API_KEY` - Required for Anthropic models (Claude)
-2. Optional environment variables for tuning:
+2. Optional:
+   - `CORS_ALLOWED_ORIGINS` - Comma-separated allowed origins (default: `http://localhost:3000,http://127.0.0.1:3000`)
+3. Optional environment variables for tuning:
    - `TRANSLATION_MAX_CONCURRENCY` (default: 8)
    - `TRANSLATION_BATCH_SIZE` (default: 80)
    - `TRANSLATION_MIN_BATCH_SIZE` (default: 60) / `TRANSLATION_MAX_BATCH_SIZE` (default: 100)
@@ -60,11 +64,23 @@ cd frontend && npx tsc --noEmit
    - `TRANSLATION_RATE_LIMIT_MAX_BUCKET` (default: 10) - Token bucket size for rate limiting
 
 ### Frontend (.env.local)
-- `NEXT_PUBLIC_API_URL` - Backend API URL (default: `http://localhost:8000`)
+- `NEXT_PUBLIC_API_URL` - Backend API URL (default: empty string for Vercel proxy support; set to `http://localhost:8000` for local development)
+
+## Deployment
+
+### Docker (EC2)
+- **Dockerfile**: Multi-stage build (Python 3.12-slim), non-root `appuser`, healthcheck via `/health`
+- **docker-compose.yml**: Maps port 80→8000, 1536M memory limit, env-based CORS config
+- Build & run: `docker compose up -d --build`
+
+### Vercel (Frontend)
+- **`frontend/vercel.json`**: Rewrites `/api/*` and `/health` to EC2 backend, enabling same-origin API calls
+- `NEXT_PUBLIC_API_URL` defaults to empty string so relative paths use Vercel rewrites
 
 ## Architecture
 
 ### Entry Points
+- `glossary_template.xlsx`: Sample glossary file for term substitution
 - `app.py`: Streamlit UI orchestrating two workflows:
   - PPT Translation (main feature)
   - Text Extraction (PPT → Markdown)
@@ -154,6 +170,9 @@ Next.js 16 with React 19, TypeScript 5, Tailwind CSS 4, and Zustand 5 state mana
 
 #### Types (`src/types/`)
 - `api.ts`: TypeScript type definitions for API responses, settings, and job states
+
+#### Deployment (`vercel.json`)
+- Rewrites `/api/:path*` and `/health` to EC2 backend for same-origin API proxy
 
 #### Styling (`src/app/globals.css`)
 Centralized color management with CSS variables:
