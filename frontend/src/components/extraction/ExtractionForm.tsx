@@ -66,13 +66,13 @@ export function ExtractionForm() {
       <div className="space-y-4">
         <FileUploader
           label="PPT 파일"
-          description={`PowerPoint 파일 (.pptx) - 최대 ${config?.max_upload_size_mb || 50}MB`}
+          description={`PowerPoint 파일 (.pptx) - 최대 ${config?.max_upload_size_mb || 200}MB`}
           accept={{
             "application/vnd.openxmlformats-officedocument.presentationml.presentation": [
               ".pptx",
             ],
           }}
-          maxSizeMB={config?.max_upload_size_mb || 50}
+          maxSizeMB={config?.max_upload_size_mb || 200}
           selectedFile={pptFile}
           onFileSelect={setPptFile}
           disabled={isExtracting}
