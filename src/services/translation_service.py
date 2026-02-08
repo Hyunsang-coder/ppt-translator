@@ -8,10 +8,11 @@ import math
 import time
 from typing import Dict, List, Optional
 
+from src.chains.color_distribution_chain import ColoredSegment, distribute_colors
 from src.chains.context_manager import ContextManager
 from src.chains.translation_chain import create_translation_chain, translate_with_progress
 from src.core.ppt_parser import PPTParser
-from src.core.ppt_writer import PPTWriter
+from src.core.ppt_writer import PPTWriter, _group_runs_by_format
 from src.services.models import (
     ProgressCallback,
     TranslationProgress,
@@ -26,6 +27,175 @@ from src.utils.language_detector import LanguageDetector
 from src.utils.repetition import build_repetition_plan, expand_translations
 
 LOGGER = logging.getLogger(__name__)
+
+# Characters treated as equivalent whitespace during validation
+_WHITESPACE_CHARS = {"\u00a0", "\u2002", "\u2003", "\u2009", "\u200a", "\u3000"}
+
+
+def _normalize_whitespace(text: str) -> str:
+    """Normalize various whitespace characters to regular spaces."""
+    for ch in _WHITESPACE_CHARS:
+        text = text.replace(ch, " ")
+    return text
+
+
+def _validate_distribution(
+    segments: list[str],
+    translation: str,
+    num_groups: int,
+    para_idx: int,
+) -> list[str] | None:
+    """Validate and optionally correct a color distribution for a paragraph.
+
+    Args:
+        segments: List of text segments from the LLM.
+        translation: The expected full translated text.
+        num_groups: Number of format groups expected.
+        para_idx: Paragraph index (for logging).
+
+    Returns:
+        Corrected segment list if valid, or None if validation fails.
+    """
+    # Check segment count
+    if len(segments) != num_groups:
+        LOGGER.warning(
+            "Color distribution mismatch for paragraph %d: expected %d groups, got %d. Skipping.",
+            para_idx, num_groups, len(segments),
+        )
+        return None
+
+    # Normalize whitespace in segments
+    normalized_segments = [_normalize_whitespace(s) for s in segments]
+    normalized_translation = _normalize_whitespace(translation)
+
+    joined = "".join(normalized_segments)
+
+    # Exact match after normalization
+    if joined == normalized_translation:
+        return normalized_segments
+
+    # Try stripped comparison and correct leading/trailing whitespace
+    if joined.strip() == normalized_translation.strip():
+        corrected = list(normalized_segments)
+
+        # Fix leading whitespace
+        excess_leading = (
+            (len(joined) - len(joined.lstrip()))
+            - (len(normalized_translation) - len(normalized_translation.lstrip()))
+        )
+        if excess_leading > 0:
+            for i in range(len(corrected)):
+                if corrected[i].strip():
+                    corrected[i] = corrected[i][excess_leading:]
+                    break
+        elif excess_leading < 0:
+            corrected[0] = (" " * (-excess_leading)) + corrected[0]
+
+        # Fix trailing whitespace
+        excess_trailing = (
+            (len(joined) - len(joined.rstrip()))
+            - (len(normalized_translation) - len(normalized_translation.rstrip()))
+        )
+        if excess_trailing > 0:
+            for i in range(len(corrected) - 1, -1, -1):
+                if corrected[i].strip() or i == 0:
+                    corrected[i] = corrected[i][:-excess_trailing] if excess_trailing <= len(corrected[i]) else ""
+                    break
+        elif excess_trailing < 0:
+            corrected[-1] = corrected[-1] + (" " * (-excess_trailing))
+
+        if "".join(corrected) == normalized_translation:
+            return corrected
+
+    LOGGER.warning(
+        "Color distribution concatenation mismatch for paragraph %d: "
+        "expected %r, got %r. Skipping.",
+        para_idx, normalized_translation, joined,
+    )
+    return None
+
+
+def _validate_colored_segments(
+    segments: list[ColoredSegment],
+    translation: str,
+    num_groups: int,
+    para_idx: int,
+) -> list[ColoredSegment] | None:
+    """Validate a list of ColoredSegment objects for a paragraph.
+
+    Args:
+        segments: List of ColoredSegment from the LLM.
+        translation: The expected full translated text.
+        num_groups: Number of format groups in the original paragraph.
+        para_idx: Paragraph index (for logging).
+
+    Returns:
+        Validated segment list, or None if validation fails.
+    """
+    if not segments:
+        LOGGER.warning(
+            "Color distribution for paragraph %d returned empty segments. Skipping.",
+            para_idx,
+        )
+        return None
+
+    # Validate group_index range
+    for seg in segments:
+        if seg.group_index < 0 or seg.group_index >= num_groups:
+            LOGGER.warning(
+                "Color distribution for paragraph %d has out-of-range group_index %d "
+                "(expected 0..%d). Skipping.",
+                para_idx, seg.group_index, num_groups - 1,
+            )
+            return None
+
+    # Validate concatenation
+    normalized_translation = _normalize_whitespace(translation)
+    joined = _normalize_whitespace("".join(seg.text for seg in segments))
+
+    if joined == normalized_translation:
+        return segments
+
+    # Try whitespace-corrected match
+    if joined.strip() == normalized_translation.strip():
+        corrected_texts = [_normalize_whitespace(seg.text) for seg in segments]
+
+        excess_leading = (
+            (len(joined) - len(joined.lstrip()))
+            - (len(normalized_translation) - len(normalized_translation.lstrip()))
+        )
+        if excess_leading > 0:
+            for i in range(len(corrected_texts)):
+                if corrected_texts[i].strip():
+                    corrected_texts[i] = corrected_texts[i][excess_leading:]
+                    break
+        elif excess_leading < 0:
+            corrected_texts[0] = (" " * (-excess_leading)) + corrected_texts[0]
+
+        excess_trailing = (
+            (len(joined) - len(joined.rstrip()))
+            - (len(normalized_translation) - len(normalized_translation.rstrip()))
+        )
+        if excess_trailing > 0:
+            for i in range(len(corrected_texts) - 1, -1, -1):
+                if corrected_texts[i].strip() or i == 0:
+                    corrected_texts[i] = corrected_texts[i][:-excess_trailing] if excess_trailing <= len(corrected_texts[i]) else ""
+                    break
+        elif excess_trailing < 0:
+            corrected_texts[-1] = corrected_texts[-1] + (" " * (-excess_trailing))
+
+        if "".join(corrected_texts) == normalized_translation:
+            return [
+                ColoredSegment(text=t, group_index=seg.group_index)
+                for t, seg in zip(corrected_texts, segments)
+            ]
+
+    LOGGER.warning(
+        "Color distribution concatenation mismatch for paragraph %d: "
+        "expected %r, got %r. Skipping.",
+        para_idx, normalized_translation, joined,
+    )
+    return None
 
 
 class ServiceProgressTracker:
@@ -195,6 +365,67 @@ class TranslationService:
                 batch_size = max(min_size, min(max_size, adjusted))
 
         return max(1, min(total_paragraphs, batch_size))
+
+    @staticmethod
+    def _fix_color_distributions(
+        paragraphs,
+        translated_texts: list[str],
+        provider: str,
+    ) -> dict[int, list[ColoredSegment]] | None:
+        """Detect multi-color paragraphs and distribute translated text by meaning.
+
+        Returns:
+            Mapping from paragraph index to list of ColoredSegment, or None if
+            no multi-color paragraphs were found.
+        """
+        candidates: list[tuple[int, list[str], str]] = []  # (idx, group_texts, translation)
+
+        for idx, (para, translation) in enumerate(zip(paragraphs, translated_texts)):
+            if para.is_note:
+                continue
+            runs = list(para.paragraph.runs)
+            if len(runs) <= 1:
+                continue
+            groups = _group_runs_by_format(runs)
+            if len(groups) <= 1:
+                continue
+            # Collect the original text per group
+            group_texts = [
+                "".join(run.text for run in group) for group in groups
+            ]
+            candidates.append((idx, group_texts, translation))
+
+        if not candidates:
+            LOGGER.info("No multi-color paragraphs found; skipping color distribution.")
+            return None
+
+        LOGGER.info("Found %d multi-color paragraphs for color distribution.", len(candidates))
+
+        original_groups = [c[1] for c in candidates]
+        translations_for_dist = [c[2] for c in candidates]
+
+        distributions = distribute_colors(original_groups, translations_for_dist, provider=provider)
+
+        if distributions is None:
+            LOGGER.warning("Color distribution chain returned None; using fallback for all.")
+            return None
+
+        result: dict[int, list[ColoredSegment]] = {}
+        for (para_idx, group_texts, translation), dist in zip(candidates, distributions):
+            validated = _validate_colored_segments(
+                segments=dist,
+                translation=translation,
+                num_groups=len(group_texts),
+                para_idx=para_idx,
+            )
+            if validated is not None:
+                result[para_idx] = validated
+
+        LOGGER.info(
+            "Color distribution validated %d/%d paragraphs.",
+            len(result), len(candidates),
+        )
+        return result if result else None
 
     def translate(self, request: TranslationRequest) -> TranslationResult:
         """Translate a PowerPoint presentation.
@@ -420,6 +651,17 @@ class TranslationService:
                 for text in translated_texts
             ]
 
+        # Phase 9.5: Fix color distributions for multi-color paragraphs
+        self._notify_progress(
+            TranslationProgress(
+                status=TranslationStatus.APPLYING_TRANSLATIONS,
+                message="다색 문단 서식 보정 중...",
+            )
+        )
+        color_distributions = self._fix_color_distributions(
+            paragraphs, translated_texts, request.provider,
+        )
+
         # Phase 10: Write output
         self._notify_progress(
             TranslationProgress(
@@ -435,6 +677,7 @@ class TranslationService:
             presentation,
             text_fit_mode=request.text_fit_mode.value,
             min_font_ratio=request.min_font_ratio,
+            color_distributions=color_distributions,
         )
 
         elapsed = progress_tracker.finish()

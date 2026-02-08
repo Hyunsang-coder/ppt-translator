@@ -6,9 +6,12 @@ import io
 import logging
 from typing import Iterable, List
 
+from lxml import etree
 from pptx import Presentation
 from pptx.enum.text import MSO_AUTO_SIZE
 from pptx.util import Pt
+
+from copy import deepcopy
 
 from src.utils.helpers import split_text_into_segments
 
@@ -25,6 +28,136 @@ _MODE_SHRINK_THEN_EXPAND = "shrink_then_expand"
 
 # Safety gap for width expansion (EMU) — approximately 2mm
 _EXPANSION_GAP_EMU = 72000
+
+
+# Attributes on rPr that do NOT affect visual appearance.
+# These are excluded when comparing run formatting so that runs
+# differing only in language, proofing state, etc. are grouped together.
+_NON_VISUAL_RPR_ATTRS = frozenset({
+    "lang", "altLang", "dirty", "err", "noProof", "smtClean", "bmk",
+})
+
+
+def _rpr_key(run) -> str:
+    """Convert run formatting properties (rPr XML) to a string key.
+
+    Non-visual attributes (lang, dirty, etc.) are excluded so that runs
+    differing only in language or proofing metadata are grouped together.
+    """
+    rPr = run._r.rPr
+    if rPr is None:
+        return ""
+    from copy import deepcopy
+    cleaned = deepcopy(rPr)
+    for attr_name in _NON_VISUAL_RPR_ATTRS:
+        cleaned.attrib.pop(attr_name, None)
+    return etree.tostring(cleaned, encoding="unicode")
+
+
+def _group_runs_by_format(runs) -> list[list]:
+    """Group adjacent runs with identical formatting.
+
+    Returns:
+        List of groups, where each group is a list of runs sharing the same
+        formatting properties. E.g. [[run1, run2], [run3], [run4, run5]].
+    """
+    if not runs:
+        return []
+
+    groups: list[list] = []
+    current_group = [runs[0]]
+    current_key = _rpr_key(runs[0])
+
+    for run in runs[1:]:
+        key = _rpr_key(run)
+        if key == current_key:
+            current_group.append(run)
+        else:
+            groups.append(current_group)
+            current_group = [run]
+            current_key = key
+
+    groups.append(current_group)
+    return groups
+
+
+def _apply_colored_segments(paragraph, colored_segments, groups, runs) -> bool:
+    """Apply ColoredSegment list to a paragraph by recreating runs.
+
+    Each segment carries a group_index indicating which original format group's
+    styling should be used.  Segments may appear in a different order than the
+    original groups (non-contiguous colour assignment).
+
+    Non-run child elements of the paragraph (<a:br>, <a:fld>, <a:endParaRPr>)
+    are preserved.
+
+    Args:
+        paragraph: python-pptx Paragraph object.
+        colored_segments: List of objects with ``.text`` and ``.group_index``.
+        groups: Groups from ``_group_runs_by_format`` (list of lists of runs).
+        runs: Flat list of runs in the paragraph.
+
+    Returns:
+        True if successfully applied, False on error (caller should fallback).
+    """
+    try:
+        # Validate group indices
+        num_groups = len(groups)
+        for seg in colored_segments:
+            if seg.group_index < 0 or seg.group_index >= num_groups:
+                LOGGER.warning(
+                    "ColoredSegment group_index %d out of range (0..%d). Falling back.",
+                    seg.group_index, num_groups - 1,
+                )
+                return False
+
+        # Collect representative rPr for each group (first run of each group)
+        group_rprs: list[etree._Element | None] = []
+        for group in groups:
+            rPr = group[0]._r.rPr
+            group_rprs.append(deepcopy(rPr) if rPr is not None else None)
+
+        # Clear all existing runs: set text to empty
+        for run in runs:
+            run.text = ""
+
+        # Assign segments to runs.
+        # Strategy: for simple ordered case (segments <= existing runs),
+        # reuse existing runs.  For reordered/split case, reuse what we can,
+        # then the last run for remaining text.
+        if len(colored_segments) <= len(runs):
+            for i, seg in enumerate(colored_segments):
+                runs[i].text = seg.text
+                # Copy formatting from the correct group
+                src_rpr = group_rprs[seg.group_index]
+                if src_rpr is not None:
+                    existing_rpr = runs[i]._r.rPr
+                    if existing_rpr is not None:
+                        runs[i]._r.replace(existing_rpr, deepcopy(src_rpr))
+                    else:
+                        runs[i]._r.insert(0, deepcopy(src_rpr))
+        else:
+            # More segments than runs — need additional runs.
+            # Use available runs first, then duplicate the last run.
+            for i, seg in enumerate(colored_segments):
+                if i < len(runs):
+                    run = runs[i]
+                else:
+                    run = paragraph.add_run()
+                    runs.append(run)
+                run.text = seg.text
+                src_rpr = group_rprs[seg.group_index]
+                if src_rpr is not None:
+                    existing_rpr = run._r.rPr
+                    if existing_rpr is not None:
+                        run._r.replace(existing_rpr, deepcopy(src_rpr))
+                    else:
+                        run._r.insert(0, deepcopy(src_rpr))
+
+        return True
+    except Exception:
+        LOGGER.exception("Failed to apply colored segments; falling back.")
+        return False
 
 
 def _build_shape_context(presentation):
@@ -230,6 +363,7 @@ class PPTWriter:
         presentation: Presentation,
         text_fit_mode: str = "none",
         min_font_ratio: int = 80,
+        color_distributions: dict[int, list[str]] | None = None,
     ) -> io.BytesIO:
         """Apply translated paragraphs and return the updated PPT as bytes.
 
@@ -239,6 +373,8 @@ class PPTWriter:
             presentation: Loaded presentation object to mutate in place.
             text_fit_mode: Text fitting mode ("none", "auto_shrink", "expand_box").
             min_font_ratio: Minimum font size as percentage of original (50-100).
+            color_distributions: Optional mapping from paragraph index to list of
+                text segments for each format group. Used for multi-color paragraphs.
 
         Returns:
             BytesIO buffer containing the updated PPTX file.
@@ -247,7 +383,11 @@ class PPTWriter:
         translation_list: List[str] = list(translations)
         total = len(translation_list)
         fit_adjusted_count = 0
+        color_applied_count = 0
         LOGGER.info("Starting to apply %d translated paragraphs to presentation.", total)
+
+        if color_distributions:
+            LOGGER.info("Color distributions provided for %d paragraphs.", len(color_distributions))
 
         # Collect text frames that need fitting (deduplicate by text frame id)
         text_frames_to_fit: dict[int, tuple] = {}
@@ -264,11 +404,46 @@ class PPTWriter:
                 run = paragraph.add_run()
                 runs = [run]
 
-            weights = [max(len(run.text), 1) for run in runs]
-            segments = split_text_into_segments(translation, len(runs), weights=weights)
+            para_idx = idx - 1  # 0-based index
+            groups = _group_runs_by_format(runs)
 
-            for run, segment in zip(runs, segments):
-                run.text = segment
+            if len(groups) == 1:
+                # Uniform formatting: put all text in first run, clear the rest
+                runs[0].text = translation
+                for run in runs[1:]:
+                    run.text = ""
+            elif color_distributions is not None and para_idx in color_distributions:
+                dist = color_distributions[para_idx]
+                if dist and hasattr(dist[0], "group_index"):
+                    # ColoredSegment-based distribution (non-contiguous support)
+                    applied = _apply_colored_segments(paragraph, dist, groups, runs)
+                    if applied:
+                        color_applied_count += 1
+                    else:
+                        # Fallback to ratio-based
+                        weights = [max(len(run.text), 1) for run in runs]
+                        segments = split_text_into_segments(translation, len(runs), weights=weights)
+                        for run, segment in zip(runs, segments):
+                            run.text = segment
+                elif len(dist) == len(groups):
+                    # Legacy list[str] distribution (contiguous groups)
+                    for group, group_text in zip(groups, dist):
+                        group[0].text = group_text
+                        for run in group[1:]:
+                            run.text = ""
+                    color_applied_count += 1
+                else:
+                    # Mismatch in group count — fallback to ratio-based
+                    weights = [max(len(run.text), 1) for run in runs]
+                    segments = split_text_into_segments(translation, len(runs), weights=weights)
+                    for run, segment in zip(runs, segments):
+                        run.text = segment
+            else:
+                # Multi-color without distribution data — fallback to ratio-based
+                weights = [max(len(run.text), 1) for run in runs]
+                segments = split_text_into_segments(translation, len(runs), weights=weights)
+                for run, segment in zip(runs, segments):
+                    run.text = segment
 
             # Track text frames for fitting
             if text_fit_mode != _MODE_NONE:
@@ -324,6 +499,12 @@ class PPTWriter:
                     mode=text_fit_mode, min_font_ratio=min_font_ratio,
                 )
                 fit_adjusted_count += 1
+
+        if color_applied_count > 0:
+            LOGGER.info(
+                "Color distribution applied to %d multi-color paragraphs.",
+                color_applied_count,
+            )
 
         if fit_adjusted_count > 0:
             LOGGER.info(
