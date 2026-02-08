@@ -231,7 +231,9 @@ class TranslationService:
 
         parser = PPTParser()
         request.ppt_file.seek(0)
-        paragraphs, presentation = parser.extract_paragraphs(request.ppt_file)
+        paragraphs, presentation = parser.extract_paragraphs(
+            request.ppt_file, translate_notes=request.translate_notes
+        )
 
         if not paragraphs:
             return TranslationResult(
@@ -294,7 +296,9 @@ class TranslationService:
 
         detector = LanguageDetector()
         sample_text = "\n".join(
-            paragraph.original_text for paragraph in paragraphs[:50]
+            paragraph.original_text
+            for paragraph in paragraphs[:50]
+            if not paragraph.is_note
         )
 
         source_language = request.source_lang

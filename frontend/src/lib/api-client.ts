@@ -106,6 +106,7 @@ export const apiClient = {
     formData.append("provider", settings.provider);
     formData.append("model", settings.model);
     formData.append("preprocess_repetitions", String(settings.preprocessRepetitions));
+    formData.append("translate_notes", String(settings.translateNotes));
     if (settings.context) {
       formData.append("context", settings.context);
     }

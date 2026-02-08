@@ -79,6 +79,7 @@ const DEFAULT_SETTINGS: TranslationSettings = {
   context: "",
   instructions: "",
   preprocessRepetitions: true,
+  translateNotes: false,
   filenameSettings: {
     mode: "auto",
     includeLanguage: true,

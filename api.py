@@ -356,6 +356,7 @@ async def _run_translation_job(
     context: Optional[str],
     instructions: Optional[str],
     preprocess_repetitions: bool,
+    translate_notes: bool,
     glossary: Optional[Dict[str, str]],
     filename_settings: FilenameSettings,
 ) -> None:
@@ -374,6 +375,7 @@ async def _run_translation_job(
             instructions=instructions,
             glossary=glossary,
             preprocess_repetitions=preprocess_repetitions,
+            translate_notes=translate_notes,
         )
 
         progress_callback = _create_progress_callback(job_id)
@@ -423,6 +425,7 @@ async def create_job(
     context: Optional[str] = Form(None, description="Background information about the presentation"),
     instructions: Optional[str] = Form(None, description="Translation style/tone guidelines"),
     preprocess_repetitions: bool = Form(False, description="Deduplicate repeated phrases"),
+    translate_notes: bool = Form(False, description="Also translate speaker notes"),
     filename_settings: Optional[str] = Form(None, description="Filename settings as JSON"),
 ) -> JobCreateResponse:
     """Create a new translation job."""
@@ -515,6 +518,7 @@ async def create_job(
             context=context,
             instructions=instructions,
             preprocess_repetitions=preprocess_repetitions,
+            translate_notes=translate_notes,
             glossary=glossary,
             filename_settings=parsed_filename_settings,
         )
@@ -916,6 +920,9 @@ async def translate_ppt(
     preprocess_repetitions: bool = Form(
         False, description="Deduplicate repeated phrases"
     ),
+    translate_notes: bool = Form(
+        False, description="Also translate speaker notes"
+    ),
 ) -> Response:
     """Translate a PowerPoint presentation (synchronous).
 
@@ -1004,6 +1011,7 @@ async def translate_ppt(
         instructions=instructions,
         glossary=glossary,
         preprocess_repetitions=preprocess_repetitions,
+        translate_notes=translate_notes,
     )
 
     # Execute translation

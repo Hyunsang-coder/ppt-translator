@@ -34,6 +34,7 @@ class TranslationRequest:
     instructions: Optional[str] = None
     glossary: Optional[Dict[str, str]] = None
     preprocess_repetitions: bool = False
+    translate_notes: bool = False
 
 
 @dataclass

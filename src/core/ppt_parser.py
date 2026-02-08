@@ -28,16 +28,20 @@ class ParagraphInfo:
     original_text: str
     paragraph: Paragraph
     slide_title: str | None
+    is_note: bool = False
 
 
 class PPTParser:
     """Extract text content and structure from PPT presentations."""
 
-    def extract_paragraphs(self, ppt_file: io.BytesIO) -> Tuple[List[ParagraphInfo], Presentation]:
+    def extract_paragraphs(
+        self, ppt_file: io.BytesIO, *, translate_notes: bool = False
+    ) -> Tuple[List[ParagraphInfo], Presentation]:
         """Parse the uploaded PPT file and collect paragraphs.
 
         Args:
             ppt_file: In-memory PPT/PPTX file buffer.
+            translate_notes: If True, also extract speaker notes paragraphs.
 
         Returns:
             A tuple containing the list of paragraphs and the loaded presentation object.
@@ -61,6 +65,26 @@ class PPTParser:
                         slide_title=slide_title,
                     )
                 )
+
+            if translate_notes and slide.has_notes_slide:
+                notes_slide = slide.notes_slide
+                notes_tf = getattr(notes_slide, "notes_text_frame", None)
+                if notes_tf is not None:
+                    for para_idx, paragraph in enumerate(notes_tf.paragraphs):
+                        text = "".join(run.text for run in paragraph.runs)
+                        if not text or not text.strip():
+                            continue
+                        paragraphs.append(
+                            ParagraphInfo(
+                                slide_index=slide_index,
+                                shape_index=-1,
+                                paragraph_index=para_idx,
+                                original_text=text,
+                                paragraph=paragraph,
+                                slide_title=slide_title,
+                                is_note=True,
+                            )
+                        )
 
         LOGGER.info("Extracted %d paragraphs from %d slides.", len(paragraphs), len(presentation.slides))
         return paragraphs, presentation

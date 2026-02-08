@@ -73,6 +73,7 @@ export interface TranslationSettings {
   context: string;
   instructions: string;
   preprocessRepetitions: boolean;
+  translateNotes: boolean;
   filenameSettings: FilenameSettings;
 }
 

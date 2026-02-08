@@ -175,6 +175,21 @@ export function SettingsPanel({
         </Label>
       </div>
 
+      {/* Translate Speaker Notes */}
+      <div className="flex items-center space-x-2">
+        <Checkbox
+          id="translate-notes"
+          checked={settings.translateNotes}
+          onCheckedChange={(checked) =>
+            onSettingsChange({ translateNotes: checked === true })
+          }
+          disabled={disabled}
+        />
+        <Label htmlFor="translate-notes" className="text-sm font-normal cursor-pointer">
+          슬라이드 노트 번역 (발표자 노트도 함께 번역)
+        </Label>
+      </div>
+
       {/* Context (Background Information) */}
       <div className="space-y-2">
         <div className="flex items-center justify-between">

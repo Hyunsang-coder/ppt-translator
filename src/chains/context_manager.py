@@ -32,6 +32,8 @@ class ContextManager:
 
         context_lines: List[str] = []
         for paragraph in self.paragraphs[:max_paragraphs]:
+            if getattr(paragraph, "is_note", False):
+                continue
             slide_label = f"Slide {paragraph.slide_index + 1}"
             title = paragraph.slide_title or "Untitled"
             text = paragraph.original_text.strip().replace("\n", " ")
