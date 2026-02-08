@@ -142,13 +142,15 @@ def translate_with_progress(
         max_concurrency,
     )
 
-    # Use LangChain batch API for parallel execution
+    # Use LangChain batch_as_completed for real-time progress updates
     config = RunnableConfig(max_concurrency=max(1, int(max_concurrency)))
-    results: List[TranslationOutput] = _batch_translate_with_retry(chain, batches, config)
+    ordered_results: List[TranslationOutput | None] = _batch_translate_with_retry(
+        chain, batches, config, progress_tracker, total_batches
+    )
 
-    # Process results and update progress
+    # Assemble translations in input order
     translations: List[str] = []
-    for index, (batch, result) in enumerate(zip(batches, results), start=1):
+    for index, (batch, result) in enumerate(zip(batches, ordered_results), start=1):
         expected_count = len(batch.get("paragraphs", []))
         parts = result.translations
 
@@ -163,17 +165,6 @@ def translate_with_progress(
 
         translations.extend(parts)
 
-        start_idx = int(batch.get("start_idx", index))
-        end_idx = int(batch.get("end_idx", index))
-        progress_tracker.batch_completed(start_idx, end_idx)
-
-        LOGGER.info(
-            "Completed batch %d/%d (received %d parts).",
-            index,
-            total_batches,
-            len(parts),
-        )
-
     return translations
 
 
@@ -185,19 +176,43 @@ def _batch_translate_with_retry(
     chain,
     batches: List[Dict[str, object]],
     config: RunnableConfig,
-) -> List[TranslationOutput]:
-    """Execute batch translation with retry logic.
+    progress_tracker: ProgressTracker | None = None,
+    total_batches: int = 0,
+) -> List[TranslationOutput | None]:
+    """Execute batch translation with retry logic and real-time progress.
+
+    Uses ``batch_as_completed`` so that each batch reports progress as soon
+    as it finishes, instead of waiting for all batches to complete.
 
     Args:
         chain: Configured LangChain runnable sequence with structured output.
         batches: Batch payloads to translate.
         config: RunnableConfig with max_concurrency setting.
+        progress_tracker: Optional tracker for real-time progress updates.
+        total_batches: Total number of batches (for logging).
 
     Returns:
         List of TranslationOutput results in input order.
     """
     LOGGER.debug("Invoking batch translation for %d batches.", len(batches))
-    return chain.batch(batches, config=config)
+    ordered_results: List[TranslationOutput | None] = [None] * len(batches)
+
+    for completed_idx, result in chain.batch_as_completed(batches, config=config):
+        ordered_results[completed_idx] = result
+
+        if progress_tracker is not None:
+            batch = batches[completed_idx]
+            start_idx = int(batch.get("start_idx", completed_idx + 1))
+            end_idx = int(batch.get("end_idx", completed_idx + 1))
+            progress_tracker.batch_completed(start_idx, end_idx)
+
+        LOGGER.info(
+            "Completed batch %d/%d.",
+            completed_idx + 1,
+            total_batches,
+        )
+
+    return ordered_results
 
 
 def _force_match_expected(parts: List[str], expected_count: int) -> List[str]:
