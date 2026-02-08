@@ -71,6 +71,7 @@ def create_llm(
     max_tokens: int = 4096,
     api_key: Optional[str] = None,
     rate_limiter: Optional[InMemoryRateLimiter] = None,
+    temperature: Optional[float] = None,
 ) -> BaseChatModel:
     """Create an LLM instance based on the provider.
 
@@ -80,6 +81,7 @@ def create_llm(
         max_tokens: Maximum tokens for response (required for Anthropic).
         api_key: Optional API key. If not provided, reads from environment.
         rate_limiter: Optional rate limiter. If not provided, creates one from settings.
+        temperature: Optional temperature for sampling. If None, uses provider default.
 
     Returns:
         Configured LangChain chat model instance.
@@ -94,22 +96,28 @@ def create_llm(
 
         key = api_key or os.getenv("ANTHROPIC_API_KEY")
         LOGGER.debug("Creating ChatAnthropic with model=%s, max_tokens=%d", model_name, max_tokens)
-        return ChatAnthropic(
+        kwargs: dict = dict(
             model=model_name,
             max_tokens=max_tokens,
             api_key=key,
             rate_limiter=_rate_limiter,
         )
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        return ChatAnthropic(**kwargs)
 
     if provider == "openai":
         from langchain_openai import ChatOpenAI
 
         key = api_key or os.getenv("OPENAI_API_KEY")
         LOGGER.debug("Creating ChatOpenAI with model=%s", model_name)
-        return ChatOpenAI(
+        kwargs: dict = dict(
             model=model_name,
             api_key=key,
             rate_limiter=_rate_limiter,
         )
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        return ChatOpenAI(**kwargs)
 
     raise ValueError(f"Unsupported provider: {provider}")

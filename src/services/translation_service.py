@@ -376,6 +376,54 @@ class TranslationService:
         return max(1, min(total_paragraphs, batch_size))
 
     @staticmethod
+    def _try_rule_based_distribution(
+        group_texts: list[str],
+        translation: str,
+    ) -> list[ColoredSegment] | None:
+        """Try to distribute translated text using deterministic string matching.
+
+        Only handles the simple case where a numeric/symbol token from one group
+        appears verbatim at the START or END of the translated text, so the split
+        point is unambiguous.
+
+        Returns:
+            List of ColoredSegment if rule-based split succeeded, else None.
+        """
+        if len(group_texts) != 2:
+            return None
+
+        for anchor_idx in range(2):
+            anchor = group_texts[anchor_idx].strip()
+            if not anchor or len(anchor) < 2:
+                continue
+            if not any(ch.isdigit() or ch in "$%€£¥#@&+" for ch in anchor):
+                continue
+
+            other_idx = 1 - anchor_idx
+
+            # Case 1: anchor at the end of translation
+            if translation.endswith(anchor):
+                before = translation[: len(translation) - len(anchor)]
+                segments = [
+                    ColoredSegment(text=before, group_index=other_idx),
+                    ColoredSegment(text=anchor, group_index=anchor_idx),
+                ]
+                if "".join(s.text for s in segments) == translation:
+                    return segments
+
+            # Case 2: anchor at the start of translation
+            if translation.startswith(anchor):
+                after = translation[len(anchor):]
+                segments = [
+                    ColoredSegment(text=anchor, group_index=anchor_idx),
+                    ColoredSegment(text=after, group_index=other_idx),
+                ]
+                if "".join(s.text for s in segments) == translation:
+                    return segments
+
+        return None
+
+    @staticmethod
     def _fix_color_distributions(
         paragraphs,
         translated_texts: list[str],
@@ -383,6 +431,11 @@ class TranslationService:
         model_name: str | None = None,
     ) -> dict[int, list[ColoredSegment]] | None:
         """Detect multi-color paragraphs and distribute translated text by meaning.
+
+        Uses a three-tier approach:
+        1. Rule-based matching for simple cases (no LLM needed)
+        2. LLM-based distribution in batches
+        3. One retry for paragraphs that failed validation
 
         Args:
             paragraphs: List of ParagraphInfo objects.
@@ -405,7 +458,6 @@ class TranslationService:
             groups = _group_runs_by_format(runs)
             if len(groups) <= 1:
                 continue
-            # Collect the original text per group
             group_texts = [
                 "".join(run.text for run in group) for group in groups
             ]
@@ -417,8 +469,30 @@ class TranslationService:
 
         LOGGER.info("Found %d multi-color paragraphs for color distribution.", len(candidates))
 
-        original_groups = [c[1] for c in candidates]
-        translations_for_dist = [c[2] for c in candidates]
+        result: dict[int, list[ColoredSegment]] = {}
+
+        # --- Tier 1: Rule-based distribution for simple cases ---
+        llm_candidates: list[tuple[int, list[str], str]] = []
+        rule_count = 0
+        for para_idx, group_texts, translation in candidates:
+            rule_result = TranslationService._try_rule_based_distribution(
+                group_texts, translation,
+            )
+            if rule_result is not None:
+                result[para_idx] = rule_result
+                rule_count += 1
+            else:
+                llm_candidates.append((para_idx, group_texts, translation))
+
+        if rule_count:
+            LOGGER.info("Rule-based color distribution resolved %d/%d paragraphs.", rule_count, len(candidates))
+
+        if not llm_candidates:
+            return result if result else None
+
+        # --- Tier 2: LLM-based distribution ---
+        original_groups = [c[1] for c in llm_candidates]
+        translations_for_dist = [c[2] for c in llm_candidates]
 
         distributions = distribute_colors(
             original_groups, translations_for_dist,
@@ -427,18 +501,18 @@ class TranslationService:
 
         if distributions is None:
             LOGGER.warning("Color distribution chain returned None; using fallback for all.")
-            return None
-
-        result: dict[int, list[ColoredSegment]] = {}
-        for (para_idx, group_texts, translation), dist in zip(candidates, distributions):
-            validated = _validate_colored_segments(
-                segments=dist,
-                translation=translation,
-                num_groups=len(group_texts),
-                para_idx=para_idx,
-            )
-            if validated is not None:
-                result[para_idx] = validated
+        else:
+            for (para_idx, group_texts, translation), dist in zip(llm_candidates, distributions):
+                if dist is None:
+                    continue
+                validated = _validate_colored_segments(
+                    segments=dist,
+                    translation=translation,
+                    num_groups=len(group_texts),
+                    para_idx=para_idx,
+                )
+                if validated is not None:
+                    result[para_idx] = validated
 
         LOGGER.info(
             "Color distribution validated %d/%d paragraphs.",
