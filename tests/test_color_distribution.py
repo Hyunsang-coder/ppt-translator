@@ -718,5 +718,110 @@ class ApplyTranslationsColoredSegmentsTestCase(unittest.TestCase):
         self.assertEqual(run2.text, "")
 
 
+class RuleBasedDistributionTestCase(unittest.TestCase):
+    """Tests for _try_rule_based_distribution in TranslationService."""
+
+    def _try(self, group_texts, translation):
+        from src.services.translation_service import TranslationService
+        return TranslationService._try_rule_based_distribution(group_texts, translation)
+
+    def test_number_anchor_at_end(self) -> None:
+        """Number/symbol token at end should be matched deterministically."""
+        result = self._try(["Total: ", "$1,500"], "합계: $1,500")
+        self.assertIsNotNone(result)
+        joined = "".join(s.text for s in result)
+        self.assertEqual(joined, "합계: $1,500")
+        # $1,500 should map to group 1
+        for seg in result:
+            if "$1,500" in seg.text:
+                self.assertEqual(seg.group_index, 1)
+
+    def test_percentage_anchor(self) -> None:
+        """Percentage value should be matched."""
+        result = self._try(["Revenue increased by ", "20%"], "매출이 20% 증가했습니다")
+        self.assertIsNotNone(result)
+        joined = "".join(s.text for s in result)
+        self.assertEqual(joined, "매출이 20% 증가했습니다")
+
+    def test_no_anchor_returns_none(self) -> None:
+        """Pure text groups without numbers/symbols should not be rule-matched."""
+        result = self._try(["Important ", "notice"], "중요 공지")
+        self.assertIsNone(result)
+
+    def test_three_groups_returns_none(self) -> None:
+        """Only 2-group paragraphs are handled by rule-based."""
+        result = self._try(["A", "B", "C"], "가나다")
+        self.assertIsNone(result)
+
+    def test_short_anchor_skipped(self) -> None:
+        """Single-char anchors should be skipped (too ambiguous)."""
+        result = self._try(["Price: ", "$"], "가격: $")
+        self.assertIsNone(result)
+
+    def test_anchor_not_found_returns_none(self) -> None:
+        """If anchor text is not in translation, return None."""
+        result = self._try(["Cost: ", "100USD"], "비용: 100달러")
+        self.assertIsNone(result)
+
+
+class DistributeColorsBatchingTestCase(unittest.TestCase):
+    """Tests for distribute_colors batching behavior."""
+
+    @patch("src.chains.color_distribution_chain._invoke_batch")
+    def test_single_batch_success(self, mock_invoke) -> None:
+        """Single small batch should work normally."""
+        from src.chains.color_distribution_chain import ColoredSegment, distribute_colors
+
+        mock_invoke.return_value = [
+            [ColoredSegment(text="합계: ", group_index=0),
+             ColoredSegment(text="$1,500", group_index=1)],
+        ]
+
+        result = distribute_colors(
+            [["Total: ", "$1,500"]],
+            ["합계: $1,500"],
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), 1)
+        mock_invoke.assert_called_once()
+
+    @patch("src.chains.color_distribution_chain._invoke_batch")
+    def test_partial_batch_failure(self, mock_invoke) -> None:
+        """If one batch fails, others should still succeed."""
+        from src.chains.color_distribution_chain import ColoredSegment, distribute_colors, _BATCH_SIZE
+
+        seg = [ColoredSegment(text="text", group_index=0)]
+        # Create enough items to span 2 batches
+        n = _BATCH_SIZE + 1
+        groups = [["a", "b"]] * n
+        texts = ["번역"] * n
+
+        # First batch succeeds, second fails
+        mock_invoke.side_effect = [
+            [seg] * _BATCH_SIZE,  # first batch succeeds
+            None,  # second batch fails
+        ]
+
+        result = distribute_colors(groups, texts)
+        self.assertIsNotNone(result)  # Should not be None since first batch worked
+        # First batch items should have results
+        self.assertIsNotNone(result[0])
+        # Second batch item should be None
+        self.assertIsNone(result[_BATCH_SIZE])
+
+    @patch("src.chains.color_distribution_chain._invoke_batch")
+    def test_all_batches_fail(self, mock_invoke) -> None:
+        """If all batches fail, should return None."""
+        from src.chains.color_distribution_chain import distribute_colors
+
+        mock_invoke.return_value = None
+
+        result = distribute_colors(
+            [["a", "b"], ["c", "d"]],
+            ["번역1", "번역2"],
+        )
+        self.assertIsNone(result)
+
+
 if __name__ == "__main__":
     unittest.main()
