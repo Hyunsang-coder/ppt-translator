@@ -413,6 +413,8 @@ async def _run_translation_job(
             output_filename=download_name,
         )
 
+    except asyncio.CancelledError:
+        LOGGER.info("Translation job %s was cancelled", job_id)
     except Exception as exc:
         LOGGER.exception("Translation job %s failed: %s", job_id, exc)
         job_manager.fail_job(job_id, f"번역 중 오류가 발생했습니다: {str(exc)}")

@@ -235,13 +235,16 @@ class TestJobManager:
         manager.delete_job(job.id)
 
     def test_job_deletion(self):
-        """Test job deletion."""
-        from src.services import get_job_manager, JobType
+        """Test job cancellation (job stays in store with cancelled state)."""
+        from src.services import get_job_manager, JobType, JobState
 
         manager = get_job_manager()
         job = manager.create_job(JobType.TRANSLATION)
         job_id = job.id
 
         assert manager.delete_job(job_id) is True
-        assert manager.get_job(job_id) is None
-        assert manager.delete_job(job_id) is False  # Already deleted
+        # Job remains in store with cancelled state (cleaned up later)
+        cancelled_job = manager.get_job(job_id)
+        assert cancelled_job is not None
+        assert cancelled_job.state == JobState.CANCELLED
+        assert cancelled_job.completed_at is not None

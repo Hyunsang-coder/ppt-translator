@@ -102,18 +102,18 @@ class JobManager:
         return self._jobs.get(job_id)
 
     def delete_job(self, job_id: str) -> bool:
-        """Delete/cancel a job."""
+        """Cancel a job (keeps it in store for status queries; cleanup removes it later)."""
         job = self._jobs.get(job_id)
         if job is None:
             return False
 
         if job._task is not None and not job._task.done():
             job._task.cancel()
-            job.state = JobState.CANCELLED
-            job.add_event("cancelled", {"message": "Job cancelled by user"})
 
-        del self._jobs[job_id]
-        LOGGER.info("Deleted job %s", job_id)
+        job.state = JobState.CANCELLED
+        job.completed_at = time.time()
+        job.add_event("cancelled", {"message": "Job cancelled by user"})
+        LOGGER.info("Cancelled job %s", job_id)
         return True
 
     def update_job_progress(self, job_id: str, progress: TranslationProgress) -> None:
@@ -149,6 +149,11 @@ class JobManager:
         if job is None:
             return
 
+        # Don't overwrite terminal states (e.g. already cancelled)
+        if job.state in (JobState.CANCELLED, JobState.FAILED):
+            LOGGER.info("Job %s already %s, ignoring complete", job_id, job.state.value)
+            return
+
         job.state = JobState.COMPLETED
         job.completed_at = time.time()
         job.result = result
@@ -176,6 +181,11 @@ class JobManager:
         """Mark job as failed."""
         job = self._jobs.get(job_id)
         if job is None:
+            return
+
+        # Don't overwrite terminal states (e.g. already cancelled)
+        if job.state == JobState.CANCELLED:
+            LOGGER.info("Job %s already cancelled, ignoring failure", job_id)
             return
 
         job.state = JobState.FAILED
