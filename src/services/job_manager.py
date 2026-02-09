@@ -7,6 +7,7 @@ import io
 import logging
 import time
 import uuid
+from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional
@@ -14,6 +15,9 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 from src.services.models import TranslationProgress, TranslationResult, TranslationStatus
 
 LOGGER = logging.getLogger(__name__)
+
+# Maximum number of events retained per job
+_MAX_EVENTS = 500
 
 
 class JobType(str, Enum):
@@ -31,6 +35,9 @@ class JobState(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+
+_TERMINAL_STATES = frozenset({JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED})
 
 
 @dataclass
@@ -58,9 +65,10 @@ class Job:
     output_filename: Optional[str] = None
     error_message: Optional[str] = None
     extraction_result: Optional[str] = None  # For extraction jobs (markdown)
-    events: List[JobEvent] = field(default_factory=list)
+    events: deque = field(default_factory=lambda: deque(maxlen=_MAX_EVENTS))
     _task: Optional[asyncio.Task] = field(default=None, repr=False)
     _event_queue: Optional[asyncio.Queue] = field(default=None, repr=False)
+    _state_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
     def add_event(self, event_type: str, data: Dict[str, Any]) -> None:
         """Add an event and push to queue if available."""
@@ -101,17 +109,23 @@ class JobManager:
         """Get a job by ID."""
         return self._jobs.get(job_id)
 
-    def delete_job(self, job_id: str) -> bool:
+    async def delete_job(self, job_id: str) -> bool:
         """Cancel a job (keeps it in store for status queries; cleanup removes it later)."""
         job = self._jobs.get(job_id)
         if job is None:
             return False
 
-        if job._task is not None and not job._task.done():
-            job._task.cancel()
+        async with job._state_lock:
+            if job._task is not None and not job._task.done():
+                job._task.cancel()
+                try:
+                    await job._task
+                except (asyncio.CancelledError, Exception):
+                    pass
 
-        job.state = JobState.CANCELLED
-        job.completed_at = time.time()
+            job.state = JobState.CANCELLED
+            job.completed_at = time.time()
+
         job.add_event("cancelled", {"message": "Job cancelled by user"})
         LOGGER.info("Cancelled job %s", job_id)
         return True
@@ -136,7 +150,7 @@ class JobManager:
             },
         )
 
-    def complete_job(
+    async def complete_job(
         self,
         job_id: str,
         result: Optional[TranslationResult] = None,
@@ -149,17 +163,18 @@ class JobManager:
         if job is None:
             return
 
-        # Don't overwrite terminal states (e.g. already cancelled)
-        if job.state in (JobState.CANCELLED, JobState.FAILED):
-            LOGGER.info("Job %s already %s, ignoring complete", job_id, job.state.value)
-            return
+        async with job._state_lock:
+            # Don't overwrite terminal states (e.g. already cancelled)
+            if job.state in _TERMINAL_STATES:
+                LOGGER.info("Job %s already %s, ignoring complete", job_id, job.state.value)
+                return
 
-        job.state = JobState.COMPLETED
-        job.completed_at = time.time()
-        job.result = result
-        job.output_file = output_file
-        job.output_filename = output_filename
-        job.extraction_result = extraction_result
+            job.state = JobState.COMPLETED
+            job.completed_at = time.time()
+            job.result = result
+            job.output_file = output_file
+            job.output_filename = output_filename
+            job.extraction_result = extraction_result
 
         event_data: Dict[str, Any] = {"status": "completed"}
         if result:
@@ -177,20 +192,22 @@ class JobManager:
         job.add_event("complete", event_data)
         LOGGER.info("Job %s completed", job_id)
 
-    def fail_job(self, job_id: str, error_message: str) -> None:
+    async def fail_job(self, job_id: str, error_message: str) -> None:
         """Mark job as failed."""
         job = self._jobs.get(job_id)
         if job is None:
             return
 
-        # Don't overwrite terminal states (e.g. already cancelled)
-        if job.state == JobState.CANCELLED:
-            LOGGER.info("Job %s already cancelled, ignoring failure", job_id)
-            return
+        async with job._state_lock:
+            # Don't overwrite terminal states (e.g. already cancelled)
+            if job.state in _TERMINAL_STATES:
+                LOGGER.info("Job %s already %s, ignoring failure", job_id, job.state.value)
+                return
 
-        job.state = JobState.FAILED
-        job.completed_at = time.time()
-        job.error_message = error_message
+            job.state = JobState.FAILED
+            job.completed_at = time.time()
+            job.error_message = error_message
+
         job.add_event("error", {"message": error_message})
         LOGGER.error("Job %s failed: %s", job_id, error_message)
 
@@ -214,11 +231,11 @@ class JobManager:
             return
 
         # Send any existing events first
-        for event in job.events:
+        for event in list(job.events):
             yield event
 
         # If job is already done, stop streaming
-        if job.state in (JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED):
+        if job.state in _TERMINAL_STATES:
             return
 
         # Stream new events
@@ -231,7 +248,7 @@ class JobManager:
             if time.time() - start_time > timeout:
                 break
 
-            if job.state in (JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED):
+            if job.state in _TERMINAL_STATES:
                 # Drain remaining events
                 while not queue.empty():
                     try:
@@ -255,7 +272,7 @@ class JobManager:
 
         to_remove = []
         for job_id, job in self._jobs.items():
-            if job.state in (JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED):
+            if job.state in _TERMINAL_STATES:
                 if job.completed_at and (now - job.completed_at) > max_age:
                     to_remove.append(job_id)
 

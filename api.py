@@ -391,11 +391,11 @@ async def _run_translation_job(
         result = await loop.run_in_executor(None, service.translate, request)
 
         if not result.success:
-            job_manager.fail_job(job_id, result.error_message or "Translation failed")
+            await job_manager.fail_job(job_id, result.error_message or "Translation failed")
             return
 
         if result.output_file is None:
-            job_manager.fail_job(job_id, "Translation succeeded but no output file was generated")
+            await job_manager.fail_job(job_id, "Translation succeeded but no output file was generated")
             return
 
         # Generate output filename using settings
@@ -406,7 +406,7 @@ async def _run_translation_job(
             model=model,
         )
 
-        job_manager.complete_job(
+        await job_manager.complete_job(
             job_id,
             result=result,
             output_file=result.output_file,
@@ -417,7 +417,7 @@ async def _run_translation_job(
         LOGGER.info("Translation job %s was cancelled", job_id)
     except Exception as exc:
         LOGGER.exception("Translation job %s failed: %s", job_id, exc)
-        job_manager.fail_job(job_id, f"번역 중 오류가 발생했습니다: {str(exc)}")
+        await job_manager.fail_job(job_id, f"번역 중 오류가 발생했습니다: {str(exc)}")
 
 
 @app.post("/api/v1/jobs", response_model=JobCreateResponse)
@@ -671,7 +671,7 @@ async def download_job_result(job_id: str) -> Response:
 async def cancel_job(job_id: str) -> Dict[str, str]:
     """Cancel/delete a job."""
     job_manager = get_job_manager()
-    success = job_manager.delete_job(job_id)
+    success = await job_manager.delete_job(job_id)
 
     if not success:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -1046,7 +1046,8 @@ async def translate_ppt(
     )
 
     service = TranslationService(settings=settings)
-    result = service.translate(request)
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, service.translate, request)
 
     if not result.success:
         raise HTTPException(

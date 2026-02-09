@@ -231,10 +231,8 @@ class TestJobManager:
         assert retrieved is not None
         assert retrieved.id == job.id
 
-        # Cleanup
-        manager.delete_job(job.id)
-
-    def test_job_deletion(self):
+    @pytest.mark.asyncio
+    async def test_job_deletion(self):
         """Test job cancellation (job stays in store with cancelled state)."""
         from src.services import get_job_manager, JobType, JobState
 
@@ -242,7 +240,7 @@ class TestJobManager:
         job = manager.create_job(JobType.TRANSLATION)
         job_id = job.id
 
-        assert manager.delete_job(job_id) is True
+        assert await manager.delete_job(job_id) is True
         # Job remains in store with cancelled state (cleaned up later)
         cancelled_job = manager.get_job(job_id)
         assert cancelled_job is not None

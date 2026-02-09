@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import io
 import logging
 from typing import Optional
@@ -119,8 +120,6 @@ def sanitize_html_content(text: str, max_length: int = 10000) -> str:
     Returns:
         Sanitized text safe for HTML rendering.
     """
-    import html
-
     if not text:
         return ""
 
@@ -128,14 +127,7 @@ def sanitize_html_content(text: str, max_length: int = 10000) -> str:
     if len(text) > max_length:
         text = text[:max_length] + "..."
 
-    # Escape HTML special characters
-    escaped = html.escape(text, quote=True)
-
-    # Remove any remaining script tags and event handlers (defense in depth)
-    import re
-    escaped = re.sub(r"<script[^>]*>.*?</script>", "", escaped, flags=re.IGNORECASE | re.DOTALL)
-    escaped = re.sub(r"javascript:", "", escaped, flags=re.IGNORECASE)
-    escaped = re.sub(r"on\w+\s*=", "", escaped, flags=re.IGNORECASE)
-
-    return escaped
+    # Escape HTML special characters — sufficient for XSS prevention
+    # since all < > " ' & are converted to HTML entities.
+    return html.escape(text, quote=True)
 
