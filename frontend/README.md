@@ -1,36 +1,65 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# PPT 번역캣 — Frontend
+
+Next.js 16 기반의 PPT 번역 웹 애플리케이션 프론트엔드입니다.
+
+## Tech Stack
+
+- **Next.js 16** (App Router) + **React 19**
+- **TypeScript 5**
+- **Tailwind CSS 4**
+- **Zustand 5** (상태 관리)
+- **Radix UI** (접근성 컴포넌트)
+- **Lucide React** (아이콘)
 
 ## Getting Started
 
-First, run the development server:
-
 ```bash
+# 의존성 설치
+npm install
+
+# 개발 서버 실행 (http://localhost:3000)
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+
+# 프로덕션 빌드
+npm run build
+
+# 타입 체크
+npx tsc --noEmit
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Environment
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+`.env.local` 파일 설정:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```env
+# 백엔드 API URL (로컬 개발 시)
+NEXT_PUBLIC_API_URL=http://localhost:8000
 
-## Learn More
+# Vercel 배포 시에는 비워두면 rewrites를 통해 프록시됨
+# NEXT_PUBLIC_API_URL=
+```
 
-To learn more about Next.js, take a look at the following resources:
+## Project Structure
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```
+src/
+├── app/                  # Pages (App Router)
+│   ├── page.tsx          # Home → /translate 리다이렉트
+│   ├── translate/        # 번역 페이지
+│   ├── extract/          # 텍스트 추출 페이지
+│   ├── layout.tsx        # Root layout + ThemeProvider
+│   └── globals.css       # CSS variables, OKLch colors
+├── components/
+│   ├── shared/           # Header, FileUploader
+│   ├── translation/      # TranslationForm, SettingsPanel, ProgressPanel, LogViewer
+│   ├── extraction/       # ExtractionForm, MarkdownPreview
+│   └── ui/               # Shadcn/Radix 컴포넌트
+├── hooks/                # useTranslation, useExtraction, useConfig
+├── stores/               # Zustand stores (translation, extraction)
+├── lib/                  # API client, SSE client, utils
+└── types/                # TypeScript 타입 정의
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Deployment
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Vercel에 배포되며, `vercel.json`의 rewrites를 통해 `/api/*` 요청을 EC2 백엔드로 프록시합니다.

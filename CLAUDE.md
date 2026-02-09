@@ -128,11 +128,11 @@ cd frontend && npx tsc --noEmit
 
 ### Utilities (`src/utils/`)
 - `config.py`: Settings dataclass loaded from environment
-- `glossary_loader.py`: Excel glossary loading and term substitution (pre/post translation)
+- `glossary_loader.py`: Excel glossary loading and term substitution (pre/post translation). Uses word boundary (`\b`) matching for Latin terms to prevent partial matches (e.g., "AI" won't match inside "MAIL"), falls back to plain string replace for CJK terms and terms with special characters (e.g., "C++", ".NET")
 - `language_detector.py`: Uses langdetect with Korean↔English inference rules
 - `repetition.py`: Deduplicates repeated phrases to reduce API calls
 - `helpers.py`: Batch chunking, text segmentation for run distribution
-- `security.py`: File validation, filename sanitization, HTML content escaping
+- `security.py`: File validation, filename sanitization (preserves Unicode/spaces, collapses whitespace), HTML content escaping
 
 ### UI Components (`src/ui/`)
 - `progress_tracker.py`: Streamlit progress bar and log updates
@@ -165,7 +165,7 @@ Next.js 16 with React 19, TypeScript 5, Tailwind CSS 4, and Zustand 5 state mana
 - `utils.ts`: Utility functions (cn for classnames)
 
 #### Hooks (`src/hooks/`)
-- `useTranslation.ts`: Translation workflow logic (includes auto context/instructions generation with markdown caching via file key, `retranslate()` for re-running with same file/settings). Uses `useTranslationStore.getState()` for `jobId` in `downloadResult`/`cancelTranslation` to avoid stale closure references.
+- `useTranslation.ts`: Translation workflow logic (includes auto context/instructions generation with markdown caching via file key, `retranslate()` for re-running with same file/settings). Uses `useTranslationStore.getState()` for `jobId` in `downloadResult`/`cancelTranslation` to avoid stale closure references. SSE connection is cleaned up on component unmount via `useEffect` to prevent memory leaks.
 - `useExtraction.ts`: Extraction workflow logic
 - `useConfig.ts`: Configuration data fetching with graceful fallback (fallback models/languages when backend unavailable). Backend connection errors are handled at API call time rather than pre-checked.
 
@@ -315,6 +315,22 @@ Lightweight models are used for auto-generating context and instructions:
 - **next-themes**: Dark/light mode toggle
 - **sonner**: Toast notifications
 - **class-variance-authority + tailwind-merge + clsx**: Component styling utilities
+
+## Claude Code Commands & Agents
+
+### Custom Commands (`.claude/commands/`)
+- `/commit` - Review changes and create well-formed git commit
+- `/push` - Push local commits to remote with safety checks
+- `/dev-backend` - Start FastAPI development server on port 8000
+- `/dev-frontend` - Start Next.js development server
+- `/deploy-ec2` - Deploy backend to EC2 (git pull + docker compose rebuild + health check)
+- `/check-ec2` - Check EC2 server status without deploying (SSH connection, container status, health)
+- `/update-docs` - Analyze codebase and update CLAUDE.md
+
+### Custom Agents (`.claude/agents/`)
+- `code-reviewer` - Reviews code changes for quality, security, and best practices
+- `test-runner` - Runs tests and reports results concisely
+- `translation-qa` - Reviews translation logic and prompt quality
 
 ## Claude Code Customization Best Practices
 

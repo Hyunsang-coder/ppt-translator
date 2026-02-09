@@ -17,7 +17,24 @@
       "WebFetch(domain:docs.anthropic.com)",
       "WebFetch(domain:python.langchain.com)",
       "WebFetch(domain:reference.langchain.com)",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "Bash(git checkout:*)",
+      "Bash(git merge:*)",
+      "Bash(git branch:*)",
+      "Bash(git push:*)",
+      "Bash(npx tsc:*)",
+      "Bash(git -C /Users/joo/Documents/GitHub/ppt-translator add frontend/src/components/translation/TranslationForm.tsx frontend/src/hooks/useTranslation.ts frontend/src/stores/translation-store.ts src/core/ppt_writer.py)",
+      "Bash(git -C /Users/joo/Documents/GitHub/ppt-translator commit -m \"$\\(cat <<''EOF''\nAdd retranslate, fix download bug, round font sizes\n\n- Retranslate button now reuses current file/settings instead of\n  full reset, allowing quick iteration on context/style changes\n- Fix download/cancel using stale jobId from closure by reading\n  latest value from store directly\n- Round shrunk font sizes to nearest whole point to avoid fractional\n  pt values in output PPTX\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git -C /Users/joo/Documents/GitHub/ppt-translator status)",
+      "Bash(git -C /Users/joo/Documents/GitHub/ppt-translator push)",
+      "Bash(git -C /Users/joo/Documents/GitHub/ppt-translator diff)",
+      "Bash(git -C /Users/joo/Documents/GitHub/ppt-translator log --oneline -3)",
+      "Bash(git -C /Users/joo/Documents/GitHub/ppt-translator add frontend/src/components/extraction/ExtractionForm.tsx frontend/src/components/translation/TranslationForm.tsx)",
+      "Bash(git -C /Users/joo/Documents/GitHub/ppt-translator commit -m \"$\\(cat <<''EOF''\nRemove backend connection pre-checks\n\nRely on actual API call errors instead of stale isBackendConnected\nsnapshot, which can produce false positives \\(e.g. behind Vercel proxy\\).\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git -C /Users/joo/Documents/GitHub/ppt-translator diff -- ':!.claude')",
+      "Bash(git -C /Users/joo/Documents/GitHub/ppt-translator diff CLAUDE.md frontend/src/hooks/useConfig.ts)",
+      "Bash(ssh:*)",
+      "Bash(python3:*)"
     ]
   }
 }
