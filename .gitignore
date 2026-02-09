@@ -15,14 +15,11 @@ __pycache__/
 venv/
 .venv/
 
-# Streamlit
-.streamlit/
+# Claude Code
+.claude/settings.local.json
 
 # Cursor
 .cursor/
-
-# Cursor rules (optional: ignore all)
-.cursor/rules/
 
 # OS
 .DS_Store
