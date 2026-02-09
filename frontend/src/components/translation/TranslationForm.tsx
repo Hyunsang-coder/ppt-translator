@@ -14,7 +14,7 @@ import { Play, XCircle, Download, RefreshCw, AlertCircle } from "lucide-react";
 export function TranslationForm() {
   const [startTime, setStartTime] = useState<number | null>(null);
   const [filenameError, setFilenameError] = useState<string | null>(null);
-  const { config, getModelsForProvider, isBackendConnected } = useConfig();
+  const { config, getModelsForProvider } = useConfig();
   const {
     pptFile,
     glossaryFile,
@@ -58,11 +58,6 @@ export function TranslationForm() {
   const isTargetLangEmpty = !settings.targetLang || settings.targetLang === "Auto";
 
   const handleStart = async () => {
-    // 백엔드 미연결 시 경고
-    if (!isBackendConnected) {
-      setFilenameError("백엔드 서버에 연결할 수 없습니다. 서버 상태를 확인해주세요.");
-      return;
-    }
     // 타겟 언어 미선택 시 경고
     if (isTargetLangEmpty) {
       setFilenameError("타겟 언어를 선택해주세요.");
@@ -79,10 +74,6 @@ export function TranslationForm() {
   };
 
   const handleRetranslate = async () => {
-    if (!isBackendConnected) {
-      setFilenameError("백엔드 서버에 연결할 수 없습니다. 서버 상태를 확인해주세요.");
-      return;
-    }
     if (isTargetLangEmpty) {
       setFilenameError("타겟 언어를 선택해주세요.");
       return;

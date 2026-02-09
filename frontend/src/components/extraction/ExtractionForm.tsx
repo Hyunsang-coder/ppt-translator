@@ -15,10 +15,10 @@ import { FileUploader } from "@/components/shared/FileUploader";
 import { MarkdownPreview } from "./MarkdownPreview";
 import { useExtraction } from "@/hooks/useExtraction";
 import { useConfig } from "@/hooks/useConfig";
-import { Play, Copy, Download, RefreshCw, XCircle, WifiOff } from "lucide-react";
+import { Play, Copy, Download, RefreshCw, XCircle } from "lucide-react";
 
 export function ExtractionForm() {
-  const { config, isBackendConnected } = useConfig();
+  const { config } = useConfig();
   const {
     pptFile,
     settings,
@@ -47,21 +47,6 @@ export function ExtractionForm() {
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      {/* Backend Connection Warning */}
-      {!isBackendConnected && (
-        <div className="col-span-full">
-          <div className="p-3 rounded-lg border border-warning/30 bg-warning/10 flex items-center gap-3">
-            <WifiOff className="w-5 h-5 text-warning flex-shrink-0" />
-            <div className="text-sm">
-              <span className="font-medium text-warning">백엔드 미연결</span>
-              <span className="text-muted-foreground ml-2">
-                서버가 연결되면 추출 기능을 사용할 수 있습니다.
-              </span>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Left Column: File Upload & Settings */}
       <div className="space-y-4">
         <FileUploader
