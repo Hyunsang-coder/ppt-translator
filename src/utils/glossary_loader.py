@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 from typing import Dict, Iterable, List
 
 import pandas as pd
@@ -87,6 +88,19 @@ class GlossaryLoader:
         return "\n".join(lines)
 
     @staticmethod
+    def _is_latin(term: str) -> bool:
+        """Check if a term is purely ASCII/Latin (benefits from word boundary matching)."""
+        return all(ord(ch) < 128 for ch in term if not ch.isspace())
+
+    @staticmethod
+    def _replace_term(text: str, source: str, target: str) -> str:
+        """Replace a glossary term using word boundaries for Latin terms, plain replace for CJK."""
+        if GlossaryLoader._is_latin(source) and re.match(r"^[\w-]+$", source):
+            pattern = r"\b" + re.escape(source) + r"\b"
+            return re.sub(pattern, target, text)
+        return text.replace(source, target)
+
+    @staticmethod
     def apply_glossary_to_texts(texts: Iterable[str], glossary: Dict[str, str] | None) -> List[str]:
         """Apply glossary replacements to an iterable of texts.
 
@@ -105,8 +119,7 @@ class GlossaryLoader:
         for text in texts:
             updated = text
             for source, target in glossary.items():
-                if source in updated:
-                    updated = updated.replace(source, target)
+                updated = GlossaryLoader._replace_term(updated, source, target)
             transformed_texts.append(updated)
         return transformed_texts
 
@@ -126,5 +139,5 @@ class GlossaryLoader:
             return text
         updated = text
         for source, target in glossary.items():
-            updated = updated.replace(source, target)
+            updated = GlossaryLoader._replace_term(updated, source, target)
         return updated

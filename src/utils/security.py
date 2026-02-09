@@ -88,8 +88,10 @@ def sanitize_filename(filename: str, max_length: int = MAX_FILENAME_LENGTH, fall
     if not filename:
         return fallback
 
-    # Remove path separators and dangerous characters
-    sanitized = "".join(ch for ch in filename if ch.isalnum() or ch in ("-", "_", "."))
+    # Remove path separators and dangerous characters, keep spaces
+    sanitized = "".join(ch for ch in filename if ch.isalnum() or ch in ("-", "_", ".", " "))
+    # Collapse multiple spaces
+    sanitized = " ".join(sanitized.split())
     
     # Limit length
     if len(sanitized) > max_length:

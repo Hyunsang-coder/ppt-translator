@@ -2,7 +2,7 @@
  * Hook for managing translation workflow
  */
 
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { apiClient } from "@/lib/api-client";
 import { createSSEClient, SSEClient } from "@/lib/sse-client";
 import { useTranslationStore } from "@/stores/translation-store";
@@ -50,6 +50,13 @@ export function useTranslation() {
   } = useTranslationStore();
 
   const sseClientRef = useRef<SSEClient | null>(null);
+
+  // Cleanup SSE connection on unmount
+  useEffect(() => {
+    return () => {
+      sseClientRef.current?.close();
+    };
+  }, []);
 
   // Extract markdown with caching
   const extractMarkdown = useCallback(async (): Promise<string | null> => {
@@ -274,7 +281,8 @@ export function useTranslation() {
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      // Delay revoke to ensure download starts
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
 
       setResultFilename(filename);
       addLog(`다운로드 완료: ${filename}`, "success");
