@@ -34,7 +34,14 @@
       "Bash(git -C /Users/joo/Documents/GitHub/ppt-translator diff -- ':!.claude')",
       "Bash(git -C /Users/joo/Documents/GitHub/ppt-translator diff CLAUDE.md frontend/src/hooks/useConfig.ts)",
       "Bash(ssh:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(grep:*)",
+      "Bash(git -C /Users/joo/Documents/GitHub/ppt-translator diff api.py src/services/job_manager.py tests/test_api.py)",
+      "Bash(git -C /Users/joo/Documents/GitHub/ppt-translator add api.py src/services/job_manager.py tests/test_api.py)",
+      "Bash(git -C /Users/joo/Documents/GitHub/ppt-translator commit -m \"$\\(cat <<''EOF''\nFix download 404 after cancel-retry by preserving cancelled jobs\n\nPreviously delete_job\\(\\) immediately removed jobs from the in-memory\nstore, causing 404 errors when retrying after cancellation. Now\ncancelled jobs stay in store \\(cleaned up after 1h\\) and terminal state\nguards prevent race conditions where complete/fail could overwrite\na cancelled state. Also handles asyncio.CancelledError in the\nbackground translation task.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git -C /Users/joo/Documents/GitHub/ppt-translator log origin/master..HEAD --oneline)",
+      "Bash(git -C /Users/joo/Documents/GitHub/ppt-translator log --oneline -20)",
+      "Bash(git -C /Users/joo/Documents/GitHub/ppt-translator log --oneline -30 --pretty=format:'%h %ad %s' --date=short)"
     ]
   }
 }

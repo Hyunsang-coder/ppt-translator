@@ -118,6 +118,8 @@ cd frontend && npx tsc --noEmit
   - `JobState`: PENDING / RUNNING / COMPLETED / FAILED / CANCELLED
   - `JobEvent`: SSE event types for progress updates
   - `get_job_manager()`: Global singleton accessor
+  - Cancellation keeps jobs in store (state=CANCELLED, completed_at set) for status queries; `_cleanup_old_jobs` removes after 1h
+  - Terminal state guards: `complete_job`/`fail_job` skip if already CANCELLED, preventing race conditions
 
 ### Translation Chain (`src/chains/`)
 - `llm_factory.py`: Factory for creating LLM instances (OpenAI/Anthropic) with provider-specific configuration, includes built-in rate limiting via `InMemoryRateLimiter`
@@ -229,6 +231,7 @@ Width expansion is applied before text fit for all non-NONE modes. Font sizes ar
 - Translation chain uses tenacity with exponential backoff (3 attempts)
 - Structured output via Pydantic ensures type-safe translation parsing (no JSON fallback needed)
 - LangChain batch API handles concurrent execution with built-in rate limiting
+- Background translation tasks catch `asyncio.CancelledError` separately from `Exception` to avoid treating cancellation as failure
 - Frontend relies on API call-time error handling (catch blocks) rather than pre-flight backend connection checks, avoiding false positives from stale health snapshots (e.g. behind Vercel proxy)
 
 ### API Usage

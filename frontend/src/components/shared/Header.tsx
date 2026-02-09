@@ -4,12 +4,12 @@ import { useTheme } from "next-themes";
 import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { Moon, Sun, Languages, FileText } from "lucide-react";
+import { Moon, Sun, Languages, FileText, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 interface HeaderProps {
-  activeTab: "translate" | "extract";
+  activeTab: "translate" | "extract" | "how-it-works";
 }
 
 export function Header({ activeTab }: HeaderProps) {
@@ -67,6 +67,12 @@ export function Header({ activeTab }: HeaderProps) {
                     <span>텍스트 추출</span>
                   </Link>
                 </TabsTrigger>
+                <TabsTrigger value="how-it-works" asChild className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-muted-foreground">
+                  <Link href="/how-it-works" className="flex items-center gap-2">
+                    <Info className="w-4 h-4" />
+                    <span>작동 원리</span>
+                  </Link>
+                </TabsTrigger>
               </TabsList>
             </Tabs>
 
@@ -82,6 +88,11 @@ export function Header({ activeTab }: HeaderProps) {
                   <TabsTrigger value="extract" asChild className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-muted-foreground">
                     <Link href="/extract" className="px-3">
                       <FileText className="w-4 h-4" />
+                    </Link>
+                  </TabsTrigger>
+                  <TabsTrigger value="how-it-works" asChild className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-muted-foreground">
+                    <Link href="/how-it-works" className="px-3">
+                      <Info className="w-4 h-4" />
                     </Link>
                   </TabsTrigger>
                 </TabsList>
