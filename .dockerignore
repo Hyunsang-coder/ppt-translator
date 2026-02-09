@@ -9,7 +9,7 @@ venv/
 # Frontend (deployed separately)
 frontend/
 
-# Streamlit app (not needed for API)
+# Legacy files (not needed for API)
 app.py
 assets/
 
