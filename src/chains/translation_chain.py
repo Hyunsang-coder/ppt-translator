@@ -146,6 +146,15 @@ def translate_with_progress(
     translations: List[str] = []
     for index, (batch, result) in enumerate(zip(batches, ordered_results), start=1):
         expected_count = len(batch.get("paragraphs", []))
+
+        if result is None:
+            # Should not happen after _batch_translate_with_retry validates,
+            # but guard against it to avoid silent data loss.
+            raise RuntimeError(
+                f"Batch {index} of {len(batches)} returned no result "
+                "after all retry attempts"
+            )
+
         parts = result.translations
 
         if len(parts) != expected_count:
@@ -188,6 +197,16 @@ def _batch_translate_with_retry(
     Returns:
         List of TranslationOutput results in input order.
     """
+    # Reset progress for this attempt — on the first call this is
+    # redundant (translate_with_progress already called reset), but on
+    # tenacity retries it prevents batch_completed() from double-counting.
+    if progress_tracker is not None:
+        total_sentences = sum(len(b.get("paragraphs", [])) for b in batches)
+        progress_tracker.reset(
+            total_batches=total_batches,
+            total_sentences=total_sentences,
+        )
+
     LOGGER.debug("Invoking batch translation for %d batches.", len(batches))
     ordered_results: List[TranslationOutput | None] = [None] * len(batches)
 
@@ -204,6 +223,14 @@ def _batch_translate_with_retry(
             "Completed batch %d/%d.",
             completed_idx + 1,
             total_batches,
+        )
+
+    # Fail-fast: if any batch yielded no result, raise so tenacity can retry
+    missing = [i for i, r in enumerate(ordered_results) if r is None]
+    if missing:
+        raise RuntimeError(
+            f"{len(missing)} of {len(batches)} batch(es) returned no result "
+            f"(batch indices: {missing})"
         )
 
     return ordered_results

@@ -68,11 +68,49 @@ class Job:
     events: deque = field(default_factory=lambda: deque(maxlen=_MAX_EVENTS))
     _task: Optional[asyncio.Task] = field(default=None, repr=False)
     _event_queue: Optional[asyncio.Queue] = field(default=None, repr=False)
+    _loop: Optional[asyncio.AbstractEventLoop] = field(default=None, repr=False)
     _state_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
     def add_event(self, event_type: str, data: Dict[str, Any]) -> None:
-        """Add an event and push to queue if available."""
+        """Add an event to history deque and async queue.
+
+        Thread-safe: both deque append and queue put are guaranteed to
+        run on the event-loop thread to prevent ``RuntimeError: deque
+        mutated during iteration`` when :meth:`stream_events` reads
+        the deque concurrently.
+
+        When no event loop is available (sync context), the deque is
+        appended directly since no concurrent SSE streaming is possible.
+        """
         event = JobEvent(event_type=event_type, data=data)
+
+        if self._loop is None:
+            # No async context — direct append, no concurrent access
+            self.events.append(event)
+            return
+
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+
+        if running_loop is self._loop:
+            # Event-loop thread — safe to modify directly
+            self._dispatch_event(event)
+        else:
+            # Worker thread — schedule on event loop
+            try:
+                self._loop.call_soon_threadsafe(self._dispatch_event, event)
+            except RuntimeError:
+                # Event loop is closed; fall back to direct append
+                self.events.append(event)
+
+    def _dispatch_event(self, event: JobEvent) -> None:
+        """Append event to history deque and push to async queue.
+
+        Must run on the event-loop thread to avoid concurrent deque
+        mutation with :meth:`stream_events`.
+        """
         self.events.append(event)
         if self._event_queue is not None:
             try:
@@ -96,10 +134,21 @@ class JobManager:
             self._cleanup_old_jobs()
 
         job_id = str(uuid.uuid4())
+
+        # Capture the running event loop so add_event() can bridge
+        # from worker threads via call_soon_threadsafe.
+        # When called outside an async context (e.g. in sync tests)
+        # the queue is omitted — events still go into the deque.
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
         job = Job(
             id=job_id,
             job_type=job_type,
-            _event_queue=asyncio.Queue(maxsize=100),
+            _event_queue=asyncio.Queue(maxsize=100) if loop else None,
+            _loop=loop,
         )
         self._jobs[job_id] = job
         LOGGER.info("Created job %s of type %s", job_id, job_type)
