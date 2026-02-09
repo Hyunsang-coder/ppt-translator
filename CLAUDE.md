@@ -77,6 +77,8 @@ cd frontend && npx tsc --noEmit
 
 ### Entry Points
 - `glossary_template.xlsx`: Sample glossary file for term substitution
+- `app.py`: Streamlit redirect page — points users to the new Vercel-hosted frontend
+- `main.py`: Placeholder entry point (uv/pyproject.toml default)
 - `api.py`: FastAPI REST API server
   - `GET /health`: Health check endpoint
   - `GET /api/v1/config`: Configuration (models, languages)
@@ -112,10 +114,11 @@ cd frontend && npx tsc --noEmit
   - `get_job_manager()`: Global singleton accessor
   - Cancellation keeps jobs in store (state=CANCELLED, completed_at set) for status queries; `_cleanup_old_jobs` removes after 1h
   - Terminal state guards: `complete_job`/`fail_job` skip if already CANCELLED, preventing race conditions
+  - Thread-safe event dispatch: `add_event()` uses `call_soon_threadsafe` to route worker-thread events to the event-loop thread, preventing `deque mutated during iteration` errors with concurrent SSE streaming. `_dispatch_event()` runs exclusively on the event-loop thread. Falls back to direct append when no event loop is available (sync tests) or when the loop is closed.
 
 ### Translation Chain (`src/chains/`)
 - `llm_factory.py`: Factory for creating LLM instances (OpenAI/Anthropic) with provider-specific configuration, includes built-in rate limiting via `InMemoryRateLimiter`
-- `translation_chain.py`: LangChain pipeline using structured output (`TranslationOutput` Pydantic model) for type-safe parsing, LangChain batch API for concurrent execution with tenacity retry logic
+- `translation_chain.py`: LangChain pipeline using structured output (`TranslationOutput` Pydantic model) for type-safe parsing, LangChain batch API for concurrent execution with tenacity retry logic. `_batch_translate_with_retry` resets progress tracker on each retry attempt to prevent `batch_completed` double-counting, and performs fail-fast validation (raises on missing batch results so tenacity can retry). `translate_with_progress` includes a defensive None guard for result assembly.
 - `color_distribution_chain.py`: LLM-based color/format distribution for multi-color paragraphs — maps translated text segments back to original format groups
 - `context_manager.py`: Builds global presentation context for consistent translations
 - `summarization_chain.py`: AI-powered context and instructions generation (uses lightweight models: GPT-5 Mini / Haiku 4.5)
@@ -193,7 +196,7 @@ Centralized color management with CSS variables:
 2. `ContextManager.build_global_context()` for cross-slide consistency
 3. Optional: `build_repetition_plan()` to deduplicate identical text
 4. `chunk_paragraphs()` creates batches with context/glossary
-5. `translate_with_progress()` handles concurrent API calls
+5. `translate_with_progress()` → `_batch_translate_with_retry()` handles concurrent API calls with tenacity retry
 6. `expand_translations()` maps unique results back to duplicates
 7. `_fix_color_distributions()` preserves multi-color formatting via LLM-based segment mapping
 8. `PPTWriter.apply_translations()` writes back preserving run formatting, applies text fit and color distributions
@@ -224,11 +227,18 @@ Width expansion is applied before text fit for all non-NONE modes. Font sizes ar
 - Parsing 2% → Language detection 5% → Batch prep 8% → Translation 10–80% → Color fix 80–90% → Apply 95% → Complete 100%
 
 ### Error Handling
-- Translation chain uses tenacity with exponential backoff (3 attempts)
+- Translation chain uses tenacity with exponential backoff (3 attempts, 2–10s wait)
 - Structured output via Pydantic ensures type-safe translation parsing (no JSON fallback needed)
 - LangChain batch API handles concurrent execution with built-in rate limiting
+- Fail-fast batch validation: missing results trigger `RuntimeError` so tenacity retries the entire batch set rather than silently losing data
 - Background translation tasks catch `asyncio.CancelledError` separately from `Exception` to avoid treating cancellation as failure
 - Frontend relies on API call-time error handling (catch blocks) rather than pre-flight backend connection checks, avoiding false positives from stale health snapshots (e.g. behind Vercel proxy)
+
+### Thread Safety
+- Translation runs in a thread pool via `loop.run_in_executor()` (worker thread), while SSE streaming and job state management run on the asyncio event-loop thread
+- `Job.add_event()` bridges this gap: worker-thread calls are routed to the event-loop thread via `call_soon_threadsafe`, ensuring deque and queue mutations are serialized
+- `Job._state_lock` (asyncio.Lock) protects terminal state transitions (`complete_job`, `fail_job`, `delete_job`) from race conditions
+- `ServiceProgressTracker.reset()` is called at the start of each retry attempt to prevent `batch_completed` counter from accumulating across failed attempts
 
 ### API Usage
 ```bash
