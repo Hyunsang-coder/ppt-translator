@@ -4,12 +4,12 @@ import { useTheme } from "next-themes";
 import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { Moon, Sun, Languages, FileText, Info } from "lucide-react";
+import { Moon, Sun, Languages, FileText, Info, ScrollText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 interface HeaderProps {
-  activeTab: "translate" | "extract" | "how-it-works";
+  activeTab: "translate" | "extract" | "how-it-works" | "patch-notes";
 }
 
 export function Header({ activeTab }: HeaderProps) {
@@ -73,6 +73,12 @@ export function Header({ activeTab }: HeaderProps) {
                     <span>작동 원리</span>
                   </Link>
                 </TabsTrigger>
+                <TabsTrigger value="patch-notes" asChild className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-muted-foreground">
+                  <Link href="/patch-notes" className="flex items-center gap-2">
+                    <ScrollText className="w-4 h-4" />
+                    <span>패치 노트</span>
+                  </Link>
+                </TabsTrigger>
               </TabsList>
             </Tabs>
 
@@ -93,6 +99,11 @@ export function Header({ activeTab }: HeaderProps) {
                   <TabsTrigger value="how-it-works" asChild className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-muted-foreground">
                     <Link href="/how-it-works" className="px-3">
                       <Info className="w-4 h-4" />
+                    </Link>
+                  </TabsTrigger>
+                  <TabsTrigger value="patch-notes" asChild className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-muted-foreground">
+                    <Link href="/patch-notes" className="px-3">
+                      <ScrollText className="w-4 h-4" />
                     </Link>
                   </TabsTrigger>
                 </TabsList>
