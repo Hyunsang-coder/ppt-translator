@@ -432,10 +432,9 @@ class TranslationService:
     ) -> dict[int, list[ColoredSegment]] | None:
         """Detect multi-color paragraphs and distribute translated text by meaning.
 
-        Uses a three-tier approach:
+        Uses a two-tier approach:
         1. Rule-based matching for simple cases (no LLM needed)
         2. LLM-based distribution in batches
-        3. One retry for paragraphs that failed validation
 
         Args:
             paragraphs: List of ParagraphInfo objects.
