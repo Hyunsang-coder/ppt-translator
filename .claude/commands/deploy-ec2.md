@@ -16,26 +16,9 @@ Deploy the backend to the EC2 production server.
    - Run `git log origin/master..HEAD --oneline` to check for unpushed commits
    - If there are unpushed commits, warn the user and ask whether to push first
 
-2. SSH into EC2 and deploy:
+2. SSH into EC2 and deploy (use single command string, not heredoc, to avoid TTY issues):
    ```bash
-   ssh -i ~/Documents/AWS/ppt-translator-key.pem ec2-user@13.124.223.49 << 'DEPLOY'
-   cd ~/ppt-translator
-   echo "=== Current state ==="
-   git log --oneline -3
-   echo ""
-   echo "=== Pulling latest changes ==="
-   git pull origin master
-   echo ""
-   echo "=== Rebuilding and restarting containers ==="
-   docker compose up -d --build
-   echo ""
-   echo "=== Waiting for health check ==="
-   sleep 10
-   if curl -sf http://localhost:8000/health; then echo " ✓ Health check passed"; else echo " ✗ Health check failed"; fi
-   echo ""
-   echo "=== Container status ==="
-   docker compose ps
-   DEPLOY
+   ssh -i ~/Documents/AWS/ppt-translator-key.pem ec2-user@13.124.223.49 'cd ~/ppt-translator && echo "=== Current state ===" && git log --oneline -3 && echo "" && echo "=== Pulling latest changes ===" && git pull origin master && echo "" && echo "=== Rebuilding and restarting containers ===" && docker compose up -d --build && echo "" && echo "=== Waiting for health check ===" && sleep 15 && curl -sf http://localhost/health && echo " ✓ Health check passed" || echo " ✗ Health check failed" && echo "" && echo "=== Container status ===" && docker compose ps'
    ```
 
 3. Report the deployment result to the user:
