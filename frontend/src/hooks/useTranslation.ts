@@ -45,6 +45,7 @@ export function useTranslation() {
     setResultFilename,
     addLog,
     clearLogs,
+    resetJobState,
     reset,
   } = useTranslationStore();
 
@@ -243,25 +244,27 @@ export function useTranslation() {
   ]);
 
   const cancelTranslation = useCallback(async () => {
-    if (!jobId) return;
+    const currentJobId = useTranslationStore.getState().jobId;
+    if (!currentJobId) return;
 
     try {
       sseClientRef.current?.close();
-      await apiClient.cancelJob(jobId);
+      await apiClient.cancelJob(currentJobId);
       setStatus("cancelled");
       addLog("번역이 취소되었습니다.", "warning");
     } catch (err) {
       const message = err instanceof Error ? err.message : "취소 실패";
       addLog(`취소 실패: ${message}`, "error");
     }
-  }, [jobId, setStatus, addLog]);
+  }, [setStatus, addLog]);
 
   const downloadResult = useCallback(async () => {
-    if (!jobId) return;
+    const currentJobId = useTranslationStore.getState().jobId;
+    if (!currentJobId) return;
 
     try {
       addLog("파일 다운로드 중...", "info");
-      const { blob, filename } = await apiClient.downloadJobResult(jobId);
+      const { blob, filename } = await apiClient.downloadJobResult(currentJobId);
 
       // Create download link
       const url = URL.createObjectURL(blob);
@@ -279,7 +282,14 @@ export function useTranslation() {
       const message = err instanceof Error ? err.message : "다운로드 실패";
       addLog(`다운로드 실패: ${message}`, "error");
     }
-  }, [jobId, addLog, setResultFilename]);
+  }, [addLog, setResultFilename]);
+
+  const retranslate = useCallback(async () => {
+    sseClientRef.current?.close();
+    resetJobState();
+    // startTranslation은 현재 store 상태(pptFile, settings 등)를 그대로 사용
+    await startTranslation();
+  }, [resetJobState, startTranslation]);
 
   const resetTranslation = useCallback(() => {
     sseClientRef.current?.close();
@@ -332,6 +342,7 @@ export function useTranslation() {
     startTranslation,
     cancelTranslation,
     downloadResult,
+    retranslate,
     reset: resetTranslation,
     addLog,
   };

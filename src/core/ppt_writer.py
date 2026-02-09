@@ -346,11 +346,18 @@ def _apply_shrink_then_expand(
 
 
 def _shrink_runs(text_frame, factor: float) -> None:
-    """Shrink all runs with explicit font sizes by the given factor."""
+    """Shrink all runs with explicit font sizes by the given factor.
+
+    The new size is rounded to the nearest whole point (1 pt = 12700 EMU)
+    to avoid fractional point values in the output file.
+    """
+    _EMU_PER_PT = 12700
     for paragraph in text_frame.paragraphs:
         for run in paragraph.runs:
             if run.font.size is not None:
-                run.font.size = int(run.font.size * factor)
+                new_emu = run.font.size * factor
+                rounded_pt = round(new_emu / _EMU_PER_PT)
+                run.font.size = max(rounded_pt, 1) * _EMU_PER_PT
 
 
 class PPTWriter:

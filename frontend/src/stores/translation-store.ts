@@ -68,6 +68,7 @@ interface TranslationState {
   setResultFilename: (filename: string | null) => void;
   addLog: (message: string, type?: LogEntry["type"]) => void;
   clearLogs: () => void;
+  resetJobState: () => void;
   reset: () => void;
 }
 
@@ -149,6 +150,16 @@ export const useTranslationStore = create<TranslationState>((set) => ({
     }),
 
   clearLogs: () => set({ logs: [] }),
+
+  resetJobState: () =>
+    set({
+      jobId: null,
+      status: "idle",
+      progress: null,
+      errorMessage: null,
+      resultFilename: null,
+      logs: [],
+    }),
 
   reset: () =>
     set({

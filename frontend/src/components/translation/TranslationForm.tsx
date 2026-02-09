@@ -43,6 +43,7 @@ export function TranslationForm() {
     startTranslation,
     cancelTranslation,
     downloadResult,
+    retranslate,
     reset,
   } = useTranslation();
 
@@ -75,6 +76,24 @@ export function TranslationForm() {
     setFilenameError(null);
     setStartTime(Date.now());
     await startTranslation();
+  };
+
+  const handleRetranslate = async () => {
+    if (!isBackendConnected) {
+      setFilenameError("백엔드 서버에 연결할 수 없습니다. 서버 상태를 확인해주세요.");
+      return;
+    }
+    if (isTargetLangEmpty) {
+      setFilenameError("타겟 언어를 선택해주세요.");
+      return;
+    }
+    if (isCustomFilenameEmpty) {
+      setFilenameError("출력 파일명을 입력해주세요.");
+      return;
+    }
+    setFilenameError(null);
+    setStartTime(Date.now());
+    await retranslate();
   };
 
   const handleReset = () => {
@@ -167,7 +186,7 @@ export function TranslationForm() {
                   </Button>
                   <Button
                     variant="outline"
-                    onClick={handleReset}
+                    onClick={handleRetranslate}
                     className="flex-1 gap-2"
                   >
                     <RefreshCw className="w-4 h-4" />
@@ -179,7 +198,7 @@ export function TranslationForm() {
               {status === "failed" && (
                 <Button
                   variant="outline"
-                  onClick={handleReset}
+                  onClick={handleRetranslate}
                   className="flex-1 gap-2"
                 >
                   <RefreshCw className="w-4 h-4" />
