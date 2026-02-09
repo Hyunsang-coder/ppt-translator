@@ -16,6 +16,7 @@ const FALLBACK_MODELS: ModelInfo[] = [
 ];
 
 const FALLBACK_LANGUAGES: LanguageInfo[] = [
+  { code: "Auto", name: "Auto (자동 감지)" },
   { code: "한국어", name: "한국어" },
   { code: "English", name: "English" },
   { code: "日本語", name: "日本語" },

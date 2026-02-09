@@ -156,7 +156,7 @@ Next.js 16 with React 19, TypeScript 5, Tailwind CSS 4, and Zustand 5 state mana
 - **ui/**: Shadcn/Radix UI components (button, card, checkbox, input, label, progress, radio-group, select, separator, sonner, switch, tabs, textarea, tooltip)
 
 #### State Management (`src/stores/`)
-- `translation-store.ts`: Zustand store for translation state (file, settings, progress, logs)
+- `translation-store.ts`: Zustand store for translation state (file, settings, progress, logs). `resetJobState()` resets only job-related state (jobId, status, progress, error, logs) while preserving file/settings/context for retranslation.
 - `extraction-store.ts`: Zustand store for extraction state
 
 #### API Integration (`src/lib/`)
@@ -165,9 +165,9 @@ Next.js 16 with React 19, TypeScript 5, Tailwind CSS 4, and Zustand 5 state mana
 - `utils.ts`: Utility functions (cn for classnames)
 
 #### Hooks (`src/hooks/`)
-- `useTranslation.ts`: Translation workflow logic (includes auto context/instructions generation with markdown caching via file key)
+- `useTranslation.ts`: Translation workflow logic (includes auto context/instructions generation with markdown caching via file key, `retranslate()` for re-running with same file/settings). Uses `useTranslationStore.getState()` for `jobId` in `downloadResult`/`cancelTranslation` to avoid stale closure references.
 - `useExtraction.ts`: Extraction workflow logic
-- `useConfig.ts`: Configuration data fetching with graceful fallback (fallback models/languages when backend unavailable, `isBackendConnected` state)
+- `useConfig.ts`: Configuration data fetching with graceful fallback (fallback models/languages when backend unavailable). Backend connection errors are handled at API call time rather than pre-checked.
 
 #### Types (`src/types/`)
 - `api.ts`: TypeScript type definitions for API responses, settings, and job states
@@ -219,7 +219,7 @@ Centralized color management with CSS variables:
 - `expand_box`: Widen text box to accommodate longer text (skips rotated/grouped/table shapes)
 - `shrink_then_expand`: Try shrinking first, then expand if still overflowing
 
-Width expansion is applied before text fit for all non-NONE modes.
+Width expansion is applied before text fit for all non-NONE modes. Font sizes are rounded to the nearest whole point (1 pt = 12700 EMU) to avoid fractional values in output PPTX.
 
 ### Progress Tracking
 `TranslationProgress.percent` provides monotonic overall progress (never resets between phases):
@@ -229,6 +229,7 @@ Width expansion is applied before text fit for all non-NONE modes.
 - Translation chain uses tenacity with exponential backoff (3 attempts)
 - Structured output via Pydantic ensures type-safe translation parsing (no JSON fallback needed)
 - LangChain batch API handles concurrent execution with built-in rate limiting
+- Frontend relies on API call-time error handling (catch blocks) rather than pre-flight backend connection checks, avoiding false positives from stale health snapshots (e.g. behind Vercel proxy)
 
 ### API Usage
 ```bash
