@@ -5,9 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project Overview
 
 PPT 번역캣 is a PowerPoint translation application using LangChain with OpenAI GPT and Anthropic Claude models. It provides:
-- **Streamlit web UI** (legacy, `app.py`)
 - **FastAPI REST API** (`api.py`) with async job management
-- **Next.js frontend** (`frontend/`) - modern React-based UI (migration in progress)
+- **Next.js frontend** (`frontend/`) - modern React-based UI
 
 Features include slide text translation while preserving original formatting, glossary support, auto language detection, real-time progress streaming via SSE, and detailed logging.
 
@@ -16,9 +15,6 @@ Features include slide text translation while preserving original formatting, gl
 ## Development Commands
 
 ```bash
-# Backend - Run the Streamlit app (legacy)
-streamlit run app.py
-
 # Backend - Run the FastAPI server
 uvicorn api:app --reload --port 8000
 
@@ -81,9 +77,6 @@ cd frontend && npx tsc --noEmit
 
 ### Entry Points
 - `glossary_template.xlsx`: Sample glossary file for term substitution
-- `app.py`: Streamlit UI orchestrating two workflows:
-  - PPT Translation (main feature)
-  - Text Extraction (PPT → Markdown)
 - `api.py`: FastAPI REST API server
   - `GET /health`: Health check endpoint
   - `GET /api/v1/config`: Configuration (models, languages)
@@ -108,7 +101,6 @@ cd frontend && npx tsc --noEmit
 ### Service Layer (`src/services/`)
 - `models.py`: Data models (`TranslationRequest`, `TranslationResult`, `TranslationProgress`, `TranslationStatus`, `TextFitMode`, `ProgressCallback`)
 - `translation_service.py`: `TranslationService` class encapsulating translation workflow logic
-  - Shared by both Streamlit (`app.py`) and FastAPI (`api.py`)
   - `ServiceProgressTracker`: Adapter for progress callbacks in service layer
   - Progress callback support for real-time updates
 - `job_manager.py`: Async job management for FastAPI
@@ -136,12 +128,6 @@ cd frontend && npx tsc --noEmit
 - `helpers.py`: Batch chunking, text segmentation for run distribution
 - `security.py`: File validation, filename sanitization (preserves Unicode/spaces, collapses whitespace), HTML content escaping
 
-### UI Components (`src/ui/`)
-- `progress_tracker.py`: Streamlit progress bar and log updates
-- `settings_panel.py`: Translation settings sidebar
-- `file_handler.py`: Upload validation and buffer management
-- `extraction_settings.py`: Text extraction options UI
-
 ### Frontend (`frontend/`)
 Next.js 16 with React 19, TypeScript 5, Tailwind CSS 4, and Zustand 5 state management. Includes graceful fallback when backend is unavailable.
 
@@ -149,12 +135,16 @@ Next.js 16 with React 19, TypeScript 5, Tailwind CSS 4, and Zustand 5 state mana
 - `page.tsx`: Home page (redirects to translate)
 - `translate/page.tsx`: Translation workflow page
 - `extract/page.tsx`: Text extraction page
+- `how-it-works/page.tsx`: Translation pipeline visualization page
+- `patch-notes/page.tsx`: Patch notes / changelog page
 - `layout.tsx`: Root layout with ThemeProvider
 
 #### Components (`src/components/`)
 - **shared/**: `Header.tsx` (navigation + theme toggle), `FileUploader.tsx` (drag & drop)
 - **translation/**: `TranslationForm.tsx`, `SettingsPanel.tsx` (includes `FilenameSettingsSection`), `ProgressPanel.tsx`, `LogViewer.tsx`
 - **extraction/**: `ExtractionForm.tsx`, `MarkdownPreview.tsx`
+- **how-it-works/**: `PipelineTimeline.tsx`, `PipelineStep.tsx` (11-phase translation pipeline visualization)
+- **patch-notes/**: `PatchNotesList.tsx` (timeline layout), `PatchNoteCard.tsx` (individual card with type-grouped changes)
 - **ui/**: Shadcn/Radix UI components (button, card, checkbox, input, label, progress, radio-group, select, separator, sonner, switch, tabs, textarea, tooltip)
 
 #### State Management (`src/stores/`)
@@ -170,6 +160,9 @@ Next.js 16 with React 19, TypeScript 5, Tailwind CSS 4, and Zustand 5 state mana
 - `useTranslation.ts`: Translation workflow logic (includes auto context/instructions generation with markdown caching via file key, `retranslate()` for re-running with same file/settings). Uses `useTranslationStore.getState()` for `jobId` in `downloadResult`/`cancelTranslation` to avoid stale closure references. SSE connection is cleaned up on component unmount via `useEffect` to prevent memory leaks.
 - `useExtraction.ts`: Extraction workflow logic
 - `useConfig.ts`: Configuration data fetching with graceful fallback (fallback models/languages when backend unavailable). Backend connection errors are handled at API call time rather than pre-checked.
+
+#### Static Data (`src/data/`)
+- `patch-notes.ts`: Patch notes data with `PatchNote`, `Change`, `ChangeType` types and `changeTypeConfig` for UI rendering. Versions use date-based format (`YYYY.MM.DD`)
 
 #### Types (`src/types/`)
 - `api.ts`: TypeScript type definitions for API responses, settings, and job states
@@ -189,6 +182,9 @@ Centralized color management with CSS variables:
 - `test_api.py`: FastAPI endpoint tests
 - `test_color_distribution.py`: Color distribution validation and format grouping tests
 - `test_text_fit.py`: Text fit modes (auto_shrink, expand_box, shrink_then_expand) and width expansion tests
+- `test_job_manager.py`: Job state locking, deletion, event bounding, cleanup tests
+- `test_batch_size.py`: Batch size calculation edge cases
+- `test_security_fix.py`: HTML sanitization and XSS prevention tests
 
 ## Key Patterns
 
@@ -266,12 +262,12 @@ curl -X POST http://localhost:8000/translate \
 # Generate context summary
 curl -X POST http://localhost:8000/api/v1/summarize \
   -H "Content-Type: application/json" \
-  -d '{"markdown": "...", "provider": "openai", "model": "gpt-5-mini"}'
+  -d '{"markdown": "...", "provider": "anthropic", "model": "claude-haiku-4-5-20251001"}'
 
 # Generate translation instructions
 curl -X POST http://localhost:8000/api/v1/generate-instructions \
   -H "Content-Type: application/json" \
-  -d '{"target_lang": "한국어", "markdown": "...", "provider": "openai", "model": "gpt-5-mini"}'
+  -d '{"target_lang": "한국어", "markdown": "...", "provider": "anthropic", "model": "claude-haiku-4-5-20251001"}'
 ```
 
 ## Supported Models
@@ -296,7 +292,6 @@ Lightweight models are used for auto-generating context and instructions:
 - **LangChain**: Translation chain with `ChatOpenAI`/`ChatAnthropic` and `PromptTemplate`
 - **langchain-anthropic**: Anthropic Claude model integration
 - **python-pptx**: PPTX parsing and writing
-- **Streamlit**: Web UI with session state management
 - **FastAPI**: REST API server with automatic OpenAPI docs (v2.4.0)
 - **Mangum**: AWS Lambda adapter for FastAPI
 - **tenacity**: Retry logic with exponential backoff
@@ -329,6 +324,7 @@ Lightweight models are used for auto-generating context and instructions:
 - `/deploy-ec2` - Deploy backend to EC2 (git pull + docker compose rebuild + health check)
 - `/check-ec2` - Check EC2 server status without deploying (SSH connection, container status, health)
 - `/update-docs` - Analyze codebase and update CLAUDE.md
+- `/update-patch-notes` - Update patch notes data from recent git commits (date-based versioning)
 
 ### Custom Agents (`.claude/agents/`)
 - `code-reviewer` - Reviews code changes for quality, security, and best practices

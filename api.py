@@ -158,8 +158,8 @@ class SummarizeRequest(BaseModel):
     """Summarization request."""
 
     markdown: str
-    provider: str = "openai"
-    model: str = "gpt-5-mini"
+    provider: str = "anthropic"
+    model: str = "claude-haiku-4-5-20251001"
 
 
 class SummarizeResponse(BaseModel):
@@ -427,8 +427,8 @@ async def create_job(
     glossary_file: Optional[UploadFile] = File(None, description="Optional Excel glossary file"),
     source_lang: str = Form("Auto", description="Source language"),
     target_lang: str = Form("Auto", description="Target language"),
-    provider: str = Form("openai", description="LLM provider"),
-    model: str = Form("gpt-5.2", description="Model to use"),
+    provider: str = Form("anthropic", description="LLM provider"),
+    model: str = Form("claude-sonnet-4-5-20250929", description="Model to use"),
     context: Optional[str] = Form(None, description="Background information about the presentation"),
     instructions: Optional[str] = Form(None, description="Translation style/tone guidelines"),
     preprocess_repetitions: bool = Form(False, description="Deduplicate repeated phrases"),
@@ -813,8 +813,8 @@ class GenerateInstructionsRequest(BaseModel):
 
     target_lang: str
     markdown: str
-    provider: str = "openai"
-    model: str = "gpt-5-mini"
+    provider: str = "anthropic"
+    model: str = "claude-haiku-4-5-20251001"
 
 
 class GenerateInstructionsResponse(BaseModel):
@@ -934,8 +934,8 @@ async def translate_ppt(
     ),
     source_lang: str = Form("Auto", description="Source language (Auto for detection)"),
     target_lang: str = Form("Auto", description="Target language (Auto for inference)"),
-    provider: str = Form("openai", description="LLM provider (openai or anthropic)"),
-    model: str = Form("gpt-5.2", description="Model to use (depends on provider)"),
+    provider: str = Form("anthropic", description="LLM provider (openai or anthropic)"),
+    model: str = Form("claude-sonnet-4-5-20250929", description="Model to use (depends on provider)"),
     context: Optional[str] = Form(None, description="Background information about the presentation"),
     instructions: Optional[str] = Form(None, description="Translation style/tone guidelines"),
     preprocess_repetitions: bool = Form(

@@ -201,8 +201,8 @@ def _validate_colored_segments(
 class ServiceProgressTracker:
     """Progress tracker adapter for the service layer.
 
-    This class implements the same interface as ProgressTracker from src.ui.progress_tracker
-    to be compatible with translate_with_progress function.
+    This class implements the same duck-typed interface expected by
+    translate_with_progress (reset, batch_completed, finish).
     """
 
     def __init__(

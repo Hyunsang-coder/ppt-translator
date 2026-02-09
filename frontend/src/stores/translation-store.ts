@@ -75,8 +75,8 @@ interface TranslationState {
 const DEFAULT_SETTINGS: TranslationSettings = {
   sourceLang: "Auto",
   targetLang: "", // 타겟 언어는 필수 선택
-  provider: "openai",
-  model: "gpt-5.2",
+  provider: "anthropic",
+  model: "claude-sonnet-4-5-20250929",
   context: "",
   instructions: "",
   preprocessRepetitions: true,

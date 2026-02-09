@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import RunnablePassthrough, RunnableConfig
@@ -11,7 +11,6 @@ from pydantic import BaseModel, Field
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from src.chains.llm_factory import Provider, create_llm
-from src.ui.progress_tracker import ProgressTracker
 
 LOGGER = logging.getLogger(__name__)
 
@@ -54,7 +53,7 @@ def create_translation_chain(
     target_lang: str,
     context: str | None = None,
     instructions: str | None = None,
-    provider: Provider = "openai",
+    provider: Provider = "anthropic",
     *,
     user_prompt: str | None = None,  # Deprecated: for backward compatibility
 ):
@@ -106,7 +105,7 @@ def create_translation_chain(
 def translate_with_progress(
     chain,
     batches: List[Dict[str, object]],
-    progress_tracker: ProgressTracker | None = None,
+    progress_tracker: Any = None,
     max_concurrency: int = 1,
 ) -> List[str]:
     """Translate batches using LangChain batch API with progress updates.
@@ -124,12 +123,7 @@ def translate_with_progress(
     total_batches = len(batches)
     total_sentences = sum(len(batch.get("paragraphs", [])) for batch in batches)
 
-    if progress_tracker is None:
-        progress_tracker = ProgressTracker(
-            total_batches=total_batches,
-            total_sentences=total_sentences,
-        )
-    else:
+    if progress_tracker is not None:
         progress_tracker.reset(
             total_batches=total_batches,
             total_sentences=total_sentences,
@@ -176,7 +170,7 @@ def _batch_translate_with_retry(
     chain,
     batches: List[Dict[str, object]],
     config: RunnableConfig,
-    progress_tracker: ProgressTracker | None = None,
+    progress_tracker: Any = None,
     total_batches: int = 0,
 ) -> List[TranslationOutput | None]:
     """Execute batch translation with retry logic and real-time progress.
