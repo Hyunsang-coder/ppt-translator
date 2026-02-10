@@ -45,6 +45,22 @@ export const changeTypeConfig: Record<ChangeType, ChangeTypeConfig> = {
 
 export const patchNotes: PatchNote[] = [
   {
+    version: "2026.02.10",
+    date: "2026-02-10",
+    title: "이미지 압축, 취소 개선, 안정성 강화",
+    commitHash: "37149e8",
+    changes: [
+      { type: "feature", description: "이미지 압축 옵션 추가 (대용량 PPTX 최적화)" },
+      { type: "feature", description: "패치 노트 페이지 추가" },
+      { type: "fix", description: "파일 변경 시 job 상태 리셋 및 컨텍스트/지침 생성 중단" },
+      { type: "fix", description: "업로드 중 취소 버튼 동작 (AbortController)" },
+      { type: "fix", description: "SSE 레이스 컨디션, 취소 UI, 폴백 언어 처리" },
+      { type: "fix", description: "스레드 안전 이벤트 디스패치 및 재시도 강화" },
+      { type: "fix", description: "Job manager 레이스 컨디션, 이벤트 누수 수정" },
+      { type: "improvement", description: "Streamlit 제거, FastAPI redirect 및 기본 설정" },
+    ],
+  },
+  {
     version: "2025.02.09",
     date: "2025-02-09",
     title: "작동 원리 페이지",
