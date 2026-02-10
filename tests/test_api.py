@@ -154,6 +154,22 @@ class TestJobEndpoints:
         assert response.status_code == 400
         assert "Invalid file type" in response.json()["detail"]
 
+    def test_create_job_validation_failure_releases_reserved_slot(self, client):
+        """Invalid uploads should not consume active job capacity."""
+        from src.services.job_manager import get_job_manager
+
+        job_manager = get_job_manager()
+        active_before = job_manager.get_active_count()
+
+        response = client.post(
+            "/api/v1/jobs",
+            files={"ppt_file": ("test.pptx", b"not a real pptx", "application/octet-stream")},
+            data={"provider": "openai", "model": "gpt-5.2"},
+        )
+
+        assert response.status_code == 400
+        assert job_manager.get_active_count() == active_before
+
     def test_create_job_invalid_provider(self, client, sample_pptx_bytes):
         """Test creating job with invalid provider."""
         response = client.post(

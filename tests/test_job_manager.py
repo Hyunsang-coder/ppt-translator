@@ -208,6 +208,19 @@ class TestConcurrencyLimits:
         mgr = JobManager(max_jobs=100, max_running=3)
         assert mgr.max_running == 3
 
+    def test_try_create_job_respects_active_capacity(self):
+        """try_create_job should reject when active capacity is full."""
+        mgr = JobManager(max_jobs=100, max_running=2)
+
+        j1 = mgr.try_create_job(JobType.TRANSLATION, max_active=2)
+        j2 = mgr.try_create_job(JobType.TRANSLATION, max_active=2)
+        j3 = mgr.try_create_job(JobType.TRANSLATION, max_active=2)
+
+        assert j1 is not None
+        assert j2 is not None
+        assert j3 is None
+        assert mgr.get_active_count() == 2
+
 
 class TestCleanupReleasesResources:
     """Tests that cleanup properly releases resources."""

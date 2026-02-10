@@ -14,7 +14,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { FileUploader } from "@/components/shared/FileUploader";
 import { useConfig } from "@/hooks/useConfig";
-import type { TranslationSettings, FilenameSettings, TextFitMode, ImageCompression } from "@/types/api";
+import type { TranslationSettings, FilenameSettings, TextFitMode, ImageCompression, LengthLimit } from "@/types/api";
 import { Sparkles, Loader2, FileText, Type, ImageDown } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -272,6 +272,44 @@ export function SettingsPanel({
                 번역문이 길어지면 박스 너비를 넓혀 텍스트가 잘리지 않게 합니다.
               </TooltipContent>
             </Tooltip>
+            <div className="flex items-center gap-3">
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="length-limit"
+                  checked={settings.lengthLimit !== null}
+                  onCheckedChange={(checked) => {
+                    onSettingsChange({ lengthLimit: checked === true ? 130 : null });
+                  }}
+                  disabled={disabled}
+                />
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Label htmlFor="length-limit" className="text-sm font-normal cursor-pointer">
+                      번역 길이 제한
+                    </Label>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    번역문의 길이를 원문 대비 일정 비율 이내로 유지하도록 AI에게 지시합니다. 레이아웃 유지에 도움이 되지만 번역 품질이 다소 저하될 수 있습니다.
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+              {settings.lengthLimit !== null && (
+                <Select
+                  value={String(settings.lengthLimit)}
+                  onValueChange={(value) => onSettingsChange({ lengthLimit: Number(value) as LengthLimit })}
+                  disabled={disabled}
+                >
+                  <SelectTrigger id="length-limit-value" className="w-[140px] h-8 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="110">110%</SelectItem>
+                    <SelectItem value="130">130% (기본)</SelectItem>
+                    <SelectItem value="150">150%</SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
           </div>
         </TooltipProvider>
       </div>

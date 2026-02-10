@@ -34,7 +34,7 @@ You are a professional translator specializing in PowerPoint presentations.
 
 **Translation Style/Tone Guidelines:**
 {instructions}
-
+{length_constraint}
 **Task:**
 Translate the following texts from {source_lang} to {target_lang}.
 Maintain consistency with the context, background information, and glossary.
@@ -47,6 +47,28 @@ Return exactly {expected_count} translated texts in the translations array.
 """
 
 
+def _build_length_constraint(length_limit: int | None) -> str:
+    """Build the length constraint instruction for the prompt.
+
+    Args:
+        length_limit: Maximum translation length as percentage of original
+            (e.g., 110, 130, 150). None means no constraint.
+
+    Returns:
+        Length constraint instruction string, or empty string if no limit.
+    """
+    if length_limit is None:
+        return ""
+    return (
+        f"\n**Length Constraint:**\n"
+        f"IMPORTANT: Keep each translation concise. "
+        f"The translated text for each item MUST NOT exceed {length_limit}% "
+        f"of the original text length (character count). "
+        f"If the direct translation is too long, rephrase it more concisely "
+        f"while preserving the core meaning.\n"
+    )
+
+
 def create_translation_chain(
     model_name: str,
     source_lang: str,
@@ -55,6 +77,7 @@ def create_translation_chain(
     instructions: str | None = None,
     provider: Provider = "anthropic",
     *,
+    length_limit: int | None = None,
     user_prompt: str | None = None,  # Deprecated: for backward compatibility
 ):
     """Create a LangChain sequence for translation.
@@ -66,6 +89,7 @@ def create_translation_chain(
         context: Optional background information about the presentation.
         instructions: Optional translation style/tone guidelines.
         provider: LLM provider ("openai" or "anthropic").
+        length_limit: Optional max translation length as percentage of original.
         user_prompt: Deprecated. Use 'instructions' instead. If provided and
             'instructions' is not set, this value will be used as instructions.
 
@@ -84,6 +108,7 @@ def create_translation_chain(
     # Use provided values or sensible defaults
     context_text = context or "No additional background information provided."
     instructions_text = instructions or "Translate naturally and professionally."
+    length_constraint_text = _build_length_constraint(length_limit)
 
     chain = (
         RunnablePassthrough.assign(
@@ -93,6 +118,7 @@ def create_translation_chain(
             target_lang=lambda _: target_lang,
             context=lambda _: context_text,
             instructions=lambda _: instructions_text,
+            length_constraint=lambda _: length_constraint_text,
             expected_count=lambda x: int(x.get("expected_count", 0)),
         )
         | PromptTemplate.from_template(PROMPT_TEMPLATE)

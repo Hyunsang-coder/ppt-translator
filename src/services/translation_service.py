@@ -716,6 +716,7 @@ class TranslationService:
             context=request.context,
             instructions=request.instructions,
             provider=request.provider,
+            length_limit=request.length_limit,
         )
 
         LOGGER.info(

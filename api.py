@@ -410,6 +410,7 @@ async def _run_translation_job(
     filename_settings: FilenameSettings,
     text_fit_mode: TextFitMode = TextFitMode.NONE,
     min_font_ratio: int = 80,
+    length_limit: Optional[int] = None,
 ) -> None:
     """Run translation job in background, respecting concurrency semaphore."""
     job_manager = get_job_manager()
@@ -432,6 +433,7 @@ async def _run_translation_job(
                 translate_notes=translate_notes,
                 text_fit_mode=text_fit_mode,
                 min_font_ratio=min_font_ratio,
+                length_limit=length_limit,
             )
 
             progress_callback = _create_progress_callback(job_id)
@@ -488,145 +490,166 @@ async def create_job(
     text_fit_mode: str = Form("none", description="Text fitting mode: none, auto_shrink, expand_box"),
     min_font_ratio: int = Form(80, description="Minimum font size ratio (50-100) for auto_shrink mode"),
     compress_images: str = Form("none", description="Image compression preset: none, high, medium, low"),
+    length_limit: Optional[int] = Form(None, description="Translation length limit as percentage of original (110, 130, 150)"),
 ) -> JobCreateResponse:
     """Create a new translation job."""
     settings = get_settings()
     job_manager = get_job_manager()
-
-    # Reject if too many active (running + pending) jobs are queued
-    active_count = job_manager.get_active_count()
-    max_allowed = settings.max_running_jobs + settings.max_queued_jobs
-    if active_count >= max_allowed:
-        raise HTTPException(
-            status_code=429,
-            detail="서버가 바쁩니다. 잠시 후 다시 시도해주세요.",
-        )
-
-    # Validate provider
-    if provider not in SUPPORTED_MODELS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid provider: {provider}. Must be one of: {list(SUPPORTED_MODELS.keys())}",
-        )
-
-    # Validate API key
-    if provider == "openai" and not settings.openai_api_key:
-        raise HTTPException(status_code=500, detail="OPENAI_API_KEY is not configured")
-    if provider == "anthropic" and not settings.anthropic_api_key:
-        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not configured")
-
-    # Validate file
-    if not ppt_file.filename:
-        raise HTTPException(status_code=400, detail="No filename provided")
-
-    filename_lower = ppt_file.filename.lower()
-    if not (filename_lower.endswith(".pptx") or filename_lower.endswith(".ppt")):
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid file type. Only .ppt and .pptx files are supported.",
-        )
-
-    # Read file content
+    job: Optional[Job] = None
     try:
-        file_content = await ppt_file.read()
+        # Validate provider
+        if provider not in SUPPORTED_MODELS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid provider: {provider}. Must be one of: {list(SUPPORTED_MODELS.keys())}",
+            )
+
+        # Validate API key
+        if provider == "openai" and not settings.openai_api_key:
+            raise HTTPException(status_code=500, detail="OPENAI_API_KEY is not configured")
+        if provider == "anthropic" and not settings.anthropic_api_key:
+            raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not configured")
+
+        # Validate file
+        if not ppt_file.filename:
+            raise HTTPException(status_code=400, detail="No filename provided")
+
+        filename_lower = ppt_file.filename.lower()
+        if not (filename_lower.endswith(".pptx") or filename_lower.endswith(".ppt")):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid file type. Only .ppt and .pptx files are supported.",
+            )
+
+        # Reserve a job slot before the first await (file read) to avoid
+        # over-admission when many requests arrive at the same time.
+        max_allowed = settings.max_running_jobs + settings.max_queued_jobs
+        job = job_manager.try_create_job(JobType.TRANSLATION, max_active=max_allowed)
+        if job is None:
+            raise HTTPException(
+                status_code=429,
+                detail="서버가 바쁩니다. 잠시 후 다시 시도해주세요.",
+            )
+
+        # Read file content
+        try:
+            file_content = await ppt_file.read()
+        except Exception as exc:
+            LOGGER.exception("Failed to read uploaded file: %s", exc)
+            raise HTTPException(status_code=400, detail="Failed to read uploaded file")
+
+        # Validate file size
+        size_mb = len(file_content) / (1024 * 1024)
+        if size_mb > settings.max_upload_size_mb:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File size ({size_mb:.1f}MB) exceeds limit ({settings.max_upload_size_mb}MB)",
+            )
+
+        # Validate file signature
+        ppt_buffer = io.BytesIO(file_content)
+        is_valid, error_msg = validate_pptx_file(ppt_buffer)
+        if not is_valid:
+            raise HTTPException(status_code=400, detail=error_msg or "Invalid PPT/PPTX file format")
+        ppt_buffer.seek(0)
+
+        # Compress images if requested
+        if compress_images and compress_images != "none":
+            from src.utils.image_compressor import compress_pptx_images
+
+            try:
+                ppt_buffer = compress_pptx_images(ppt_buffer, preset=compress_images)
+                ppt_buffer.seek(0)
+                del file_content  # Free original bytes early
+            except Exception as exc:
+                LOGGER.warning("Image compression failed, using original: %s", exc)
+                ppt_buffer.seek(0)
+
+        # Load glossary if provided
+        glossary = None
+        if glossary_file and glossary_file.filename:
+            try:
+                glossary_content = await glossary_file.read()
+                glossary_buffer = io.BytesIO(glossary_content)
+                glossary_loader = GlossaryLoader()
+                glossary = glossary_loader.load_glossary(glossary_buffer)
+                LOGGER.info("Loaded glossary with %d terms", len(glossary))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=f"Glossary error: {str(exc)}")
+            except Exception as exc:
+                LOGGER.exception("Failed to load glossary: %s", exc)
+                raise HTTPException(status_code=400, detail="Failed to load glossary file")
+
+        # Parse filename settings
+        parsed_filename_settings = FilenameSettings()
+        if filename_settings:
+            try:
+                settings_data = json.loads(filename_settings)
+                parsed_filename_settings = FilenameSettings(**settings_data)
+            except (json.JSONDecodeError, ValueError) as exc:
+                LOGGER.warning("Invalid filename_settings JSON, using defaults: %s", exc)
+
+        # Parse text fit mode
+        try:
+            parsed_text_fit_mode = TextFitMode(text_fit_mode)
+        except ValueError:
+            LOGGER.warning("Invalid text_fit_mode '%s', using default 'none'", text_fit_mode)
+            parsed_text_fit_mode = TextFitMode.NONE
+
+        # Clamp min_font_ratio
+        clamped_min_font_ratio = max(50, min(100, min_font_ratio))
+
+        # Validate length_limit
+        parsed_length_limit: Optional[int] = None
+        if length_limit is not None:
+            if length_limit in (110, 130, 150):
+                parsed_length_limit = length_limit
+            else:
+                LOGGER.warning("Invalid length_limit '%s', ignoring", length_limit)
+
+        # Start background task
+        task = asyncio.create_task(
+            _run_translation_job(
+                job_id=job.id,
+                ppt_buffer=ppt_buffer,
+                filename=ppt_file.filename,
+                source_lang=source_lang,
+                target_lang=target_lang,
+                provider=provider,
+                model=model,
+                context=context,
+                instructions=instructions,
+                preprocess_repetitions=preprocess_repetitions,
+                translate_notes=translate_notes,
+                glossary=glossary,
+                filename_settings=parsed_filename_settings,
+                text_fit_mode=parsed_text_fit_mode,
+                min_font_ratio=clamped_min_font_ratio,
+                length_limit=parsed_length_limit,
+            )
+        )
+        job_manager.start_job(job.id, task)
+
+        LOGGER.info(
+            "Created translation job %s: file=%s, provider=%s, model=%s",
+            job.id,
+            ppt_file.filename,
+            provider,
+            model,
+        )
+
+        return JobCreateResponse(job_id=job.id, status=job.state.value)
+    except HTTPException:
+        if job is not None:
+            await job_manager.delete_job(job.id)
+        raise
     except Exception as exc:
-        LOGGER.exception("Failed to read uploaded file: %s", exc)
-        raise HTTPException(status_code=400, detail="Failed to read uploaded file")
-
-    # Validate file size
-    size_mb = len(file_content) / (1024 * 1024)
-    if size_mb > settings.max_upload_size_mb:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File size ({size_mb:.1f}MB) exceeds limit ({settings.max_upload_size_mb}MB)",
-        )
-
-    # Validate file signature
-    ppt_buffer = io.BytesIO(file_content)
-    is_valid, error_msg = validate_pptx_file(ppt_buffer)
-    if not is_valid:
-        raise HTTPException(status_code=400, detail=error_msg or "Invalid PPT/PPTX file format")
-    ppt_buffer.seek(0)
-
-    # Compress images if requested
-    if compress_images and compress_images != "none":
-        from src.utils.image_compressor import compress_pptx_images
-        try:
-            ppt_buffer = compress_pptx_images(ppt_buffer, preset=compress_images)
-            ppt_buffer.seek(0)
-            del file_content  # Free original bytes early
-        except Exception as exc:
-            LOGGER.warning("Image compression failed, using original: %s", exc)
-            ppt_buffer.seek(0)
-
-    # Load glossary if provided
-    glossary = None
-    if glossary_file and glossary_file.filename:
-        try:
-            glossary_content = await glossary_file.read()
-            glossary_buffer = io.BytesIO(glossary_content)
-            glossary_loader = GlossaryLoader()
-            glossary = glossary_loader.load_glossary(glossary_buffer)
-            LOGGER.info("Loaded glossary with %d terms", len(glossary))
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=f"Glossary error: {str(exc)}")
-        except Exception as exc:
-            LOGGER.exception("Failed to load glossary: %s", exc)
-            raise HTTPException(status_code=400, detail="Failed to load glossary file")
-
-    # Parse filename settings
-    parsed_filename_settings = FilenameSettings()
-    if filename_settings:
-        try:
-            settings_data = json.loads(filename_settings)
-            parsed_filename_settings = FilenameSettings(**settings_data)
-        except (json.JSONDecodeError, ValueError) as exc:
-            LOGGER.warning("Invalid filename_settings JSON, using defaults: %s", exc)
-
-    # Parse text fit mode
-    try:
-        parsed_text_fit_mode = TextFitMode(text_fit_mode)
-    except ValueError:
-        LOGGER.warning("Invalid text_fit_mode '%s', using default 'none'", text_fit_mode)
-        parsed_text_fit_mode = TextFitMode.NONE
-
-    # Clamp min_font_ratio
-    clamped_min_font_ratio = max(50, min(100, min_font_ratio))
-
-    # Create job
-    job = job_manager.create_job(JobType.TRANSLATION)
-
-    # Start background task
-    task = asyncio.create_task(
-        _run_translation_job(
-            job_id=job.id,
-            ppt_buffer=ppt_buffer,
-            filename=ppt_file.filename,
-            source_lang=source_lang,
-            target_lang=target_lang,
-            provider=provider,
-            model=model,
-            context=context,
-            instructions=instructions,
-            preprocess_repetitions=preprocess_repetitions,
-            translate_notes=translate_notes,
-            glossary=glossary,
-            filename_settings=parsed_filename_settings,
-            text_fit_mode=parsed_text_fit_mode,
-            min_font_ratio=clamped_min_font_ratio,
-        )
-    )
-    job_manager.start_job(job.id, task)
-
-    LOGGER.info(
-        "Created translation job %s: file=%s, provider=%s, model=%s",
-        job.id,
-        ppt_file.filename,
-        provider,
-        model,
-    )
-
-    return JobCreateResponse(job_id=job.id, status=job.state.value)
+        if job is not None:
+            LOGGER.exception("Failed to create translation job %s: %s", job.id, exc)
+            await job_manager.delete_job(job.id)
+        else:
+            LOGGER.exception("Failed to create translation job: %s", exc)
+        raise HTTPException(status_code=500, detail="번역 작업 생성 중 오류가 발생했습니다.")
 
 
 @app.get("/api/v1/jobs/{job_id}", response_model=JobStatusResponse)

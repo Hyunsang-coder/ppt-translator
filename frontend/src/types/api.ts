@@ -70,6 +70,8 @@ export type TextFitMode = "none" | "auto_shrink" | "expand_box" | "shrink_then_e
 
 export type ImageCompression = "none" | "high" | "medium" | "low";
 
+export type LengthLimit = 110 | 130 | 150;
+
 export interface TranslationSettings {
   sourceLang: string;
   targetLang: string;
@@ -83,6 +85,7 @@ export interface TranslationSettings {
   textFitMode: TextFitMode;
   minFontRatio: number;
   imageCompression: ImageCompression;
+  lengthLimit: LengthLimit | null;
 }
 
 export interface ExtractionSettings {

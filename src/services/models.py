@@ -47,6 +47,7 @@ class TranslationRequest:
     translate_notes: bool = False
     text_fit_mode: TextFitMode = TextFitMode.NONE
     min_font_ratio: int = 80
+    length_limit: Optional[int] = None
 
 
 @dataclass

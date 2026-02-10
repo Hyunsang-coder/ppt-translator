@@ -156,6 +156,23 @@ class JobManager:
         LOGGER.info("Created job %s of type %s", job_id, job_type)
         return job
 
+    def try_create_job(self, job_type: JobType, max_active: int) -> Optional[Job]:
+        """Create a job only when active jobs are below capacity.
+
+        This check-and-create path performs no ``await`` and is therefore
+        effectively atomic on the event-loop thread.
+
+        Args:
+            job_type: Type of job to create.
+            max_active: Maximum allowed count of running + pending jobs.
+
+        Returns:
+            Created Job when capacity is available, otherwise ``None``.
+        """
+        if self.get_active_count() >= max_active:
+            return None
+        return self.create_job(job_type)
+
     def get_job(self, job_id: str) -> Optional[Job]:
         """Get a job by ID."""
         return self._jobs.get(job_id)

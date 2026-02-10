@@ -134,6 +134,10 @@ export const apiClient = {
     formData.append("min_font_ratio", String(settings.minFontRatio));
     // Image compression
     formData.append("compress_images", settings.imageCompression);
+    // Length limit
+    if (settings.lengthLimit !== null) {
+      formData.append("length_limit", String(settings.lengthLimit));
+    }
 
     const response = await fetch(`${API_BASE}/api/v1/jobs`, {
       method: "POST",

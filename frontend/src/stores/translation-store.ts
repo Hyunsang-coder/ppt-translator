@@ -91,7 +91,8 @@ const DEFAULT_SETTINGS: TranslationSettings = {
   },
   textFitMode: "expand_box",
   minFontRatio: 80,
-  imageCompression: "none",
+  imageCompression: "medium",
+  lengthLimit: null,
 };
 
 const MAX_LOGS = 400;
@@ -121,6 +122,12 @@ export const useTranslationStore = create<TranslationState>((set) => ({
       // Reset job state when file changes
       ...(file !== state.pptFile
         ? {
+            cachedMarkdown: null,
+            cachedMarkdownFileKey: null,
+            generatedContext: "",
+            isGeneratingContext: false,
+            generatedInstructions: "",
+            isGeneratingInstructions: false,
             jobId: null,
             status: "idle" as const,
             progress: null,
