@@ -18,10 +18,12 @@ const FALLBACK_MODELS: ModelInfo[] = [
 const FALLBACK_LANGUAGES: LanguageInfo[] = [
   { code: "Auto", name: "Auto (자동 감지)" },
   { code: "한국어", name: "한국어" },
-  { code: "English", name: "English" },
-  { code: "日本語", name: "日本語" },
-  { code: "中文(简体)", name: "中文(简体)" },
-  { code: "中文(繁體)", name: "中文(繁體)" },
+  { code: "영어", name: "English" },
+  { code: "일본어", name: "日本語" },
+  { code: "중국어", name: "中文" },
+  { code: "스페인어", name: "Español" },
+  { code: "프랑스어", name: "Français" },
+  { code: "독일어", name: "Deutsch" },
 ];
 
 const FALLBACK_CONFIG: ConfigResponse = {

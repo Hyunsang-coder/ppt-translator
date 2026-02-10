@@ -69,6 +69,9 @@ export class SSEClient {
   }
 
   private handleEvent(event: SSEEvent): void {
+    // Prevent stale events from firing after close() (e.g. retranslate race condition)
+    if (this.closed) return;
+
     switch (event.type) {
       case "progress":
         this.options.onProgress?.(event);

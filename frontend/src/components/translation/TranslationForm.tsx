@@ -186,7 +186,7 @@ export function TranslationForm() {
                 </>
               )}
 
-              {status === "failed" && (
+              {(status === "failed" || status === "cancelled") && (
                 <Button
                   variant="outline"
                   onClick={handleRetranslate}
@@ -236,7 +236,7 @@ export function TranslationForm() {
         </Card>
 
         {/* Progress */}
-        {(isTranslating || isCompleted || status === "failed") && (
+        {(isTranslating || isCompleted || status === "failed" || status === "cancelled") && (
           <ProgressPanel
             status={status}
             progress={progress}
