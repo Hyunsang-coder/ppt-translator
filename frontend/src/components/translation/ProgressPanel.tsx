@@ -22,6 +22,7 @@ const STATUS_LABELS: Record<string, string> = {
   applying_translations: "번역 적용 중",
   completed: "완료",
   failed: "실패",
+  cancelled: "취소됨",
 };
 
 interface CircularProgressProps {

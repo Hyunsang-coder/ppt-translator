@@ -97,7 +97,8 @@ export const apiClient = {
   async createJob(
     pptFile: File,
     settings: TranslationSettings,
-    glossaryFile?: File
+    glossaryFile?: File,
+    signal?: AbortSignal
   ): Promise<JobCreateResponse> {
     const formData = new FormData();
     formData.append("ppt_file", pptFile);
@@ -121,10 +122,13 @@ export const apiClient = {
     // Text fitting settings
     formData.append("text_fit_mode", settings.textFitMode);
     formData.append("min_font_ratio", String(settings.minFontRatio));
+    // Image compression
+    formData.append("compress_images", settings.imageCompression);
 
     const response = await fetch(`${API_BASE}/api/v1/jobs`, {
       method: "POST",
       body: formData,
+      signal,
     });
     return handleResponse<JobCreateResponse>(response);
   },

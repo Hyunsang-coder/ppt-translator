@@ -50,11 +50,13 @@ export function useTranslation() {
   } = useTranslationStore();
 
   const sseClientRef = useRef<SSEClient | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
-  // Cleanup SSE connection on unmount
+  // Cleanup SSE connection and abort controller on unmount
   useEffect(() => {
     return () => {
       sseClientRef.current?.close();
+      abortControllerRef.current?.abort();
     };
   }, []);
 
@@ -168,6 +170,10 @@ export function useTranslation() {
       clearLogs();
       addLog("번역 작업을 시작합니다...", "info");
 
+      // Create abort controller for upload cancellation
+      const abortController = new AbortController();
+      abortControllerRef.current = abortController;
+
       // Merge generated context and instructions into settings if available
       const effectiveSettings = {
         ...settings,
@@ -176,7 +182,8 @@ export function useTranslation() {
       };
 
       // Create job
-      const response = await apiClient.createJob(pptFile, effectiveSettings, glossaryFile ?? undefined);
+      const response = await apiClient.createJob(pptFile, effectiveSettings, glossaryFile ?? undefined, abortController.signal);
+      abortControllerRef.current = null;
       setJobId(response.job_id);
       addLog(`작업 생성 완료 (ID: ${response.job_id.slice(0, 8)}...)`, "info");
 
@@ -230,6 +237,8 @@ export function useTranslation() {
         },
       });
     } catch (err) {
+      // Ignore abort errors (handled by cancelTranslation)
+      if (err instanceof DOMException && err.name === "AbortError") return;
       const message = err instanceof Error ? err.message : "알 수 없는 오류가 발생했습니다.";
       setErrorMessage(message);
       setStatus("failed");
@@ -251,18 +260,25 @@ export function useTranslation() {
   ]);
 
   const cancelTranslation = useCallback(async () => {
-    const currentJobId = useTranslationStore.getState().jobId;
-    if (!currentJobId) return;
+    // Abort upload if still in progress
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
 
-    try {
-      sseClientRef.current?.close();
-      await apiClient.cancelJob(currentJobId);
-      setStatus("cancelled");
-      addLog("번역이 취소되었습니다.", "warning");
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "취소 실패";
-      addLog(`취소 실패: ${message}`, "error");
+    // Close SSE connection
+    sseClientRef.current?.close();
+
+    const currentJobId = useTranslationStore.getState().jobId;
+    if (currentJobId) {
+      try {
+        await apiClient.cancelJob(currentJobId);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "취소 실패";
+        addLog(`취소 실패: ${message}`, "error");
+      }
     }
+
+    setStatus("cancelled");
+    addLog("번역이 취소되었습니다.", "warning");
   }, [setStatus, addLog]);
 
   const downloadResult = useCallback(async () => {

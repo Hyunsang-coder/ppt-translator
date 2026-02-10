@@ -14,8 +14,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { FileUploader } from "@/components/shared/FileUploader";
 import { useConfig } from "@/hooks/useConfig";
-import type { TranslationSettings, FilenameSettings, TextFitMode } from "@/types/api";
-import { Sparkles, Loader2, FileText, Type } from "lucide-react";
+import type { TranslationSettings, FilenameSettings, TextFitMode, ImageCompression } from "@/types/api";
+import { Sparkles, Loader2, FileText, Type, ImageDown } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
 import {
   Tooltip,
@@ -274,6 +274,48 @@ export function SettingsPanel({
             </Tooltip>
           </div>
         </TooltipProvider>
+      </div>
+
+      {/* Image Compression */}
+      <Separator />
+      <div className="space-y-3">
+        <Label className="text-sm font-medium">이미지 압축</Label>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center space-x-2">
+            <Checkbox
+              id="compress-images"
+              checked={settings.imageCompression !== "none"}
+              onCheckedChange={(checked) =>
+                onSettingsChange({ imageCompression: checked ? "medium" : "none" })
+              }
+              disabled={disabled}
+            />
+            <Label htmlFor="compress-images" className="text-sm font-normal cursor-pointer">
+              이미지 압축 (대용량 파일 최적화)
+            </Label>
+          </div>
+          {settings.imageCompression !== "none" && (
+            <Select
+              value={settings.imageCompression}
+              onValueChange={(value) =>
+                onSettingsChange({ imageCompression: value as ImageCompression })
+              }
+              disabled={disabled}
+            >
+              <SelectTrigger className="w-[130px] h-8 text-sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="high">높음 (85%)</SelectItem>
+                <SelectItem value="medium">보통 (70%)</SelectItem>
+                <SelectItem value="low">낮음 (50%)</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          이미지 품질을 낮춰 메모리 사용을 줄입니다. 번역 품질에는 영향 없습니다.
+        </p>
       </div>
 
       {/* Context (Background Information) */}

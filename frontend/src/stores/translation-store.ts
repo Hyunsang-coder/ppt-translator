@@ -91,6 +91,7 @@ const DEFAULT_SETTINGS: TranslationSettings = {
   },
   textFitMode: "expand_box",
   minFontRatio: 80,
+  imageCompression: "none",
 };
 
 const MAX_LOGS = 400;

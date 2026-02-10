@@ -436,6 +436,7 @@ async def create_job(
     filename_settings: Optional[str] = Form(None, description="Filename settings as JSON"),
     text_fit_mode: str = Form("none", description="Text fitting mode: none, auto_shrink, expand_box"),
     min_font_ratio: int = Form(80, description="Minimum font size ratio (50-100) for auto_shrink mode"),
+    compress_images: str = Form("none", description="Image compression preset: none, high, medium, low"),
 ) -> JobCreateResponse:
     """Create a new translation job."""
     settings = get_settings()
@@ -486,6 +487,17 @@ async def create_job(
     if not is_valid:
         raise HTTPException(status_code=400, detail=error_msg or "Invalid PPT/PPTX file format")
     ppt_buffer.seek(0)
+
+    # Compress images if requested
+    if compress_images and compress_images != "none":
+        from src.utils.image_compressor import compress_pptx_images
+        try:
+            ppt_buffer = compress_pptx_images(ppt_buffer, preset=compress_images)
+            ppt_buffer.seek(0)
+            del file_content  # Free original bytes early
+        except Exception as exc:
+            LOGGER.warning("Image compression failed, using original: %s", exc)
+            ppt_buffer.seek(0)
 
     # Load glossary if provided
     glossary = None
@@ -944,6 +956,7 @@ async def translate_ppt(
     translate_notes: bool = Form(
         False, description="Also translate speaker notes"
     ),
+    compress_images: str = Form("none", description="Image compression preset: none, high, medium, low"),
 ) -> Response:
     """Translate a PowerPoint presentation (synchronous).
 
@@ -1005,6 +1018,17 @@ async def translate_ppt(
             detail=error_msg or "Invalid PPT/PPTX file format",
         )
     ppt_buffer.seek(0)
+
+    # Compress images if requested
+    if compress_images and compress_images != "none":
+        from src.utils.image_compressor import compress_pptx_images
+        try:
+            ppt_buffer = compress_pptx_images(ppt_buffer, preset=compress_images)
+            ppt_buffer.seek(0)
+            del file_content  # Free original bytes early
+        except Exception as exc:
+            LOGGER.warning("Image compression failed, using original: %s", exc)
+            ppt_buffer.seek(0)
 
     # Load glossary if provided
     glossary = None

@@ -68,6 +68,8 @@ export interface FilenameSettings {
 
 export type TextFitMode = "none" | "auto_shrink" | "expand_box" | "shrink_then_expand";
 
+export type ImageCompression = "none" | "high" | "medium" | "low";
+
 export interface TranslationSettings {
   sourceLang: string;
   targetLang: string;
@@ -80,6 +82,7 @@ export interface TranslationSettings {
   filenameSettings: FilenameSettings;
   textFitMode: TextFitMode;
   minFontRatio: number;
+  imageCompression: ImageCompression;
 }
 
 export interface ExtractionSettings {
