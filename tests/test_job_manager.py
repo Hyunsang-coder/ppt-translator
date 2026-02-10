@@ -146,6 +146,69 @@ class TestEventsBounded:
         assert last_event.data["i"] == 999
 
 
+class TestConcurrencyLimits:
+    """Tests for max_running concurrency control."""
+
+    @pytest.mark.asyncio
+    async def test_running_count(self):
+        """get_running_count should track running jobs."""
+        mgr = JobManager(max_jobs=100, max_running=5)
+        assert mgr.get_running_count() == 0
+
+        job = mgr.create_job(JobType.TRANSLATION)
+        mgr.start_job(job.id, asyncio.ensure_future(asyncio.sleep(999)))
+        assert mgr.get_running_count() == 1
+
+    @pytest.mark.asyncio
+    async def test_pending_count(self):
+        """get_pending_count should track pending jobs."""
+        mgr = JobManager(max_jobs=100, max_running=5)
+        job = mgr.create_job(JobType.TRANSLATION)
+        assert mgr.get_pending_count() == 1
+
+        mgr.start_job(job.id, asyncio.ensure_future(asyncio.sleep(999)))
+        assert mgr.get_pending_count() == 0
+
+    @pytest.mark.asyncio
+    async def test_active_count(self):
+        """get_active_count returns running + pending."""
+        mgr = JobManager(max_jobs=100, max_running=5)
+        j1 = mgr.create_job(JobType.TRANSLATION)
+        j2 = mgr.create_job(JobType.TRANSLATION)
+        assert mgr.get_active_count() == 2  # both pending
+
+        mgr.start_job(j1.id, asyncio.ensure_future(asyncio.sleep(999)))
+        assert mgr.get_active_count() == 2  # 1 running + 1 pending
+
+    @pytest.mark.asyncio
+    async def test_semaphore_limits_concurrent_execution(self):
+        """Semaphore should limit concurrent access."""
+        mgr = JobManager(max_jobs=100, max_running=2)
+        sem = mgr.running_semaphore
+
+        peak_concurrent = 0
+        current = 0
+
+        async def limited_work():
+            nonlocal peak_concurrent, current
+            async with sem:
+                current += 1
+                peak_concurrent = max(peak_concurrent, current)
+                await asyncio.sleep(0.05)
+                current -= 1
+
+        # Launch 5 tasks competing for 2 slots
+        await asyncio.gather(*[limited_work() for _ in range(5)])
+
+        assert peak_concurrent == 2  # Never exceeded max_running
+
+    @pytest.mark.asyncio
+    async def test_max_running_property(self):
+        """max_running property should reflect the configured value."""
+        mgr = JobManager(max_jobs=100, max_running=3)
+        assert mgr.max_running == 3
+
+
 class TestCleanupReleasesResources:
     """Tests that cleanup properly releases resources."""
 

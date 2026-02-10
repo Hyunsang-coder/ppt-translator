@@ -36,6 +36,16 @@ async function handleResponse<T>(response: Response): Promise<T> {
     } catch {
       // ignore JSON parse errors
     }
+
+    // User-friendly message for 429 Too Many Requests
+    if (response.status === 429) {
+      throw new ApiError(
+        detail || "서버가 바쁩니다. 잠시 후 다시 시도해주세요.",
+        response.status,
+        detail
+      );
+    }
+
     throw new ApiError(
       detail || `Request failed with status ${response.status}`,
       response.status,

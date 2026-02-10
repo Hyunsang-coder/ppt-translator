@@ -16,8 +16,10 @@ services:
       resources:
         limits:
           memory: 1536M
+          cpus: '2.0'
         reservations:
           memory: 512M
+          cpus: '0.5'
     logging:
       driver: "json-file"
       options:

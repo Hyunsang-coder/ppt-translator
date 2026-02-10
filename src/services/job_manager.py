@@ -122,9 +122,11 @@ class Job:
 class JobManager:
     """Manages async jobs with event streaming."""
 
-    def __init__(self, max_jobs: int = 100) -> None:
+    def __init__(self, max_jobs: int = 100, max_running: int = 2) -> None:
         self._jobs: Dict[str, Job] = {}
         self._max_jobs = max_jobs
+        self._max_running = max_running
+        self._running_semaphore = asyncio.Semaphore(max_running)
         self._cleanup_task: Optional[asyncio.Task] = None
 
     def create_job(self, job_type: JobType) -> Job:
@@ -333,6 +335,32 @@ class JobManager:
         """Get all jobs."""
         return list(self._jobs.values())
 
+    def get_running_count(self) -> int:
+        """Return the number of currently running jobs."""
+        return sum(1 for j in self._jobs.values() if j.state == JobState.RUNNING)
+
+    def get_pending_count(self) -> int:
+        """Return the number of pending (queued) jobs."""
+        return sum(1 for j in self._jobs.values() if j.state == JobState.PENDING)
+
+    def get_active_count(self) -> int:
+        """Return running + pending jobs count."""
+        return sum(
+            1
+            for j in self._jobs.values()
+            if j.state in (JobState.RUNNING, JobState.PENDING)
+        )
+
+    @property
+    def max_running(self) -> int:
+        """Maximum number of concurrently running jobs."""
+        return self._max_running
+
+    @property
+    def running_semaphore(self) -> asyncio.Semaphore:
+        """Semaphore controlling concurrent job execution."""
+        return self._running_semaphore
+
 
 # Global job manager instance
 _job_manager: Optional[JobManager] = None
@@ -342,5 +370,8 @@ def get_job_manager() -> JobManager:
     """Get the global job manager instance."""
     global _job_manager
     if _job_manager is None:
-        _job_manager = JobManager()
+        from src.utils.config import get_settings
+
+        settings = get_settings()
+        _job_manager = JobManager(max_running=settings.max_running_jobs)
     return _job_manager

@@ -255,10 +255,17 @@ export function useTranslation() {
     } catch (err) {
       // Ignore abort errors (handled by cancelTranslation)
       if (err instanceof DOMException && err.name === "AbortError") return;
+
+      // Server busy (429) - reset to idle so user can retry easily
+      const is429 =
+        err instanceof Error &&
+        "status" in err &&
+        (err as { status: number }).status === 429;
+
       const message = err instanceof Error ? err.message : "알 수 없는 오류가 발생했습니다.";
       setErrorMessage(message);
-      setStatus("failed");
-      addLog(message, "error");
+      setStatus(is429 ? "idle" : "failed");
+      addLog(message, is429 ? "warning" : "error");
     }
   }, [
     pptFile,

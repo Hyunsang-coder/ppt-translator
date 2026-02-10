@@ -10,6 +10,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api import app, SUPPORTED_MODELS, SUPPORTED_LANGUAGES
+from src.services.job_manager import JobType
+from src.utils.config import get_settings
 
 
 @pytest.fixture
@@ -57,6 +59,27 @@ class TestHealthEndpoint:
         assert "timestamp" in data
         assert "openai_api_key_configured" in data
         assert "anthropic_api_key_configured" in data
+
+    def test_health_check_includes_jobs_info(self, client):
+        """Test health check includes job concurrency info."""
+        response = client.get("/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert "jobs" in data
+        jobs = data["jobs"]
+        assert "running" in jobs
+        assert "pending" in jobs
+        assert "max_running" in jobs
+        assert isinstance(jobs["running"], int)
+        assert isinstance(jobs["max_running"], int)
+
+    def test_health_check_includes_memory(self, client):
+        """Test health check includes memory usage."""
+        response = client.get("/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert "memory_usage_mb" in data
+        assert isinstance(data["memory_usage_mb"], (int, float))
 
 
 class TestConfigEndpoints:
@@ -155,6 +178,35 @@ class TestJobEndpoints:
         """Test downloading result of non-existent job."""
         response = client.get("/api/v1/jobs/non-existent-id/result")
         assert response.status_code == 404
+
+    def test_create_job_returns_429_when_queue_full(self, client, sample_pptx_bytes):
+        """Test that creating a job returns 429 when active jobs exceed limit."""
+        from src.services.job_manager import get_job_manager, JobState
+
+        job_manager = get_job_manager()
+        settings = get_settings()
+        max_allowed = settings.max_running_jobs + settings.max_queued_jobs
+
+        # Fill up with fake pending jobs
+        fake_jobs = []
+        for _ in range(max_allowed):
+            job = job_manager.create_job(JobType.TRANSLATION)
+            fake_jobs.append(job)
+
+        try:
+            response = client.post(
+                "/api/v1/jobs",
+                files={"ppt_file": ("test.pptx", sample_pptx_bytes, "application/octet-stream")},
+                data={"provider": "openai", "model": "gpt-5.2"},
+            )
+            assert response.status_code == 429
+            assert "바쁩니다" in response.json()["detail"]
+        finally:
+            # Clean up fake jobs so they don't affect other tests
+            for job in fake_jobs:
+                job.state = JobState.COMPLETED
+                job.completed_at = 0  # mark as old
+            job_manager._cleanup_old_jobs()
 
 
 class TestExtractionEndpoint:

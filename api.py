@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import io
 import json
 import logging
 import os
+import resource
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
@@ -38,10 +41,24 @@ logging.basicConfig(
 )
 LOGGER = logging.getLogger(__name__)
 
+# Limit thread pool to prevent runaway thread creation
+_thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=3)
+
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):  # noqa: ARG001
+    """Set a bounded thread pool as the default executor on startup."""
+    loop = asyncio.get_running_loop()
+    loop.set_default_executor(_thread_pool)
+    yield
+    _thread_pool.shutdown(wait=False)
+
+
 app = FastAPI(
     title="PPT 번역캣 API",
     description="PowerPoint translation API using OpenAI GPT and Anthropic Claude models",
     version="2.4.0",
+    lifespan=lifespan,
 )
 
 # CORS middleware - read allowed origins from environment
@@ -82,6 +99,14 @@ except ImportError:
 # ============================================================================
 
 
+class JobsHealthInfo(BaseModel):
+    """Job concurrency info for health check."""
+
+    running: int
+    pending: int
+    max_running: int
+
+
 class HealthResponse(BaseModel):
     """Health check response."""
 
@@ -89,6 +114,8 @@ class HealthResponse(BaseModel):
     timestamp: str
     openai_api_key_configured: bool
     anthropic_api_key_configured: bool
+    jobs: Optional[JobsHealthInfo] = None
+    memory_usage_mb: Optional[float] = None
 
 
 class ModelInfo(BaseModel):
@@ -284,15 +311,36 @@ LANGUAGE_CODE_MAP: Dict[str, str] = {
 # ============================================================================
 
 
+def _get_memory_usage_mb() -> float:
+    """Return current process RSS memory usage in MB (Linux/macOS)."""
+    try:
+        ru = resource.getrusage(resource.RUSAGE_SELF)
+        # macOS returns bytes, Linux returns kilobytes
+        import sys
+
+        if sys.platform == "darwin":
+            return ru.ru_maxrss / (1024 * 1024)
+        return ru.ru_maxrss / 1024
+    except Exception:
+        return 0.0
+
+
 @app.get("/health", response_model=HealthResponse)
 async def health_check() -> HealthResponse:
     """Health check endpoint."""
     settings = get_settings()
+    job_manager = get_job_manager()
     return HealthResponse(
         status="healthy",
         timestamp=datetime.now().isoformat(),
         openai_api_key_configured=bool(settings.openai_api_key),
         anthropic_api_key_configured=bool(settings.anthropic_api_key),
+        jobs=JobsHealthInfo(
+            running=job_manager.get_running_count(),
+            pending=job_manager.get_pending_count(),
+            max_running=job_manager.max_running,
+        ),
+        memory_usage_mb=round(_get_memory_usage_mb(), 1),
     )
 
 
@@ -363,61 +411,64 @@ async def _run_translation_job(
     text_fit_mode: TextFitMode = TextFitMode.NONE,
     min_font_ratio: int = 80,
 ) -> None:
-    """Run translation job in background."""
+    """Run translation job in background, respecting concurrency semaphore."""
     job_manager = get_job_manager()
     settings = get_settings()
 
-    try:
-        request = TranslationRequest(
-            ppt_file=ppt_buffer,
-            source_lang=source_lang,
-            target_lang=target_lang,
-            provider=provider,
-            model=model,
-            context=context,
-            instructions=instructions,
-            glossary=glossary,
-            preprocess_repetitions=preprocess_repetitions,
-            translate_notes=translate_notes,
-            text_fit_mode=text_fit_mode,
-            min_font_ratio=min_font_ratio,
-        )
+    # Wait for a concurrency slot before actually starting work.
+    # The job is in RUNNING state, but it waits here until a slot is free.
+    async with job_manager.running_semaphore:
+        try:
+            request = TranslationRequest(
+                ppt_file=ppt_buffer,
+                source_lang=source_lang,
+                target_lang=target_lang,
+                provider=provider,
+                model=model,
+                context=context,
+                instructions=instructions,
+                glossary=glossary,
+                preprocess_repetitions=preprocess_repetitions,
+                translate_notes=translate_notes,
+                text_fit_mode=text_fit_mode,
+                min_font_ratio=min_font_ratio,
+            )
 
-        progress_callback = _create_progress_callback(job_id)
-        service = TranslationService(settings=settings, progress_callback=progress_callback)
+            progress_callback = _create_progress_callback(job_id)
+            service = TranslationService(settings=settings, progress_callback=progress_callback)
 
-        # Run translation in thread pool to avoid blocking
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, service.translate, request)
+            # Run translation in thread pool to avoid blocking
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, service.translate, request)
 
-        if not result.success:
-            await job_manager.fail_job(job_id, result.error_message or "Translation failed")
-            return
+            if not result.success:
+                await job_manager.fail_job(job_id, result.error_message or "Translation failed")
+                return
 
-        if result.output_file is None:
-            await job_manager.fail_job(job_id, "Translation succeeded but no output file was generated")
-            return
+            if result.output_file is None:
+                await job_manager.fail_job(job_id, "Translation succeeded but no output file was generated")
+                return
 
-        # Generate output filename using settings
-        download_name = generate_output_filename(
-            filename_settings=filename_settings,
-            original_filename=filename,
-            target_language=result.target_language_used,
-            model=model,
-        )
+            # Generate output filename using settings
+            download_name = generate_output_filename(
+                filename_settings=filename_settings,
+                original_filename=filename,
+                target_language=result.target_language_used,
+                model=model,
+            )
 
-        await job_manager.complete_job(
-            job_id,
-            result=result,
-            output_file=result.output_file,
-            output_filename=download_name,
-        )
+            await job_manager.complete_job(
+                job_id,
+                result=result,
+                output_file=result.output_file,
+                output_filename=download_name,
+            )
 
-    except asyncio.CancelledError:
-        LOGGER.info("Translation job %s was cancelled", job_id)
-    except Exception as exc:
-        LOGGER.exception("Translation job %s failed: %s", job_id, exc)
-        await job_manager.fail_job(job_id, f"번역 중 오류가 발생했습니다: {str(exc)}")
+        except asyncio.CancelledError:
+            LOGGER.info("Translation job %s was cancelled", job_id)
+        except Exception as exc:
+            LOGGER.exception("Translation job %s failed: %s", job_id, exc)
+            await job_manager.fail_job(job_id, f"번역 중 오류가 발생했습니다: {str(exc)}")
 
 
 @app.post("/api/v1/jobs", response_model=JobCreateResponse)
@@ -441,6 +492,15 @@ async def create_job(
     """Create a new translation job."""
     settings = get_settings()
     job_manager = get_job_manager()
+
+    # Reject if too many active (running + pending) jobs are queued
+    active_count = job_manager.get_active_count()
+    max_allowed = settings.max_running_jobs + settings.max_queued_jobs
+    if active_count >= max_allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="서버가 바쁩니다. 잠시 후 다시 시도해주세요.",
+        )
 
     # Validate provider
     if provider not in SUPPORTED_MODELS:

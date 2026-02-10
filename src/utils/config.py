@@ -29,6 +29,9 @@ class Settings:
     max_concurrency: int = 8
     wave_multiplier: float = 1.2
     tpm_limit: int = 30_000
+    # Job concurrency settings
+    max_running_jobs: int = 2
+    max_queued_jobs: int = 5
     # Rate limiter settings
     rate_limit_requests_per_second: float = 1.0
     rate_limit_check_interval: float = 0.1
@@ -123,6 +126,31 @@ def get_settings() -> Settings:
                 tpm_limit,
             )
 
+    # Job concurrency settings
+    max_running_jobs = base_settings.max_running_jobs
+    max_running_raw = os.getenv("TRANSLATION_MAX_RUNNING_JOBS")
+    if max_running_raw:
+        try:
+            max_running_jobs = max(1, int(max_running_raw))
+        except ValueError:
+            LOGGER.warning(
+                "Invalid TRANSLATION_MAX_RUNNING_JOBS=%s; using default %d.",
+                max_running_raw,
+                max_running_jobs,
+            )
+
+    max_queued_jobs = base_settings.max_queued_jobs
+    max_queued_raw = os.getenv("TRANSLATION_MAX_QUEUED_JOBS")
+    if max_queued_raw:
+        try:
+            max_queued_jobs = max(1, int(max_queued_raw))
+        except ValueError:
+            LOGGER.warning(
+                "Invalid TRANSLATION_MAX_QUEUED_JOBS=%s; using default %d.",
+                max_queued_raw,
+                max_queued_jobs,
+            )
+
     # Rate limiter settings
     rate_limit_rps = base_settings.rate_limit_requests_per_second
     rate_limit_rps_raw = os.getenv("TRANSLATION_RATE_LIMIT_RPS")
@@ -172,6 +200,8 @@ def get_settings() -> Settings:
         wave_multiplier=wave_multiplier,
         target_batch_count=target_batch_count,
         tpm_limit=tpm_limit,
+        max_running_jobs=max_running_jobs,
+        max_queued_jobs=max_queued_jobs,
         rate_limit_requests_per_second=rate_limit_rps,
         rate_limit_check_interval=rate_limit_check_interval,
         rate_limit_max_bucket_size=rate_limit_max_bucket,
