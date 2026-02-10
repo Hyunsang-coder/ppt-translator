@@ -187,7 +187,7 @@ export const apiClient = {
   /**
    * Extract text from PPT
    */
-  async extractText(pptFile: File, settings: ExtractionSettings): Promise<ExtractionResponse> {
+  async extractText(pptFile: File, settings: ExtractionSettings, signal?: AbortSignal): Promise<ExtractionResponse> {
     const formData = new FormData();
     formData.append("ppt_file", pptFile);
     formData.append("figures", settings.figures);
@@ -198,6 +198,7 @@ export const apiClient = {
     const response = await fetch(`${API_BASE}/api/v1/extract`, {
       method: "POST",
       body: formData,
+      signal,
     });
     return handleResponse<ExtractionResponse>(response);
   },
@@ -208,7 +209,8 @@ export const apiClient = {
   async summarizeText(
     markdown: string,
     provider?: string,
-    model?: string
+    model?: string,
+    signal?: AbortSignal
   ): Promise<SummarizeResponse> {
     const response = await fetch(`${API_BASE}/api/v1/summarize`, {
       method: "POST",
@@ -220,6 +222,7 @@ export const apiClient = {
         ...(provider && { provider }),
         ...(model && { model }),
       }),
+      signal,
     });
     return handleResponse<SummarizeResponse>(response);
   },
@@ -231,7 +234,8 @@ export const apiClient = {
     targetLang: string,
     markdown: string,
     provider?: string,
-    model?: string
+    model?: string,
+    signal?: AbortSignal
   ): Promise<{ instructions: string }> {
     const response = await fetch(`${API_BASE}/api/v1/generate-instructions`, {
       method: "POST",
@@ -242,6 +246,7 @@ export const apiClient = {
         ...(provider && { provider }),
         ...(model && { model }),
       }),
+      signal,
     });
     return handleResponse<{ instructions: string }>(response);
   },

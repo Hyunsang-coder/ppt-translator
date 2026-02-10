@@ -51,17 +51,19 @@ export function useTranslation() {
 
   const sseClientRef = useRef<SSEClient | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const generationAbortRef = useRef<AbortController | null>(null);
 
-  // Cleanup SSE connection and abort controller on unmount
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
       sseClientRef.current?.close();
       abortControllerRef.current?.abort();
+      generationAbortRef.current?.abort();
     };
   }, []);
 
   // Extract markdown with caching
-  const extractMarkdown = useCallback(async (): Promise<string | null> => {
+  const extractMarkdown = useCallback(async (signal?: AbortSignal): Promise<string | null> => {
     if (!pptFile) return null;
 
     const fileKey = getFileKey(pptFile);
@@ -79,7 +81,7 @@ export function useTranslation() {
       charts: "labels",
       withNotes: false,
       tableHeader: true,
-    });
+    }, signal);
     addLog(`${extractionResult.slide_count}개 슬라이드에서 텍스트 추출 완료`, "info");
 
     // Cache the result
@@ -91,12 +93,17 @@ export function useTranslation() {
   const generateContext = useCallback(async () => {
     if (!pptFile) return;
 
+    // Abort any previous generation
+    generationAbortRef.current?.abort();
+    const abortController = new AbortController();
+    generationAbortRef.current = abortController;
+
     try {
       setIsGeneratingContext(true);
       addLog("컨텍스트 생성을 시작합니다...", "info");
 
       // Step 1: Extract text from PPT (with caching)
-      const markdown = await extractMarkdown();
+      const markdown = await extractMarkdown(abortController.signal);
       if (!markdown) {
         throw new Error("마크다운 추출 실패");
       }
@@ -106,12 +113,14 @@ export function useTranslation() {
       const summaryResult = await apiClient.summarizeText(
         markdown,
         settings.provider,
-        settings.provider === "openai" ? "gpt-5-mini" : "claude-haiku-4-5-20251001"
+        settings.provider === "openai" ? "gpt-5-mini" : "claude-haiku-4-5-20251001",
+        abortController.signal
       );
 
       setGeneratedContext(summaryResult.summary);
       addLog("컨텍스트 생성 완료!", "success");
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       const message = err instanceof Error ? err.message : "컨텍스트 생성 실패";
       addLog(`컨텍스트 생성 실패: ${message}`, "error");
     } finally {
@@ -129,12 +138,17 @@ export function useTranslation() {
       return;
     }
 
+    // Abort any previous generation
+    generationAbortRef.current?.abort();
+    const abortController = new AbortController();
+    generationAbortRef.current = abortController;
+
     try {
       setIsGeneratingInstructions(true);
       addLog("번역 지침을 생성합니다...", "info");
 
       // Step 1: Extract text from PPT (with caching)
-      const markdown = await extractMarkdown();
+      const markdown = await extractMarkdown(abortController.signal);
       if (!markdown) {
         throw new Error("마크다운 추출 실패");
       }
@@ -145,12 +159,14 @@ export function useTranslation() {
         settings.targetLang,
         markdown,
         settings.provider,
-        settings.provider === "openai" ? "gpt-5-mini" : "claude-haiku-4-5-20251001"
+        settings.provider === "openai" ? "gpt-5-mini" : "claude-haiku-4-5-20251001",
+        abortController.signal
       );
 
       setGeneratedInstructions(response.instructions);
       addLog("번역 지침 생성 완료!", "success");
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       const message = err instanceof Error ? err.message : "지침 생성 실패";
       addLog(`지침 생성 실패: ${message}`, "error");
     } finally {
@@ -315,8 +331,17 @@ export function useTranslation() {
     await startTranslation();
   }, [resetJobState, startTranslation]);
 
+  // Wrap setPptFile to abort in-progress generation when file changes
+  const handleSetPptFile = useCallback((file: File | null) => {
+    generationAbortRef.current?.abort();
+    generationAbortRef.current = null;
+    setPptFile(file);
+  }, [setPptFile]);
+
   const resetTranslation = useCallback(() => {
     sseClientRef.current?.close();
+    generationAbortRef.current?.abort();
+    generationAbortRef.current = null;
     reset();
   }, [reset]);
 
@@ -356,7 +381,7 @@ export function useTranslation() {
     canDownload: status === "completed" && jobId !== null,
 
     // Actions
-    setPptFile,
+    setPptFile: handleSetPptFile,
     setGlossaryFile,
     updateSettings,
     setGeneratedContext,

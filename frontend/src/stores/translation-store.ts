@@ -115,7 +115,21 @@ export const useTranslationStore = create<TranslationState>((set) => ({
   logs: [],
 
   // Actions
-  setPptFile: (file) => set({ pptFile: file }),
+  setPptFile: (file) =>
+    set((state) => ({
+      pptFile: file,
+      // Reset job state when file changes
+      ...(file !== state.pptFile
+        ? {
+            jobId: null,
+            status: "idle" as const,
+            progress: null,
+            errorMessage: null,
+            resultFilename: null,
+            logs: [],
+          }
+        : {}),
+    })),
   setGlossaryFile: (file) => set({ glossaryFile: file }),
 
   updateSettings: (newSettings) =>
