@@ -45,6 +45,17 @@ export const changeTypeConfig: Record<ChangeType, ChangeTypeConfig> = {
 
 export const patchNotes: PatchNote[] = [
   {
+    version: "2026.02.13",
+    date: "2026-02-13",
+    title: "파일명 순서 지정, 길이 제한, 동시성 관리",
+    commitHash: "6592001",
+    changes: [
+      { type: "feature", description: "출력 파일명 suffix를 체크박스 선택 순서대로 정렬" },
+      { type: "feature", description: "번역 길이 제한 옵션 추가 (110/130/150%)" },
+      { type: "improvement", description: "서버 동시 번역 작업 수 제한 및 대기열 관리" },
+    ],
+  },
+  {
     version: "2026.02.10",
     date: "2026-02-10",
     title: "이미지 압축, 취소 개선, 안정성 강화",
