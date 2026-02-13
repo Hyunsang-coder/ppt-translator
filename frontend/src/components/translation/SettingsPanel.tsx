@@ -487,6 +487,21 @@ export interface FilenameSettingsSectionProps {
   disabled?: boolean;
 }
 
+type FilenamePartKey = "language" | "originalName" | "model" | "date";
+type FilenameBooleanSettingKey =
+  | "includeLanguage"
+  | "includeOriginalName"
+  | "includeModel"
+  | "includeDate";
+
+const FILENAME_PART_ORDER: FilenamePartKey[] = ["language", "originalName", "model", "date"];
+const FILENAME_SETTING_KEY_MAP: Record<FilenamePartKey, FilenameBooleanSettingKey> = {
+  language: "includeLanguage",
+  originalName: "includeOriginalName",
+  model: "includeModel",
+  date: "includeDate",
+};
+
 // Language code mapping for filenames
 const LANGUAGE_CODE_MAP: Record<string, string> = {
   "한국어": "KR",
@@ -497,6 +512,30 @@ const LANGUAGE_CODE_MAP: Record<string, string> = {
   "프랑스어": "FR",
   "독일어": "DE",
 };
+
+function isFilenamePartKey(value: string): value is FilenamePartKey {
+  return FILENAME_PART_ORDER.includes(value as FilenamePartKey);
+}
+
+function getEnabledFilenamePartOrder(settings: FilenameSettings): FilenamePartKey[] {
+  const seen = new Set<FilenamePartKey>();
+  const normalizedOrder: FilenamePartKey[] = [];
+  const configuredOrder = settings.componentOrder || [];
+
+  for (const part of configuredOrder) {
+    if (isFilenamePartKey(part) && !seen.has(part)) {
+      normalizedOrder.push(part);
+      seen.add(part);
+    }
+  }
+  for (const part of FILENAME_PART_ORDER) {
+    if (!seen.has(part)) {
+      normalizedOrder.push(part);
+    }
+  }
+
+  return normalizedOrder.filter((part) => settings[FILENAME_SETTING_KEY_MAP[part]]);
+}
 
 export function FilenameSettingsSection({
   settings,
@@ -515,14 +554,15 @@ export function FilenameSettingsSection({
       return `${customName}.pptx`;
     }
 
-    const parts: string[] = [];
-    if (settings.includeLanguage && targetLang) {
-      const langCode = LANGUAGE_CODE_MAP[targetLang] || targetLang;
-      parts.push(langCode);
-    }
-    if (settings.includeOriginalName) parts.push(originalName);
-    if (settings.includeModel) parts.push(modelName);
-    if (settings.includeDate) parts.push(today);
+    const partValues: Record<FilenamePartKey, string> = {
+      language: targetLang ? LANGUAGE_CODE_MAP[targetLang] || targetLang : "",
+      originalName,
+      model: modelName,
+      date: today,
+    };
+    const parts = getEnabledFilenamePartOrder(settings)
+      .map((part) => partValues[part])
+      .filter((part) => part);
 
     if (parts.length === 0) {
       return "translated.pptx";
@@ -535,6 +575,18 @@ export function FilenameSettingsSection({
     value: FilenameSettings[K]
   ) => {
     onChange({ ...settings, [key]: value });
+  };
+
+  const updatePartSelection = (part: FilenamePartKey, checked: boolean) => {
+    const settingKey = FILENAME_SETTING_KEY_MAP[part];
+    const withoutPart = (settings.componentOrder || []).filter((item) => item !== part);
+    const nextOrder = checked ? [...withoutPart, part] : withoutPart;
+
+    onChange({
+      ...settings,
+      [settingKey]: checked,
+      componentOrder: nextOrder,
+    });
   };
 
   return (
@@ -567,7 +619,7 @@ export function FilenameSettingsSection({
                     id="include-language"
                     checked={settings.includeLanguage}
                     onCheckedChange={(checked) =>
-                      updateSetting("includeLanguage", checked === true)
+                      updatePartSelection("language", checked === true)
                     }
                     disabled={disabled}
                   />
@@ -580,7 +632,7 @@ export function FilenameSettingsSection({
                     id="include-original"
                     checked={settings.includeOriginalName}
                     onCheckedChange={(checked) =>
-                      updateSetting("includeOriginalName", checked === true)
+                      updatePartSelection("originalName", checked === true)
                     }
                     disabled={disabled}
                   />
@@ -593,7 +645,7 @@ export function FilenameSettingsSection({
                     id="include-model"
                     checked={settings.includeModel}
                     onCheckedChange={(checked) =>
-                      updateSetting("includeModel", checked === true)
+                      updatePartSelection("model", checked === true)
                     }
                     disabled={disabled}
                   />
@@ -606,7 +658,7 @@ export function FilenameSettingsSection({
                     id="include-date"
                     checked={settings.includeDate}
                     onCheckedChange={(checked) =>
-                      updateSetting("includeDate", checked === true)
+                      updatePartSelection("date", checked === true)
                     }
                     disabled={disabled}
                   />

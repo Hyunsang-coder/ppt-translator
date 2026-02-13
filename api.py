@@ -18,7 +18,7 @@ from urllib.parse import quote
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.core.text_extractor import ExtractionOptions, docs_to_markdown, extract_pptx_to_docs
 from src.services import (
@@ -203,6 +203,9 @@ class FilenameSettings(BaseModel):
     includeOriginalName: bool = True
     includeModel: bool = False
     includeDate: bool = True
+    componentOrder: List[Literal["language", "originalName", "model", "date"]] = Field(
+        default_factory=lambda: ["language", "originalName", "model", "date"]
+    )
     customName: str = ""
 
 
@@ -241,7 +244,6 @@ def generate_output_filename(
         return f"{safe_custom}.pptx"
 
     # Auto mode
-    parts: list[str] = []
     timestamp = datetime.now().strftime("%Y%m%d")
 
     original_name = Path(original_filename).stem
@@ -252,14 +254,29 @@ def generate_output_filename(
     model_display_name = get_model_display_name(model)
     safe_model = sanitize_filename(model_display_name, fallback="model")
 
-    if filename_settings.includeLanguage:
-        parts.append(lang_code)
-    if filename_settings.includeOriginalName:
-        parts.append(safe_original)
-    if filename_settings.includeModel:
-        parts.append(safe_model)
-    if filename_settings.includeDate:
-        parts.append(timestamp)
+    part_values = {
+        "language": lang_code,
+        "originalName": safe_original,
+        "model": safe_model,
+        "date": timestamp,
+    }
+    include_flags = {
+        "language": filename_settings.includeLanguage,
+        "originalName": filename_settings.includeOriginalName,
+        "model": filename_settings.includeModel,
+        "date": filename_settings.includeDate,
+    }
+    default_order = ["language", "originalName", "model", "date"]
+
+    ordered_parts: list[str] = []
+    for part in filename_settings.componentOrder:
+        if part in default_order and part not in ordered_parts:
+            ordered_parts.append(part)
+    for part in default_order:
+        if part not in ordered_parts:
+            ordered_parts.append(part)
+
+    parts = [part_values[part] for part in ordered_parts if include_flags[part]]
 
     if not parts:
         return "translated.pptx"

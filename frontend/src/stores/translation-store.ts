@@ -87,6 +87,7 @@ const DEFAULT_SETTINGS: TranslationSettings = {
     includeOriginalName: true,
     includeModel: false,
     includeDate: true,
+    componentOrder: ["language", "originalName", "model", "date"],
     customName: "",
   },
   textFitMode: "expand_box",

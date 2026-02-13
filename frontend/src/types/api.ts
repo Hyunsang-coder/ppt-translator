@@ -63,6 +63,7 @@ export interface FilenameSettings {
   includeOriginalName: boolean;
   includeModel: boolean;
   includeDate: boolean;
+  componentOrder: Array<"language" | "originalName" | "model" | "date">;
   customName: string;
 }
 

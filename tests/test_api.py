@@ -9,7 +9,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from api import app, SUPPORTED_MODELS, SUPPORTED_LANGUAGES
+from api import (
+    app,
+    FilenameSettings,
+    SUPPORTED_LANGUAGES,
+    SUPPORTED_MODELS,
+    generate_output_filename,
+)
 from src.services.job_manager import JobType
 from src.utils.config import get_settings
 
@@ -45,6 +51,49 @@ def sample_pptx_bytes():
 </Relationships>""")
     buffer.seek(0)
     return buffer.read()
+
+
+class TestFilenameGeneration:
+    """Tests for output filename generation."""
+
+    def test_generate_output_filename_respects_component_order(self):
+        """Custom component order should be reflected in output."""
+        settings = FilenameSettings(
+            mode="auto",
+            includeLanguage=True,
+            includeOriginalName=True,
+            includeModel=False,
+            includeDate=False,
+            componentOrder=["originalName", "language", "model", "date"],
+        )
+
+        filename = generate_output_filename(
+            filename_settings=settings,
+            original_filename="original.pptx",
+            target_language="영어",
+            model="gpt-5.2",
+        )
+
+        assert filename == "original_EN.pptx"
+
+    def test_generate_output_filename_uses_default_order_when_missing(self):
+        """Older clients without componentOrder should keep default behavior."""
+        settings = FilenameSettings(
+            mode="auto",
+            includeLanguage=True,
+            includeOriginalName=True,
+            includeModel=False,
+            includeDate=False,
+        )
+
+        filename = generate_output_filename(
+            filename_settings=settings,
+            original_filename="original.pptx",
+            target_language="영어",
+            model="gpt-5.2",
+        )
+
+        assert filename == "EN_original.pptx"
 
 
 class TestHealthEndpoint:
