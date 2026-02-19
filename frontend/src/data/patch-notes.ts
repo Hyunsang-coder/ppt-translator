@@ -45,6 +45,16 @@ export const changeTypeConfig: Record<ChangeType, ChangeTypeConfig> = {
 
 export const patchNotes: PatchNote[] = [
   {
+    version: "2026.02.19",
+    date: "2026-02-19",
+    title: "Claude Sonnet 4.6 모델 업그레이드",
+    commitHash: "959ebf8",
+    changes: [
+      { type: "feature", description: "기본 번역 모델을 Claude Sonnet 4.6으로 업그레이드" },
+      { type: "improvement", description: "GitHub Actions CI/CD 파이프라인 추가 (테스트 및 타입 체크 자동화)" },
+    ],
+  },
+  {
     version: "2026.02.13",
     date: "2026-02-13",
     title: "파일명 순서 지정, 길이 제한, 동시성 관리",
