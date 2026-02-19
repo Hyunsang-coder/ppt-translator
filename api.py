@@ -295,7 +295,7 @@ SUPPORTED_MODELS: Dict[str, List[ModelInfo]] = {
     ],
     "anthropic": [
         ModelInfo(id="claude-opus-4-6", name="Claude Opus 4.6", provider="anthropic"),
-        ModelInfo(id="claude-sonnet-4-5-20250929", name="Claude Sonnet 4.5", provider="anthropic"),
+        ModelInfo(id="claude-sonnet-4-6", name="Claude Sonnet 4.6", provider="anthropic"),
         ModelInfo(id="claude-haiku-4-5-20251001", name="Claude Haiku 4.5", provider="anthropic"),
     ],
 }
@@ -392,7 +392,7 @@ async def get_config() -> ConfigResponse:
         max_upload_size_mb=settings.max_upload_size_mb,
         providers=list(SUPPORTED_MODELS.keys()),
         default_provider="anthropic",
-        default_model="claude-sonnet-4-5-20250929",
+        default_model="claude-sonnet-4-6",
     )
 
 
@@ -498,7 +498,7 @@ async def create_job(
     source_lang: str = Form("Auto", description="Source language"),
     target_lang: str = Form("Auto", description="Target language"),
     provider: str = Form("anthropic", description="LLM provider"),
-    model: str = Form("claude-sonnet-4-5-20250929", description="Model to use"),
+    model: str = Form("claude-sonnet-4-6", description="Model to use"),
     context: Optional[str] = Form(None, description="Background information about the presentation"),
     instructions: Optional[str] = Form(None, description="Translation style/tone guidelines"),
     preprocess_repetitions: bool = Form(False, description="Deduplicate repeated phrases"),
@@ -1047,7 +1047,7 @@ async def translate_ppt(
     source_lang: str = Form("Auto", description="Source language (Auto for detection)"),
     target_lang: str = Form("Auto", description="Target language (Auto for inference)"),
     provider: str = Form("anthropic", description="LLM provider (openai or anthropic)"),
-    model: str = Form("claude-sonnet-4-5-20250929", description="Model to use (depends on provider)"),
+    model: str = Form("claude-sonnet-4-6", description="Model to use (depends on provider)"),
     context: Optional[str] = Form(None, description="Background information about the presentation"),
     instructions: Optional[str] = Form(None, description="Translation style/tone guidelines"),
     preprocess_repetitions: bool = Form(

@@ -55,6 +55,8 @@ cd frontend && npx tsc --noEmit
    - `TRANSLATION_TARGET_BATCH_COUNT` (default: 5) - Target number of batches for batch size calculation
    - `TRANSLATION_WAVE_MULTIPLIER` (default: 1.2) - Wave multiplier for concurrency scheduling
    - `TRANSLATION_TPM_LIMIT` (default: 30000) - Tokens per minute limit
+   - `TRANSLATION_MAX_RUNNING_JOBS` (default: 2) - Max concurrent running jobs
+   - `TRANSLATION_MAX_QUEUED_JOBS` (default: 5) - Max queued jobs waiting to run
    - `TRANSLATION_RATE_LIMIT_RPS` (default: 1.0) - Requests per second
    - `TRANSLATION_RATE_LIMIT_CHECK_INTERVAL` (default: 0.1) - Rate check interval in seconds
    - `TRANSLATION_RATE_LIMIT_MAX_BUCKET` (default: 10) - Token bucket size for rate limiting
@@ -72,6 +74,10 @@ cd frontend && npx tsc --noEmit
 ### Vercel (Frontend)
 - **`frontend/vercel.json`**: Rewrites `/api/*` and `/health` to EC2 backend, enabling same-origin API calls
 - `NEXT_PUBLIC_API_URL` defaults to empty string so relative paths use Vercel rewrites
+
+### CI/CD (`.github/workflows/`)
+- **`ci.yml`**: Runs on PR and manual dispatch. Backend fast tests (Python 3.12, pytest) and frontend type check (Node 20, `tsc --noEmit`)
+- **`predeploy.yml`**: Pre-deployment validation checks
 
 ## Architecture
 
@@ -101,7 +107,7 @@ cd frontend && npx tsc --noEmit
 - `text_extractor.py`: Converts PPTX to structured markdown with `ExtractionOptions`
 
 ### Service Layer (`src/services/`)
-- `models.py`: Data models (`TranslationRequest`, `TranslationResult`, `TranslationProgress`, `TranslationStatus`, `TextFitMode`, `ProgressCallback`)
+- `models.py`: Data models (`TranslationRequest`, `TranslationResult`, `TranslationProgress`, `TranslationStatus`, `TextFitMode`, `ProgressCallback`). `TranslationRequest` includes `length_limit: Optional[int]` for translation length constraints
 - `translation_service.py`: `TranslationService` class encapsulating translation workflow logic
   - `ServiceProgressTracker`: Adapter for progress callbacks in service layer
   - Progress callback support for real-time updates
@@ -111,14 +117,15 @@ cd frontend && npx tsc --noEmit
   - `JobType`: TRANSLATION / EXTRACTION
   - `JobState`: PENDING / RUNNING / COMPLETED / FAILED / CANCELLED
   - `JobEvent`: SSE event types for progress updates
-  - `get_job_manager()`: Global singleton accessor
+  - `get_job_manager()`: Global singleton accessor (initializes with `max_running` from settings)
+  - Concurrency control: `running_semaphore` (asyncio.Semaphore) limits concurrent job execution; `try_create_job()` provides atomic admission check (running + pending < max_active) without awaiting, preventing over-admission under burst traffic. Returns HTTP 429 when capacity exceeded
   - Cancellation keeps jobs in store (state=CANCELLED, completed_at set) for status queries; `_cleanup_old_jobs` removes after 1h
   - Terminal state guards: `complete_job`/`fail_job` skip if already CANCELLED, preventing race conditions
   - Thread-safe event dispatch: `add_event()` uses `call_soon_threadsafe` to route worker-thread events to the event-loop thread, preventing `deque mutated during iteration` errors with concurrent SSE streaming. `_dispatch_event()` runs exclusively on the event-loop thread. Falls back to direct append when no event loop is available (sync tests) or when the loop is closed.
 
 ### Translation Chain (`src/chains/`)
 - `llm_factory.py`: Factory for creating LLM instances (OpenAI/Anthropic) with provider-specific configuration, includes built-in rate limiting via `InMemoryRateLimiter`
-- `translation_chain.py`: LangChain pipeline using structured output (`TranslationOutput` Pydantic model) for type-safe parsing, LangChain batch API for concurrent execution with tenacity retry logic. `_batch_translate_with_retry` resets progress tracker on each retry attempt to prevent `batch_completed` double-counting, and performs fail-fast validation (raises on missing batch results so tenacity can retry). `translate_with_progress` includes a defensive None guard for result assembly.
+- `translation_chain.py`: LangChain pipeline using structured output (`TranslationOutput` Pydantic model) for type-safe parsing, LangChain batch API for concurrent execution with tenacity retry logic. `_batch_translate_with_retry` resets progress tracker on each retry attempt to prevent `batch_completed` double-counting, and performs fail-fast validation (raises on missing batch results so tenacity can retry). `translate_with_progress` includes a defensive None guard for result assembly. Supports optional `length_limit` parameter (110/130/150%) to constrain translation length for tight layouts.
 - `color_distribution_chain.py`: LLM-based color/format distribution for multi-color paragraphs — maps translated text segments back to original format groups
 - `context_manager.py`: Builds global presentation context for consistent translations
 - `summarization_chain.py`: AI-powered context and instructions generation (uses lightweight models: GPT-5 Mini / Haiku 4.5)
@@ -130,6 +137,7 @@ cd frontend && npx tsc --noEmit
 - `repetition.py`: Deduplicates repeated phrases to reduce API calls
 - `helpers.py`: Batch chunking, text segmentation for run distribution
 - `security.py`: File validation, filename sanitization (preserves Unicode/spaces, collapses whitespace), HTML content escaping
+- `image_compressor.py`: PPTX image compression at ZIP level (before python-pptx parsing) to reduce memory on constrained servers. Supports presets (`high`/`medium`/`low`) with configurable JPEG quality and max dimensions. Preserves transparency (PNG), skips vector formats, only replaces if compressed is smaller
 
 ### Frontend (`frontend/`)
 Next.js 16 with React 19, TypeScript 5, Tailwind CSS 4, and Zustand 5 state management. Includes graceful fallback when backend is unavailable.
@@ -151,7 +159,7 @@ Next.js 16 with React 19, TypeScript 5, Tailwind CSS 4, and Zustand 5 state mana
 - **ui/**: Shadcn/Radix UI components (button, card, checkbox, input, label, progress, radio-group, select, separator, sonner, switch, tabs, textarea, tooltip)
 
 #### State Management (`src/stores/`)
-- `translation-store.ts`: Zustand store for translation state (file, settings, progress, logs). `resetJobState()` resets only job-related state (jobId, status, progress, error, logs) while preserving file/settings/context for retranslation.
+- `translation-store.ts`: Zustand store for translation state (file, settings, progress, logs). `resetJobState()` resets only job-related state (jobId, status, progress, error, logs) while preserving file/settings/context for retranslation. Default settings include `textFitMode: "expand_box"`, `imageCompression: "medium"`, and `lengthLimit: null`.
 - `extraction-store.ts`: Zustand store for extraction state
 
 #### API Integration (`src/lib/`)
@@ -168,7 +176,7 @@ Next.js 16 with React 19, TypeScript 5, Tailwind CSS 4, and Zustand 5 state mana
 - `patch-notes.ts`: Patch notes data with `PatchNote`, `Change`, `ChangeType` types and `changeTypeConfig` for UI rendering. Versions use date-based format (`YYYY.MM.DD`)
 
 #### Types (`src/types/`)
-- `api.ts`: TypeScript type definitions for API responses, settings, and job states
+- `api.ts`: TypeScript type definitions for API responses, settings, and job states. Includes `ImageCompression` (`none`/`high`/`medium`/`low`), `LengthLimit` (110/130/150), `TextFitMode`, and `FilenameSettings` types
 
 #### Deployment (`vercel.json`)
 - Rewrites `/api/:path*` and `/health` to EC2 backend for same-origin API proxy
@@ -185,13 +193,15 @@ Centralized color management with CSS variables:
 - `test_api.py`: FastAPI endpoint tests
 - `test_color_distribution.py`: Color distribution validation and format grouping tests
 - `test_text_fit.py`: Text fit modes (auto_shrink, expand_box, shrink_then_expand) and width expansion tests
-- `test_job_manager.py`: Job state locking, deletion, event bounding, cleanup tests
+- `test_job_manager.py`: Job state locking, deletion, event bounding, cleanup, concurrency admission tests
 - `test_batch_size.py`: Batch size calculation edge cases
 - `test_security_fix.py`: HTML sanitization and XSS prevention tests
+- `test_image_compressor.py`: Image compression presets, transparency preservation, fallback behavior tests
 
 ## Key Patterns
 
 ### Translation Flow
+0. Optional: `compress_pptx_images()` pre-compresses images at ZIP level before parsing
 1. `PPTParser.extract_paragraphs()` → `List[ParagraphInfo]` + `Presentation`
 2. `ContextManager.build_global_context()` for cross-slide consistency
 3. Optional: `build_repetition_plan()` to deduplicate identical text
@@ -202,13 +212,14 @@ Centralized color management with CSS variables:
 8. `PPTWriter.apply_translations()` writes back preserving run formatting, applies text fit and color distributions
 
 ### Async Job Flow (FastAPI + Next.js)
-1. Frontend calls `POST /api/v1/jobs` with file, settings, and filename_settings (JSON)
-2. Backend creates job, returns `job_id`
-3. Frontend connects to `GET /api/v1/jobs/{job_id}/events` (SSE)
-4. Backend streams events: `started`, `progress`, `complete`, `error`, `cancelled`, `keepalive`
-5. Frontend tracks progress via SSE events and updates UI
-6. Frontend calls `GET /api/v1/jobs/{job_id}/result` to download translated file
-7. Output filename generated server-side based on `FilenameSettings` (auto/custom mode)
+1. Frontend calls `POST /api/v1/jobs` with file, settings, filename_settings (JSON), compress_images, and length_limit
+2. Backend atomically admits job via `try_create_job()` (returns 429 if running + pending >= max_active)
+3. Backend creates job, returns `job_id`; job waits on `running_semaphore` before starting work
+4. Frontend connects to `GET /api/v1/jobs/{job_id}/events` (SSE)
+5. Backend streams events: `started`, `progress`, `complete`, `error`, `cancelled`, `keepalive`
+6. Frontend tracks progress via SSE events and updates UI
+7. Frontend calls `GET /api/v1/jobs/{job_id}/result` to download translated file
+8. Output filename generated server-side based on `FilenameSettings` (auto/custom mode, ordered by `componentOrder`)
 
 ### Formatting Preservation
 `PPTWriter` uses `split_text_into_segments()` with character-length weights to distribute translated text across original runs, preserving bold/italic/font styling. For multi-color paragraphs, `color_distribution_chain` uses LLM to split translated text by meaning and map segments back to original format groups.
@@ -253,7 +264,7 @@ curl -X POST http://localhost:8000/api/v1/jobs \
   -F "ppt_file=@presentation.pptx" \
   -F "target_lang=한국어" \
   -F "provider=anthropic" \
-  -F "model=claude-sonnet-4-5-20250929"
+  -F "model=claude-sonnet-4-6"
 
 # Stream job progress (SSE)
 curl -N http://localhost:8000/api/v1/jobs/{job_id}/events
@@ -266,7 +277,7 @@ curl -X POST http://localhost:8000/translate \
   -F "ppt_file=@presentation.pptx" \
   -F "target_lang=한국어" \
   -F "provider=anthropic" \
-  -F "model=claude-sonnet-4-5-20250929" \
+  -F "model=claude-sonnet-4-6" \
   -o translated.pptx
 
 # Generate context summary
@@ -288,7 +299,7 @@ curl -X POST http://localhost:8000/api/v1/generate-instructions \
 | OpenAI | `gpt-5.2` | GPT-5.2 |
 | OpenAI | `gpt-5-mini` | GPT-5 Mini |
 | Anthropic | `claude-opus-4-6` | Claude Opus 4.6 |
-| Anthropic | `claude-sonnet-4-5-20250929` | Claude Sonnet 4.5 |
+| Anthropic | `claude-sonnet-4-6` | Claude Sonnet 4.6 |
 | Anthropic | `claude-haiku-4-5-20251001` | Claude Haiku 4.5 |
 
 ### Context/Instructions Generation

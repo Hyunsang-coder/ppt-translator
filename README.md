@@ -85,7 +85,7 @@ cd frontend && npx tsc --noEmit && npm run build
 | OpenAI | `gpt-5.2` | GPT-5.2 |
 | OpenAI | `gpt-5-mini` | GPT-5 Mini |
 | Anthropic | `claude-opus-4-6` | Claude Opus 4.6 |
-| Anthropic | `claude-sonnet-4-5-20250929` | Claude Sonnet 4.5 |
+| Anthropic | `claude-sonnet-4-6` | Claude Sonnet 4.6 |
 | Anthropic | `claude-haiku-4-5-20251001` | Claude Haiku 4.5 |
 
 ## 배포
