@@ -208,6 +208,8 @@ export function useTranslation() {
       const eventsUrl = apiClient.getJobEventsUrl(response.job_id);
 
       sseClientRef.current = createSSEClient(eventsUrl, {
+        jobId: response.job_id,
+        getJobStatus: (id) => apiClient.getJobStatus(id),
         onStarted: () => {
           addLog("번역이 시작되었습니다.", "info");
         },
