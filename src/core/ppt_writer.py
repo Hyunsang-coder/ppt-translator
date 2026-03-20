@@ -252,7 +252,18 @@ def _safe_expand_width(shape, available_right, needed_expansion_emu):
     if actual_expansion <= 0:
         return 1.0
 
+    # Placeholder shapes may inherit dimensions from the slide layout via
+    # an empty <p:spPr/> (no explicit xfrm).  Setting only ``shape.width``
+    # causes python-pptx to create an xfrm with cy=0 (height collapses).
+    # Materialise all four positional attributes first so the full xfrm is
+    # written and the inherited height / position are preserved.
+    old_height = shape.height
+    old_left = shape.left
+    old_top = shape.top
+    shape.left = old_left
+    shape.top = old_top
     shape.width = old_width + actual_expansion
+    shape.height = old_height
 
     return shape.width / old_width if old_width > 0 else 1.0
 

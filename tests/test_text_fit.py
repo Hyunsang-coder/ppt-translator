@@ -842,5 +842,74 @@ class WidthExpansionOverflowTestCase(unittest.TestCase):
         self.assertLessEqual(shape.left + shape.width, slide_w)
 
 
+class PlaceholderExpansionTestCase(unittest.TestCase):
+    """Regression: placeholder shapes without explicit xfrm must not lose height.
+
+    Placeholder shapes inherit position/size from the slide layout via an empty
+    ``<p:spPr/>``.  When ``_safe_expand_width`` sets ``shape.width``, python-pptx
+    creates a new xfrm with ``cy=0`` unless height is also explicitly written.
+    """
+
+    @staticmethod
+    def _get_placeholder_slide(prs):
+        """Return a slide with placeholder shapes (uses layout 0 = title slide)."""
+        layout = prs.slide_layouts[0]  # Title Slide layout
+        return prs.slides.add_slide(layout)
+
+    def test_placeholder_height_preserved_after_expand(self):
+        """Height must not collapse to 0 when expanding a placeholder."""
+        prs = Presentation()
+        slide = self._get_placeholder_slide(prs)
+
+        for shape in slide.placeholders:
+            if not shape.has_text_frame:
+                continue
+            tf = shape.text_frame
+            tf.paragraphs[0].text = "Original"
+            run = tf.paragraphs[0].runs[0]
+            run.font.size = Pt(20)
+
+            orig_h = shape.height
+            orig_left = shape.left
+            orig_top = shape.top
+
+            needed = int(shape.width * 0.2)
+            avail_right = needed + 100000  # enough room
+            _safe_expand_width(shape, avail_right, needed)
+
+            self.assertGreater(shape.height, 0, "Placeholder height collapsed to 0")
+            self.assertEqual(shape.height, orig_h, "Placeholder height changed")
+            self.assertEqual(shape.left, orig_left, "Placeholder left changed")
+            self.assertEqual(shape.top, orig_top, "Placeholder top changed")
+
+    def test_placeholder_expand_via_apply_translations(self):
+        """Full apply_translations on placeholder shapes must preserve height."""
+        prs = Presentation()
+        slide = self._get_placeholder_slide(prs)
+
+        placeholders = [p for p in slide.placeholders if p.has_text_frame]
+        if not placeholders:
+            self.skipTest("No text placeholders in layout")
+
+        ph = placeholders[0]
+        tf = ph.text_frame
+        tf.paragraphs[0].text = "Short"
+        run = tf.paragraphs[0].runs[0]
+        run.font.size = Pt(24)
+
+        orig_h = ph.height
+        para_info = _make_paragraph_info(ph)
+        long_text = "x" * (len(para_info.original_text) * 3)
+
+        writer = PPTWriter()
+        writer.apply_translations(
+            [para_info], [long_text], prs,
+            text_fit_mode="expand_box", min_font_ratio=80,
+        )
+
+        self.assertGreater(ph.height, 0, "Placeholder height collapsed to 0")
+        self.assertEqual(ph.height, orig_h, "Placeholder height changed")
+
+
 if __name__ == "__main__":
     unittest.main()
