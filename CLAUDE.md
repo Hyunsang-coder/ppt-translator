@@ -192,7 +192,7 @@ Centralized color management with CSS variables:
 - `test_translation.py`: Unit tests for translation helpers and language detection
 - `test_api.py`: FastAPI endpoint tests
 - `test_color_distribution.py`: Color distribution validation and format grouping tests
-- `test_text_fit.py`: Text fit modes (auto_shrink, expand_box, shrink_then_expand) and width expansion tests
+- `test_text_fit.py`: Text fit modes (auto_shrink, expand_box, shrink_then_expand), width expansion tests, and auto_size preservation regression tests
 - `test_job_manager.py`: Job state locking, deletion, event bounding, cleanup, concurrency admission tests
 - `test_batch_size.py`: Batch size calculation edge cases
 - `test_security_fix.py`: HTML sanitization and XSS prevention tests
@@ -228,7 +228,7 @@ Centralized color management with CSS variables:
 `TextFitMode` controls how translated text fits in text boxes:
 - `none`: No adjustment
 - `auto_shrink`: Reduce font size (down to `min_font_ratio`%) if text overflows
-- `expand_box`: Widen text box to accommodate longer text (skips rotated/grouped/table shapes)
+- `expand_box`: Widen text box via width expansion to accommodate longer text (skips rotated/grouped/table shapes). Does NOT set `SHAPE_TO_FIT_TEXT` auto_size — preserves original auto_size to prevent unpredictable shape resizing
 - `shrink_then_expand`: Try shrinking first, then expand if still overflowing
 
 Width expansion is applied before text fit for all non-NONE modes. Font sizes are rounded to the nearest whole point (1 pt = 12700 EMU) to avoid fractional values in output PPTX.

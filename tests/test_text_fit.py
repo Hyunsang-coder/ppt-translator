@@ -201,14 +201,15 @@ class TextFitAutoShrinkTestCase(unittest.TestCase):
 class TextFitExpandBoxTestCase(unittest.TestCase):
     """TextFitMode.EXPAND_BOX tests."""
 
-    def test_expand_box_sets_auto_size(self):
-        """Expand box mode should set SHAPE_TO_FIT_TEXT."""
+    def test_expand_box_preserves_auto_size(self):
+        """Expand box mode should NOT change auto_size (rely on width expansion)."""
         prs = Presentation()
         shape, tf = _make_textbox(prs, "Hello", font_size_pt=20)
+        tf.auto_size = MSO_AUTO_SIZE.NONE
 
         apply_text_fit(tf, original_len=5, translated_len=15, mode=TextFitMode.EXPAND_BOX)
 
-        self.assertEqual(tf.auto_size, MSO_AUTO_SIZE.SHAPE_TO_FIT_TEXT)
+        self.assertEqual(tf.auto_size, MSO_AUTO_SIZE.NONE)
 
     def test_expand_box_enables_word_wrap(self):
         """Expand box should enable word wrap so only height expands."""
@@ -290,12 +291,13 @@ class TextFitShrinkThenExpandTestCase(unittest.TestCase):
         # Should NOT expand box
         self.assertNotEqual(tf.auto_size, MSO_AUTO_SIZE.SHAPE_TO_FIT_TEXT)
 
-    def test_shrink_and_expand_when_hitting_floor(self):
-        """When shrink hits floor, also expand box."""
+    def test_shrink_and_no_auto_size_change_when_hitting_floor(self):
+        """When shrink hits floor, font is shrunk but auto_size is preserved."""
         prs = Presentation()
         shape, tf = _make_textbox(prs, "Hi", font_size_pt=20)
+        tf.auto_size = MSO_AUTO_SIZE.NONE
 
-        # 5x longer, min_ratio=70 -> floor hit -> shrink to 70% AND expand
+        # 5x longer, min_ratio=70 -> floor hit -> shrink to 70%, rely on width expansion
         apply_text_fit(
             tf, original_len=10, translated_len=50,
             mode=TextFitMode.SHRINK_THEN_EXPAND, min_font_ratio=70,
@@ -303,8 +305,8 @@ class TextFitShrinkThenExpandTestCase(unittest.TestCase):
 
         # Font shrunk to floor
         self.assertEqual(tf.paragraphs[0].runs[0].font.size, Pt(14))
-        # Box expanded (NOT TEXT_TO_FIT_SHAPE like auto_shrink)
-        self.assertEqual(tf.auto_size, MSO_AUTO_SIZE.SHAPE_TO_FIT_TEXT)
+        # auto_size should NOT be changed (no SHAPE_TO_FIT_TEXT)
+        self.assertEqual(tf.auto_size, MSO_AUTO_SIZE.NONE)
 
     def test_word_wrap_enabled(self):
         """Hybrid mode should enable word wrap."""
@@ -630,6 +632,94 @@ class WidthExpansionTestCase(unittest.TestCase):
 
         # Width expansion should have compensated, so SHAPE_TO_FIT_TEXT not needed
         self.assertNotEqual(tf.auto_size, MSO_AUTO_SIZE.SHAPE_TO_FIT_TEXT)
+
+
+class AutoSizePreservationTestCase(unittest.TestCase):
+    """Regression tests: apply_translations must never change auto_size.
+
+    These reproduce the real-world issue where expand_box / shrink_then_expand
+    modes set SHAPE_TO_FIT_TEXT, causing PowerPoint to resize shapes
+    unpredictably (height=0, font size changes, layout breakage).
+    """
+
+    def _apply_and_check(self, text_fit_mode, original_auto_size, text_ratio=3.0):
+        """Helper: create shape, apply translation, verify auto_size preserved."""
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        shape, tf = _make_textbox_on_slide(
+            slide, Inches(1), Inches(1), Inches(4), Inches(1),
+            text="Original text", font_size_pt=24,
+        )
+        tf.auto_size = original_auto_size
+        para_info = _make_paragraph_info(shape)
+
+        long_text = "x" * int(len(para_info.original_text) * text_ratio)
+
+        writer = PPTWriter()
+        writer.apply_translations(
+            [para_info], [long_text], prs,
+            text_fit_mode=text_fit_mode, min_font_ratio=80,
+        )
+        return tf, shape
+
+    def test_expand_box_preserves_none_auto_size(self):
+        """expand_box must not change auto_size=None."""
+        tf, _ = self._apply_and_check("expand_box", None)
+        self.assertIsNone(tf.auto_size)
+
+    def test_expand_box_preserves_explicit_none(self):
+        """expand_box must not change auto_size=NONE (0)."""
+        tf, _ = self._apply_and_check("expand_box", MSO_AUTO_SIZE.NONE)
+        self.assertEqual(tf.auto_size, MSO_AUTO_SIZE.NONE)
+
+    def test_expand_box_preserves_text_to_fit_shape(self):
+        """expand_box must not override existing TEXT_TO_FIT_SHAPE."""
+        tf, _ = self._apply_and_check("expand_box", MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE)
+        self.assertEqual(tf.auto_size, MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE)
+
+    def test_shrink_then_expand_preserves_none_auto_size(self):
+        """shrink_then_expand must not change auto_size=None."""
+        tf, _ = self._apply_and_check("shrink_then_expand", None)
+        self.assertIsNone(tf.auto_size)
+
+    def test_shrink_then_expand_preserves_explicit_none(self):
+        """shrink_then_expand must not change auto_size=NONE (0)."""
+        tf, _ = self._apply_and_check("shrink_then_expand", MSO_AUTO_SIZE.NONE)
+        self.assertEqual(tf.auto_size, MSO_AUTO_SIZE.NONE)
+
+    def test_expand_box_font_size_unchanged(self):
+        """expand_box must never change font sizes."""
+        tf, _ = self._apply_and_check("expand_box", MSO_AUTO_SIZE.NONE)
+        self.assertEqual(tf.paragraphs[0].runs[0].font.size, Pt(24))
+
+    def test_expand_box_shape_height_nonzero(self):
+        """Shape height must remain non-zero after expand_box."""
+        _, shape = self._apply_and_check("expand_box", MSO_AUTO_SIZE.NONE)
+        self.assertGreater(shape.height, 0)
+
+    def test_expand_box_width_expands_for_longer_text(self):
+        """Width should expand when text is significantly longer."""
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        shape, tf = _make_textbox_on_slide(
+            slide, Inches(1), Inches(1), Inches(2), Inches(1),
+            text="Short", font_size_pt=20,
+        )
+        tf.auto_size = MSO_AUTO_SIZE.NONE
+        orig_width = shape.width
+        para_info = _make_paragraph_info(shape)
+
+        long_text = "x" * (len(para_info.original_text) * 3)
+
+        writer = PPTWriter()
+        writer.apply_translations(
+            [para_info], [long_text], prs,
+            text_fit_mode="expand_box", min_font_ratio=80,
+        )
+
+        # Width expanded but auto_size untouched
+        self.assertGreater(shape.width, orig_width)
+        self.assertEqual(tf.auto_size, MSO_AUTO_SIZE.NONE)
 
 
 if __name__ == "__main__":

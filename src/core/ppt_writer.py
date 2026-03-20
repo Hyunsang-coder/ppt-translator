@@ -321,9 +321,14 @@ def _apply_auto_shrink(
 
 
 def _apply_expand_box(text_frame) -> None:
-    """Expand the text box to fit translated text."""
+    """Enable word wrap so width expansion can take effect.
+
+    Previously this also set ``SHAPE_TO_FIT_TEXT`` which caused PowerPoint to
+    resize the shape unpredictably (height collapsing to 0, font size
+    changes).  Now we only enable word wrap and rely on the width-expansion
+    pass in ``apply_translations`` to accommodate longer text.
+    """
     text_frame.word_wrap = True
-    text_frame.auto_size = MSO_AUTO_SIZE.SHAPE_TO_FIT_TEXT
 
 
 def _apply_shrink_then_expand(
@@ -340,9 +345,9 @@ def _apply_shrink_then_expand(
     text_frame.word_wrap = True
     _shrink_runs(text_frame, effective_factor)
 
-    # If shrinking wasn't enough, expand the box instead of TEXT_TO_FIT_SHAPE
-    if hit_floor:
-        text_frame.auto_size = MSO_AUTO_SIZE.SHAPE_TO_FIT_TEXT
+    # If shrinking wasn't enough, rely on width expansion (done in
+    # apply_translations) rather than setting SHAPE_TO_FIT_TEXT which causes
+    # unpredictable shape resizing.
 
 
 def _shrink_runs(text_frame, factor: float) -> None:
