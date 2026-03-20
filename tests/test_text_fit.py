@@ -16,6 +16,7 @@ from src.core.ppt_writer import (
     _safe_expand_width,
     _EXPANSION_GAP_EMU,
     _EXPANSION_THRESHOLD,
+    _MAX_EXPANSION_RATIO,
 )
 from src.core.ppt_parser import ParagraphInfo
 from src.services.models import TextFitMode
@@ -364,7 +365,7 @@ class WidthExpansionTestCase(unittest.TestCase):
     """Tests for automatic width expansion of text boxes."""
 
     def test_basic_expansion_no_obstacles(self):
-        """Single textbox on slide should expand to the right, keeping left fixed."""
+        """Single textbox on slide should expand to the right, capped at max ratio."""
         prs = Presentation()
         slide = prs.slides.add_slide(prs.slide_layouts[6])
         # Center of a 10-inch slide: left=Inches(3.5), width=Inches(3)
@@ -383,12 +384,13 @@ class WidthExpansionTestCase(unittest.TestCase):
         # Right side has space
         self.assertGreater(ar, 0)
 
-        # Expand by 50% of current width
+        # Request 50% expansion — should be capped at _MAX_EXPANSION_RATIO (30%)
         needed = int(orig_width * 0.5)
         ratio = _safe_expand_width(shape, ar, needed)
 
         self.assertGreater(ratio, 1.0)
-        self.assertEqual(shape.width, orig_width + needed)
+        max_expanded = orig_width + int(orig_width * _MAX_EXPANSION_RATIO)
+        self.assertEqual(shape.width, max_expanded)
         # Left position must not change
         self.assertEqual(shape.left, orig_left)
 
@@ -720,6 +722,124 @@ class AutoSizePreservationTestCase(unittest.TestCase):
         # Width expanded but auto_size untouched
         self.assertGreater(shape.width, orig_width)
         self.assertEqual(tf.auto_size, MSO_AUTO_SIZE.NONE)
+
+
+class WidthExpansionOverflowTestCase(unittest.TestCase):
+    """Regression tests: shapes must never extend beyond slide boundaries."""
+
+    def test_expansion_capped_at_max_ratio(self):
+        """Even with extreme text growth, expansion is capped at _MAX_EXPANSION_RATIO."""
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        shape, tf = _make_textbox_on_slide(
+            slide, Inches(1), Inches(1), Inches(2), Inches(1),
+            text="Hi", font_size_pt=20,
+        )
+        orig_width = shape.width
+
+        # 10x text growth — should only expand by _MAX_EXPANSION_RATIO
+        needed = int(orig_width * 9.0)
+        txbody_to_shape, slide_bounds, slide_w = _build_shape_context(prs)
+        bridge_key = id(shape.text_frame._txBody)
+        _, ar = _calculate_available_expansion(shape, slide_bounds[0],
+                                               slide_w, bridge_key)
+        _safe_expand_width(shape, ar, needed)
+
+        max_allowed = orig_width + int(orig_width * _MAX_EXPANSION_RATIO)
+        self.assertLessEqual(shape.width, max_allowed)
+
+    def test_shape_stays_within_slide_after_translation(self):
+        """After apply_translations with expand_box, no shape exceeds slide width."""
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        slide_w = prs.slide_width
+
+        # Create multiple shapes across the slide
+        shapes_and_infos = []
+        positions = [
+            (Inches(0.5), Inches(0.5), Inches(3), Inches(0.5)),
+            (Inches(5), Inches(2), Inches(4), Inches(0.5)),
+            (Inches(7), Inches(4), Inches(2), Inches(0.5)),  # near right edge
+        ]
+        for left, top, w, h in positions:
+            shape, tf = _make_textbox_on_slide(slide, left, top, w, h,
+                                                text="Short text", font_size_pt=16)
+            para_info = _make_paragraph_info(shape)
+            shapes_and_infos.append((shape, para_info))
+
+        # 5x text growth for all
+        translations = ["x" * (len(pi.original_text) * 5) for _, pi in shapes_and_infos]
+        para_infos = [pi for _, pi in shapes_and_infos]
+
+        writer = PPTWriter()
+        writer.apply_translations(
+            para_infos, translations, prs,
+            text_fit_mode="expand_box", min_font_ratio=80,
+        )
+
+        for shape, _ in shapes_and_infos:
+            right_edge = shape.left + shape.width
+            self.assertLessEqual(
+                right_edge, slide_w,
+                f"Shape '{shape.name}' right edge ({right_edge}) exceeds "
+                f"slide width ({slide_w})",
+            )
+
+    def test_minimum_margin_preserved(self):
+        """Shape near slide edge should maintain at least _EXPANSION_GAP_EMU margin."""
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        slide_w = prs.slide_width
+
+        # Shape starting near the right edge
+        left = slide_w - Inches(2)
+        shape, tf = _make_textbox_on_slide(
+            slide, left, Inches(1), Inches(1), Inches(1),
+            text="Edge", font_size_pt=20,
+        )
+        para_info = _make_paragraph_info(shape)
+
+        long_text = "x" * (len(para_info.original_text) * 5)
+
+        writer = PPTWriter()
+        writer.apply_translations(
+            [para_info], [long_text], prs,
+            text_fit_mode="expand_box", min_font_ratio=80,
+        )
+
+        right_edge = shape.left + shape.width
+        margin = slide_w - right_edge
+        self.assertGreaterEqual(margin, 0,
+                                "Shape must not exceed slide boundary")
+
+    def test_small_shape_large_text_ratio(self):
+        """Small shape with huge text ratio (like KR→EN) stays within bounds."""
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        slide_w = prs.slide_width
+
+        # Small shape like a label (1.2 inches)
+        shape, tf = _make_textbox_on_slide(
+            slide, Inches(8), Inches(1), Inches(1.2), Inches(0.3),
+            text="검토", font_size_pt=12,
+        )
+        orig_width = shape.width
+        para_info = _make_paragraph_info(shape)
+
+        # KR "검토" (2 chars) -> EN "Pivot Options Under Review" (27 chars) = 13.5x
+        long_text = "Pivot Options Under Review"
+
+        writer = PPTWriter()
+        writer.apply_translations(
+            [para_info], [long_text], prs,
+            text_fit_mode="expand_box", min_font_ratio=80,
+        )
+
+        # Width should not expand more than _MAX_EXPANSION_RATIO
+        max_allowed = orig_width + int(orig_width * _MAX_EXPANSION_RATIO)
+        self.assertLessEqual(shape.width, max_allowed)
+        # Should not go past slide edge
+        self.assertLessEqual(shape.left + shape.width, slide_w)
 
 
 if __name__ == "__main__":

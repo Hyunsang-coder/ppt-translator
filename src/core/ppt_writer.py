@@ -26,8 +26,13 @@ _MODE_AUTO_SHRINK = "auto_shrink"
 _MODE_EXPAND_BOX = "expand_box"
 _MODE_SHRINK_THEN_EXPAND = "shrink_then_expand"
 
-# Safety gap for width expansion (EMU) — approximately 2mm
-_EXPANSION_GAP_EMU = 72000
+# Safety gap for width expansion (EMU) — approximately 0.5 inch
+# Ensures shapes stay visually within the slide with comfortable margins
+_EXPANSION_GAP_EMU = 457200
+
+# Maximum width expansion as a fraction of original width (30%)
+# Prevents unrealistic expansion when text length ratio is large (e.g. KR→EN)
+_MAX_EXPANSION_RATIO = 0.30
 
 
 # Attributes on rPr that do NOT affect visual appearance.
@@ -232,14 +237,21 @@ def _safe_expand_width(shape, available_right, needed_expansion_emu):
     """Expand shape width to the right within available space.
 
     The shape's left position is preserved so the textbox doesn't shift.
+    Expansion is capped at ``_MAX_EXPANSION_RATIO`` of the original width
+    to prevent shapes from stretching unrealistically.
     Returns the width expansion ratio (new_width / old_width, >= 1.0).
     """
     if available_right <= 0 or needed_expansion_emu <= 0:
         return 1.0
 
-    actual_expansion = min(needed_expansion_emu, available_right)
-
     old_width = shape.width
+    max_expansion = int(old_width * _MAX_EXPANSION_RATIO)
+    capped = min(needed_expansion_emu, max_expansion)
+    actual_expansion = min(capped, available_right)
+
+    if actual_expansion <= 0:
+        return 1.0
+
     shape.width = old_width + actual_expansion
 
     return shape.width / old_width if old_width > 0 else 1.0
