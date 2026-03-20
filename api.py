@@ -686,6 +686,7 @@ async def get_job_status(job_id: str) -> JobStatusResponse:
             "total_batches": job.progress.total_batches,
             "current_sentence": job.progress.current_sentence,
             "total_sentences": job.progress.total_sentences,
+            "percent": job.progress.percent,
             "message": job.progress.message,
         }
 

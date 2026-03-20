@@ -192,13 +192,6 @@ export const apiClient = {
   },
 
   /**
-   * Get SSE event stream URL
-   */
-  getJobEventsUrl(jobId: string): string {
-    return `${API_BASE}/api/v1/jobs/${jobId}/events`;
-  },
-
-  /**
    * Extract text from PPT
    */
   async extractText(pptFile: File, settings: ExtractionSettings, signal?: AbortSignal): Promise<ExtractionResponse> {

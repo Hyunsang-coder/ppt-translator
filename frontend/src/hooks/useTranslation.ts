@@ -203,11 +203,10 @@ export function useTranslation() {
       setJobId(response.job_id);
       addLog(`작업 생성 완료 (ID: ${response.job_id.slice(0, 8)}...)`, "info");
 
-      // Start SSE connection
+      // Start polling for progress
       setStatus("translating");
-      const eventsUrl = apiClient.getJobEventsUrl(response.job_id);
 
-      sseClientRef.current = createSSEClient(eventsUrl, {
+      sseClientRef.current = createSSEClient("", {
         jobId: response.job_id,
         getJobStatus: (id) => apiClient.getJobStatus(id),
         onStarted: () => {

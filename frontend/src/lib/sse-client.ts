@@ -1,6 +1,6 @@
 /**
- * SSE Client for real-time job progress updates
- * Falls back to polling when SSE connection fails (e.g. Vercel proxy timeout)
+ * Polling client for job progress updates
+ * Replaces SSE to avoid Vercel proxy timeout issues
  */
 
 import type { JobStatusResponse, SSEEvent } from "@/types/api";
@@ -13,30 +13,22 @@ export interface SSEClientOptions {
   onError?: SSEEventHandler;
   onStarted?: SSEEventHandler;
   onCancelled?: SSEEventHandler;
-  reconnectAttempts?: number;
-  reconnectDelay?: number;
-  /** Polling interval in ms when falling back from SSE (default: 2000) */
+  /** Polling interval in ms (default: 2000) */
   pollingInterval?: number;
-  /** Job status fetcher for polling fallback */
-  getJobStatus?: (jobId: string) => Promise<JobStatusResponse>;
-  /** Job ID for polling fallback */
-  jobId?: string;
+  /** Job status fetcher */
+  getJobStatus: (jobId: string) => Promise<JobStatusResponse>;
+  /** Job ID */
+  jobId: string;
 }
 
 export class SSEClient {
-  private eventSource: EventSource | null = null;
-  private url: string;
   private options: SSEClientOptions;
-  private reconnectCount = 0;
   private closed = false;
   private pollingTimer: ReturnType<typeof setInterval> | null = null;
-  private isPolling = false;
+  private started = false;
 
-  constructor(url: string, options: SSEClientOptions = {}) {
-    this.url = url;
+  constructor(_url: string, options: SSEClientOptions) {
     this.options = {
-      reconnectAttempts: 3,
-      reconnectDelay: 1000,
       pollingInterval: 2000,
       ...options,
     };
@@ -44,55 +36,17 @@ export class SSEClient {
 
   connect(): void {
     if (this.closed) return;
-
-    this.eventSource = new EventSource(this.url);
-
-    this.eventSource.onmessage = (event) => {
-      try {
-        const parsed: SSEEvent = JSON.parse(event.data);
-        this.handleEvent(parsed);
-      } catch (err) {
-        console.error("Failed to parse SSE event:", err);
-      }
-    };
-
-    this.eventSource.onerror = () => {
-      if (this.closed) return;
-
-      this.eventSource?.close();
-
-      if (this.reconnectCount < (this.options.reconnectAttempts ?? 3)) {
-        this.reconnectCount++;
-        setTimeout(() => this.connect(), this.options.reconnectDelay);
-      } else {
-        // SSE failed — try polling fallback
-        if (this.options.getJobStatus && this.options.jobId) {
-          console.warn("SSE connection failed, falling back to polling");
-          this.startPolling();
-        } else {
-          this.options.onError?.({
-            type: "error",
-            data: { message: "Connection lost after multiple reconnect attempts" },
-            timestamp: Date.now() / 1000,
-          });
-        }
-      }
-    };
-
-    this.eventSource.onopen = () => {
-      this.reconnectCount = 0;
-    };
+    this.startPolling();
   }
 
   private startPolling(): void {
-    if (this.closed || this.isPolling) return;
-    this.isPolling = true;
+    if (this.closed) return;
 
     const poll = async () => {
       if (this.closed) return;
 
       try {
-        const status = await this.options.getJobStatus!(this.options.jobId!);
+        const status = await this.options.getJobStatus(this.options.jobId);
         this.handlePolledStatus(status);
       } catch (err) {
         console.error("Polling failed:", err);
@@ -112,9 +66,16 @@ export class SSEClient {
 
     switch (status.state) {
       case "pending":
-        // Job not started yet
         break;
       case "running":
+        if (!this.started) {
+          this.started = true;
+          this.options.onStarted?.({
+            type: "started",
+            data: {},
+            timestamp: now,
+          });
+        }
         if (status.progress) {
           this.options.onProgress?.({
             type: "progress",
@@ -150,44 +111,12 @@ export class SSEClient {
     }
   }
 
-  private handleEvent(event: SSEEvent): void {
-    // Prevent stale events from firing after close() (e.g. retranslate race condition)
-    if (this.closed) return;
-
-    switch (event.type) {
-      case "progress":
-        this.options.onProgress?.(event);
-        break;
-      case "complete":
-        this.options.onComplete?.(event);
-        this.close();
-        break;
-      case "error":
-        this.options.onError?.(event);
-        this.close();
-        break;
-      case "started":
-        this.options.onStarted?.(event);
-        break;
-      case "cancelled":
-        this.options.onCancelled?.(event);
-        this.close();
-        break;
-      case "keepalive":
-        // Ignore keepalive events
-        break;
-    }
-  }
-
   close(): void {
     this.closed = true;
-    this.eventSource?.close();
-    this.eventSource = null;
     if (this.pollingTimer) {
       clearInterval(this.pollingTimer);
       this.pollingTimer = null;
     }
-    this.isPolling = false;
   }
 }
 
