@@ -97,6 +97,16 @@ export class SSEClient {
         }
         break;
       case "completed":
+        // Deliver final progress before completing — polling may have
+        // skipped intermediate updates (80% → 100%) if the job finished
+        // between two polling intervals.
+        if (status.progress) {
+          this.options.onProgress?.({
+            type: "progress",
+            data: status.progress as unknown as Record<string, unknown>,
+            timestamp: now,
+          });
+        }
         this.options.onComplete?.({
           type: "complete",
           data: {},
