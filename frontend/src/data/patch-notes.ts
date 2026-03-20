@@ -45,6 +45,15 @@ export const changeTypeConfig: Record<ChangeType, ChangeTypeConfig> = {
 
 export const patchNotes: PatchNote[] = [
   {
+    version: "2026.03.20",
+    date: "2026-03-20",
+    title: "텍스트 박스 서식 보존 수정",
+    commitHash: "334659d",
+    changes: [
+      { type: "fix", description: "텍스트 박스 확장 모드에서 원본 auto_size 설정이 변경되어 레이아웃이 깨지는 문제 수정 (높이 0, 폰트 크기 변경 등)" },
+    ],
+  },
+  {
     version: "2026.02.19",
     date: "2026-02-19",
     title: "Claude Sonnet 4.6 모델 업그레이드",
