@@ -49,6 +49,18 @@ export class SSEClient {
         const status = await this.options.getJobStatus(this.options.jobId);
         this.handlePolledStatus(status);
       } catch (err) {
+        // Stop polling on 404 (job not found) — the job was lost (e.g. server restart)
+        const is404 = err instanceof Error && "status" in err && (err as { status: number }).status === 404;
+        if (is404) {
+          console.error("Job not found, stopping polling:", this.options.jobId);
+          this.options.onError?.({
+            type: "error",
+            data: { message: "서버에서 작업을 찾을 수 없습니다. 서버가 재시작되었을 수 있습니다." },
+            timestamp: Date.now() / 1000,
+          });
+          this.close();
+          return;
+        }
         console.error("Polling failed:", err);
         // Continue polling — transient network errors shouldn't stop us
       }
