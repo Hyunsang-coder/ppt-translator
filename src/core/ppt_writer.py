@@ -8,7 +8,6 @@ from typing import Iterable, List
 
 from lxml import etree
 from pptx import Presentation
-from pptx.enum.shapes import PP_PLACEHOLDER
 from pptx.enum.text import MSO_AUTO_SIZE
 from pptx.util import Pt
 
@@ -29,25 +28,6 @@ _MODE_SHRINK_THEN_EXPAND = "shrink_then_expand"
 
 # Safety gap for width expansion (EMU) — approximately 2mm
 _EXPANSION_GAP_EMU = 72000
-
-# Placeholder types whose boxes should NOT be vertically expanded,
-# because SHAPE_TO_FIT_TEXT would push them into neighbouring content.
-_TITLE_PLACEHOLDER_TYPES = frozenset({
-    PP_PLACEHOLDER.TITLE,
-    PP_PLACEHOLDER.SUBTITLE,
-    PP_PLACEHOLDER.CENTER_TITLE,
-})
-
-# All placeholder types where expand_box (SHAPE_TO_FIT_TEXT) should be
-# avoided.  Placeholders have layout-defined positions; vertical expansion
-# collapses their stored height to 0 and causes overlap in PowerPoint.
-_NO_EXPAND_PLACEHOLDER_TYPES = frozenset({
-    PP_PLACEHOLDER.TITLE,
-    PP_PLACEHOLDER.SUBTITLE,
-    PP_PLACEHOLDER.CENTER_TITLE,
-    PP_PLACEHOLDER.BODY,
-    PP_PLACEHOLDER.OBJECT,
-})
 
 
 # Attributes on rPr that do NOT affect visual appearance.
@@ -180,45 +160,17 @@ def _apply_colored_segments(paragraph, colored_segments, groups, runs) -> bool:
         return False
 
 
-def _is_title_placeholder(shape) -> bool:
-    """Return True if *shape* is a title/subtitle/center-title placeholder."""
-    if not getattr(shape, "is_placeholder", False):
-        return False
-    try:
-        ph_type = shape.placeholder_format.type
-        return ph_type in _TITLE_PLACEHOLDER_TYPES
-    except Exception:
-        return False
-
-
-def _is_no_expand_placeholder(shape) -> bool:
-    """Return True if *shape* is a placeholder that should not use expand_box.
-
-    Placeholders have layout-defined positions.  SHAPE_TO_FIT_TEXT collapses
-    their stored height to 0, causing overlap in PowerPoint rendering.
-    """
-    if not getattr(shape, "is_placeholder", False):
-        return False
-    try:
-        ph_type = shape.placeholder_format.type
-        return ph_type in _NO_EXPAND_PLACEHOLDER_TYPES
-    except Exception:
-        return False
-
-
 def _build_shape_context(presentation):
     """Build mappings from txBody to shape and per-slide bounding boxes.
 
     Returns:
-        Tuple of (txbody_to_shape, slide_bounds, slide_width, no_expand_tf_ids) where:
+        Tuple of (txbody_to_shape, slide_bounds, slide_width) where:
         - txbody_to_shape: dict mapping id(txBody) -> (shape, slide_idx)
         - slide_bounds: dict mapping slide_idx -> list of (left, top, right, bottom, txbody_id)
         - slide_width: presentation slide width in EMU
-        - no_expand_tf_ids: set of id(txBody) for placeholders that must not use expand_box
     """
     txbody_to_shape: dict[int, tuple] = {}
     slide_bounds: dict[int, list] = {}
-    no_expand_tf_ids: set[int] = set()
     slide_width = presentation.slide_width
 
     for slide_idx, slide in enumerate(presentation.slides):
@@ -236,15 +188,13 @@ def _build_shape_context(presentation):
                 try:
                     txbody_id = id(shape.text_frame._txBody)
                     txbody_to_shape[txbody_id] = (shape, slide_idx)
-                    if _is_no_expand_placeholder(shape):
-                        no_expand_tf_ids.add(txbody_id)
                 except Exception:
                     pass
 
             bounds_list.append((left, top, left + width, top + height, txbody_id))
         slide_bounds[slide_idx] = bounds_list
 
-    return txbody_to_shape, slide_bounds, slide_width, no_expand_tf_ids
+    return txbody_to_shape, slide_bounds, slide_width
 
 
 def _calculate_available_expansion(shape, slide_bounds_list, slide_width, own_txbody_id):
@@ -521,12 +471,8 @@ class PPTWriter:
         txbody_to_shape: dict = {}
         slide_bounds_map: dict = {}
         slide_w = 0
-        no_expand_tf_ids: set = set()
         if text_fit_mode != _MODE_NONE:
-            txbody_to_shape, slide_bounds_map, slide_w, no_expand_tf_ids = _build_shape_context(presentation)
-
-        if no_expand_tf_ids:
-            LOGGER.info("Detected %d placeholder text frame(s) excluded from expand_box.", len(no_expand_tf_ids))
+            txbody_to_shape, slide_bounds_map, slide_w = _build_shape_context(presentation)
 
         # Apply width expansion + text fitting per text frame
         for tf, orig_len, trans_len in text_frames_to_fit.values():
@@ -555,17 +501,9 @@ class PPTWriter:
                                         slide_bounds_map, s_idx, bridge_key, shape
                                     )
 
-                # Placeholders: fall back to auto_shrink to prevent
-                # vertical box expansion that overlaps neighbouring content.
-                effective_mode = text_fit_mode
-                if id(tf._txBody) in no_expand_tf_ids and text_fit_mode in (
-                    _MODE_EXPAND_BOX, _MODE_SHRINK_THEN_EXPAND,
-                ):
-                    effective_mode = _MODE_AUTO_SHRINK
-
                 apply_text_fit(
                     tf, effective_orig, trans_len,
-                    mode=effective_mode, min_font_ratio=min_font_ratio,
+                    mode=text_fit_mode, min_font_ratio=min_font_ratio,
                 )
                 fit_adjusted_count += 1
 
