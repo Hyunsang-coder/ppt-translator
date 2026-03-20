@@ -38,7 +38,7 @@ class TranslationRequest:
     ppt_file: io.BytesIO
     source_lang: str = "Auto"
     target_lang: str = "Auto"
-    model: str = "gpt-5.2"
+    model: str = "gpt-5.4-2026-03-05"
     provider: str = "openai"
     context: Optional[str] = None
     instructions: Optional[str] = None

@@ -113,7 +113,7 @@ export function useTranslation() {
       const summaryResult = await apiClient.summarizeText(
         markdown,
         settings.provider,
-        settings.provider === "openai" ? "gpt-5-mini" : "claude-haiku-4-5-20251001",
+        settings.provider === "openai" ? "gpt-5.4-mini-2026-03-17" : "claude-haiku-4-5-20251001",
         abortController.signal
       );
 
@@ -159,7 +159,7 @@ export function useTranslation() {
         settings.targetLang,
         markdown,
         settings.provider,
-        settings.provider === "openai" ? "gpt-5-mini" : "claude-haiku-4-5-20251001",
+        settings.provider === "openai" ? "gpt-5.4-mini-2026-03-17" : "claude-haiku-4-5-20251001",
         abortController.signal
       );
 

@@ -47,7 +47,7 @@ def create_summarization_prompt() -> PromptTemplate:
 async def summarize_presentation(
     markdown: str,
     provider: Provider = "openai",
-    model: str = "gpt-5-mini",
+    model: str = "gpt-5.4-mini-2026-03-17",
     max_chars: int = 50000,
 ) -> str:
     """Summarize presentation content for translation context.

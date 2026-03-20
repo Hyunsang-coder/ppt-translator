@@ -34,8 +34,8 @@ def create_rate_limiter() -> InMemoryRateLimiter:
     )
 
 OPENAI_MODELS = [
-    "gpt-5.2",
-    "gpt-5-mini",
+    "gpt-5.4-2026-03-05",
+    "gpt-5.4-mini-2026-03-17",
 ]
 
 ANTHROPIC_MODELS = [

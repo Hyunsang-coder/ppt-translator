@@ -362,7 +362,7 @@ export function SettingsPanel({
           <Label htmlFor="context">컨텍스트 (배경 정보)</Label>
           <div className="flex items-center gap-2">
             <span className="text-[10px] text-muted-foreground">
-              using {settings.provider === "openai" ? "GPT-5 Mini" : "Haiku 4.5"}
+              using {settings.provider === "openai" ? "GPT-5.4 Mini" : "Haiku 4.5"}
             </span>
             <Button
               type="button"
@@ -414,7 +414,7 @@ export function SettingsPanel({
           <Label htmlFor="instructions">번역 지침 (스타일/톤)</Label>
           <div className="flex items-center gap-2">
             <span className="text-[10px] text-muted-foreground">
-              using {settings.provider === "openai" ? "GPT-5 Mini" : "Haiku 4.5"}
+              using {settings.provider === "openai" ? "GPT-5.4 Mini" : "Haiku 4.5"}
             </span>
             <Button
               type="button"

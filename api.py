@@ -290,8 +290,8 @@ def generate_output_filename(
 
 SUPPORTED_MODELS: Dict[str, List[ModelInfo]] = {
     "openai": [
-        ModelInfo(id="gpt-5.2", name="GPT-5.2", provider="openai"),
-        ModelInfo(id="gpt-5-mini", name="GPT-5 Mini", provider="openai"),
+        ModelInfo(id="gpt-5.4-2026-03-05", name="GPT-5.4", provider="openai"),
+        ModelInfo(id="gpt-5.4-mini-2026-03-17", name="GPT-5.4 Mini", provider="openai"),
     ],
     "anthropic": [
         ModelInfo(id="claude-opus-4-6", name="Claude Opus 4.6", provider="anthropic"),
