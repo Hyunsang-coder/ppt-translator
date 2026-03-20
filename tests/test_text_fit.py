@@ -372,7 +372,7 @@ class WidthExpansionTestCase(unittest.TestCase):
         orig_left = shape.left
         orig_width = shape.width
 
-        txbody_to_shape, slide_bounds, slide_w = _build_shape_context(prs)
+        txbody_to_shape, slide_bounds, slide_w, _ = _build_shape_context(prs)
         bridge_key = id(shape.text_frame._txBody)
         bounds = slide_bounds[0]
 
@@ -399,7 +399,7 @@ class WidthExpansionTestCase(unittest.TestCase):
             slide, _EXPANSION_GAP_EMU, Inches(1), Inches(3), Inches(1),
         )
 
-        txbody_to_shape, slide_bounds, slide_w = _build_shape_context(prs)
+        txbody_to_shape, slide_bounds, slide_w, _ = _build_shape_context(prs)
         bridge_key = id(shape.text_frame._txBody)
         bounds = slide_bounds[0]
 
@@ -423,7 +423,7 @@ class WidthExpansionTestCase(unittest.TestCase):
             slide, Inches(3.5), Inches(1), Inches(2), Inches(1), text="obstacle",
         )
 
-        txbody_to_shape, slide_bounds, slide_w = _build_shape_context(prs)
+        txbody_to_shape, slide_bounds, slide_w, _ = _build_shape_context(prs)
         bridge_key = id(shape.text_frame._txBody)
         bounds = slide_bounds[0]
 
@@ -446,7 +446,7 @@ class WidthExpansionTestCase(unittest.TestCase):
             slide, Inches(3), Inches(1), Inches(2), Inches(1),
         )
 
-        txbody_to_shape, slide_bounds, slide_w = _build_shape_context(prs)
+        txbody_to_shape, slide_bounds, slide_w, _ = _build_shape_context(prs)
         bridge_key = id(shape.text_frame._txBody)
         bounds = slide_bounds[0]
 
@@ -464,7 +464,7 @@ class WidthExpansionTestCase(unittest.TestCase):
             slide, Inches(0.5), Inches(1), Inches(2), Inches(1),
         )
 
-        txbody_to_shape, slide_bounds, slide_w = _build_shape_context(prs)
+        txbody_to_shape, slide_bounds, slide_w, _ = _build_shape_context(prs)
         bridge_key = id(shape.text_frame._txBody)
         bounds = slide_bounds[0]
         _, ar = _calculate_available_expansion(shape, bounds, slide_w, bridge_key)
@@ -489,7 +489,7 @@ class WidthExpansionTestCase(unittest.TestCase):
             slide, Inches(1), Inches(1), Inches(3), Inches(1),
         )
 
-        txbody_to_shape, _, _ = _build_shape_context(prs)
+        txbody_to_shape, _, _, _ = _build_shape_context(prs)
         # The regular textbox IS in the mapping
         bridge_key = id(shape.text_frame._txBody)
         self.assertIn(bridge_key, txbody_to_shape)
@@ -511,7 +511,7 @@ class WidthExpansionTestCase(unittest.TestCase):
         cell.text = "CellText"
         cell_txbody_id = id(cell.text_frame._txBody)
 
-        txbody_to_shape, _, _ = _build_shape_context(prs)
+        txbody_to_shape, _, _, _ = _build_shape_context(prs)
 
         # Table cell text frame should NOT be mapped (it's not a top-level shape text frame)
         self.assertNotIn(cell_txbody_id, txbody_to_shape)
@@ -554,7 +554,7 @@ class WidthExpansionTestCase(unittest.TestCase):
             slide, Inches(5.5), Inches(0.5), Inches(2), Inches(1), text="far",
         )
 
-        txbody_to_shape, slide_bounds, slide_w = _build_shape_context(prs)
+        txbody_to_shape, slide_bounds, slide_w, _ = _build_shape_context(prs)
         bridge_key = id(shape.text_frame._txBody)
         bounds = slide_bounds[0]
 
@@ -630,6 +630,195 @@ class WidthExpansionTestCase(unittest.TestCase):
 
         # Width expansion should have compensated, so SHAPE_TO_FIT_TEXT not needed
         self.assertNotEqual(tf.auto_size, MSO_AUTO_SIZE.SHAPE_TO_FIT_TEXT)
+
+
+def _make_title_placeholder_slide(prs: Presentation, title_text="Title", font_size_pt=24):
+    """Create a slide using a layout with a title placeholder.
+
+    Returns (title_shape, title_text_frame, slide).
+    """
+    layout = prs.slide_layouts[0]  # layout 0 typically has a title placeholder
+    slide = prs.slides.add_slide(layout)
+    title_shape = slide.placeholders[0]
+    title_shape.text = ""
+    run = title_shape.text_frame.paragraphs[0].add_run()
+    run.text = title_text
+    run.font.size = Pt(font_size_pt)
+    return title_shape, title_shape.text_frame, slide
+
+
+def _make_body_placeholder_slide(prs: Presentation, body_text="Body text", font_size_pt=18):
+    """Create a slide using a layout with a body/object placeholder.
+
+    Returns (body_shape, body_text_frame, slide).
+    """
+    layout = prs.slide_layouts[1]  # layout 1 typically has title + body
+    slide = prs.slides.add_slide(layout)
+    body_shape = slide.placeholders[1]
+    body_shape.text = ""
+    run = body_shape.text_frame.paragraphs[0].add_run()
+    run.text = body_text
+    run.font.size = Pt(font_size_pt)
+    return body_shape, body_shape.text_frame, slide
+
+
+class PlaceholderFallbackTestCase(unittest.TestCase):
+    """Placeholders should fall back to auto_shrink instead of expand_box."""
+
+    def test_title_placeholder_gets_auto_shrink_instead_of_expand_box(self):
+        """expand_box on a title placeholder should NOT set SHAPE_TO_FIT_TEXT."""
+        prs = Presentation()
+        title_shape, tf, slide = _make_title_placeholder_slide(prs, "Short")
+
+        para_info = _make_paragraph_info(title_shape)
+        long_text = "x" * (len(para_info.original_text) * 3)
+
+        writer = PPTWriter()
+        writer.apply_translations(
+            [para_info], [long_text], prs,
+            text_fit_mode="expand_box", min_font_ratio=70,
+        )
+
+        self.assertNotEqual(tf.auto_size, MSO_AUTO_SIZE.SHAPE_TO_FIT_TEXT)
+
+    def test_title_placeholder_font_shrinks_on_expand_box_mode(self):
+        """Title placeholder should shrink font (auto_shrink fallback) when expand_box is requested."""
+        prs = Presentation()
+        title_shape, tf, slide = _make_title_placeholder_slide(prs, "Title", font_size_pt=24)
+        original_size = tf.paragraphs[0].runs[0].font.size
+
+        para_info = _make_paragraph_info(title_shape)
+        long_text = "x" * (len(para_info.original_text) * 3)
+
+        writer = PPTWriter()
+        writer.apply_translations(
+            [para_info], [long_text], prs,
+            text_fit_mode="expand_box", min_font_ratio=70,
+        )
+
+        new_size = tf.paragraphs[0].runs[0].font.size
+        self.assertLess(new_size, original_size)
+
+    def test_title_placeholder_shrink_then_expand_also_falls_back(self):
+        """shrink_then_expand on a title placeholder should also avoid SHAPE_TO_FIT_TEXT."""
+        prs = Presentation()
+        title_shape, tf, slide = _make_title_placeholder_slide(prs, "Hi", font_size_pt=20)
+
+        para_info = _make_paragraph_info(title_shape)
+        long_text = "x" * (len(para_info.original_text) * 5)
+
+        writer = PPTWriter()
+        writer.apply_translations(
+            [para_info], [long_text], prs,
+            text_fit_mode="shrink_then_expand", min_font_ratio=70,
+        )
+
+        self.assertNotEqual(tf.auto_size, MSO_AUTO_SIZE.SHAPE_TO_FIT_TEXT)
+
+    def test_body_placeholder_gets_auto_shrink_instead_of_expand_box(self):
+        """expand_box on a body/object placeholder should NOT set SHAPE_TO_FIT_TEXT."""
+        prs = Presentation()
+        body_shape, tf, slide = _make_body_placeholder_slide(prs, "Short body")
+
+        para_info = _make_paragraph_info(body_shape)
+        long_text = "x" * (len(para_info.original_text) * 3)
+
+        writer = PPTWriter()
+        writer.apply_translations(
+            [para_info], [long_text], prs,
+            text_fit_mode="expand_box", min_font_ratio=70,
+        )
+
+        self.assertNotEqual(tf.auto_size, MSO_AUTO_SIZE.SHAPE_TO_FIT_TEXT)
+
+    def test_body_placeholder_font_shrinks_on_expand_box_mode(self):
+        """Body placeholder should shrink font when expand_box is requested."""
+        prs = Presentation()
+        body_shape, tf, slide = _make_body_placeholder_slide(prs, "Body", font_size_pt=18)
+        original_size = tf.paragraphs[0].runs[0].font.size
+
+        para_info = _make_paragraph_info(body_shape)
+        long_text = "x" * (len(para_info.original_text) * 3)
+
+        writer = PPTWriter()
+        writer.apply_translations(
+            [para_info], [long_text], prs,
+            text_fit_mode="expand_box", min_font_ratio=70,
+        )
+
+        new_size = tf.paragraphs[0].runs[0].font.size
+        self.assertLess(new_size, original_size)
+
+    def test_non_title_textbox_still_gets_expand_box(self):
+        """Regular (non-placeholder) textbox should still get SHAPE_TO_FIT_TEXT."""
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        shape, tf = _make_textbox_on_slide(
+            slide, Inches(1), Inches(1), Inches(3), Inches(1),
+            text="Hello", font_size_pt=20,
+        )
+
+        para_info = _make_paragraph_info(shape)
+        long_text = "x" * (len(para_info.original_text) * 3)
+
+        writer = PPTWriter()
+        writer.apply_translations(
+            [para_info], [long_text], prs,
+            text_fit_mode="expand_box", min_font_ratio=70,
+        )
+
+        self.assertEqual(tf.auto_size, MSO_AUTO_SIZE.SHAPE_TO_FIT_TEXT)
+
+    def test_title_placeholder_auto_shrink_mode_unchanged(self):
+        """auto_shrink mode on title placeholder should work as normal (no extra fallback)."""
+        prs = Presentation()
+        title_shape, tf, slide = _make_title_placeholder_slide(prs, "Title", font_size_pt=20)
+        original_size = tf.paragraphs[0].runs[0].font.size
+
+        para_info = _make_paragraph_info(title_shape)
+        long_text = "x" * (len(para_info.original_text) * 2)
+
+        writer = PPTWriter()
+        writer.apply_translations(
+            [para_info], [long_text], prs,
+            text_fit_mode="auto_shrink", min_font_ratio=50,
+        )
+
+        new_size = tf.paragraphs[0].runs[0].font.size
+        self.assertLess(new_size, original_size)
+
+    def test_build_shape_context_detects_title_placeholders(self):
+        """_build_shape_context should return title placeholder txBody ids."""
+        prs = Presentation()
+        title_shape, tf, slide = _make_title_placeholder_slide(prs, "Test")
+
+        _, _, _, no_expand_ids = _build_shape_context(prs)
+
+        title_txbody_id = id(tf._txBody)
+        self.assertIn(title_txbody_id, no_expand_ids)
+
+    def test_build_shape_context_detects_body_placeholders(self):
+        """_build_shape_context should return body/object placeholder txBody ids."""
+        prs = Presentation()
+        body_shape, tf, slide = _make_body_placeholder_slide(prs, "Test")
+
+        _, _, _, no_expand_ids = _build_shape_context(prs)
+
+        body_txbody_id = id(tf._txBody)
+        self.assertIn(body_txbody_id, no_expand_ids)
+
+    def test_build_shape_context_excludes_regular_textbox(self):
+        """Regular textboxes should NOT appear in no_expand_tf_ids."""
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        shape, tf = _make_textbox_on_slide(
+            slide, Inches(1), Inches(1), Inches(3), Inches(1),
+        )
+
+        _, _, _, no_expand_ids = _build_shape_context(prs)
+
+        regular_txbody_id = id(tf._txBody)
+        self.assertNotIn(regular_txbody_id, no_expand_ids)
 
 
 if __name__ == "__main__":
