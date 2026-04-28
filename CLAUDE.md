@@ -27,7 +27,7 @@ cd frontend && npx tsc --noEmit     # type check
 - `/push` — Push with safety checks
 - `/dev-backend` / `/dev-frontend` — Start dev servers
 - `/deploy-ec2` — Deploy backend to EC2
-- `/check-ec2` — Check EC2 status
+- `/check-ec2` — Check EC2 status (SSH 막히면 [`docs/AWS_OPERATIONS.md`](docs/AWS_OPERATIONS.md) 참고)
 - `/update-docs` — Update CLAUDE.md
 - `/update-patch-notes` — Update patch notes from git
 
@@ -42,3 +42,4 @@ Detailed documentation in `docs/`:
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — Backend/frontend structure, components, tests
 - [`docs/KEY_PATTERNS.md`](docs/KEY_PATTERNS.md) — Translation flow, job flow, text fit, thread safety, error handling
 - [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md) — Env vars, deployment, models, libraries, API usage
+- [`docs/AWS_OPERATIONS.md`](docs/AWS_OPERATIONS.md) — AWS CLI 운영 가이드 (보안그룹 IP 갱신, 인스턴스 조회, SSH 트러블슈팅)
