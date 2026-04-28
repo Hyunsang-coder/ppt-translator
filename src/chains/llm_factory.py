@@ -34,19 +34,19 @@ def create_rate_limiter() -> InMemoryRateLimiter:
     )
 
 OPENAI_MODELS = [
-    "gpt-5.4-2026-03-05",
+    "gpt-5.5-2026-04-23",
     "gpt-5.4-mini-2026-03-17",
 ]
 
 ANTHROPIC_MODELS = [
     "claude-sonnet-4-6",
-    "claude-opus-4-6",
+    "claude-opus-4-7",
     "claude-haiku-4-5",
 ]
 
 ANTHROPIC_MODEL_DISPLAY_NAMES = {
     "claude-sonnet-4-6": "Claude Sonnet 4.6",
-    "claude-opus-4-6": "Claude Opus 4.6",
+    "claude-opus-4-7": "Claude Opus 4.7",
     "claude-haiku-4-5": "Claude Haiku 4.5",
 }
 

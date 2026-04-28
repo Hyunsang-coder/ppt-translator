@@ -71,7 +71,7 @@ class TestFilenameGeneration:
             filename_settings=settings,
             original_filename="original.pptx",
             target_language="영어",
-            model="gpt-5.4-2026-03-05",
+            model="gpt-5.5-2026-04-23",
         )
 
         assert filename == "original_EN.pptx"
@@ -90,7 +90,7 @@ class TestFilenameGeneration:
             filename_settings=settings,
             original_filename="original.pptx",
             target_language="영어",
-            model="gpt-5.4-2026-03-05",
+            model="gpt-5.5-2026-04-23",
         )
 
         assert filename == "EN_original.pptx"
@@ -198,7 +198,7 @@ class TestJobEndpoints:
         response = client.post(
             "/api/v1/jobs",
             files={"ppt_file": ("test.txt", b"not a pptx", "text/plain")},
-            data={"provider": "openai", "model": "gpt-5.4-2026-03-05"},
+            data={"provider": "openai", "model": "gpt-5.5-2026-04-23"},
         )
         assert response.status_code == 400
         assert "Invalid file type" in response.json()["detail"]
@@ -213,7 +213,7 @@ class TestJobEndpoints:
         response = client.post(
             "/api/v1/jobs",
             files={"ppt_file": ("test.pptx", b"not a real pptx", "application/octet-stream")},
-            data={"provider": "openai", "model": "gpt-5.4-2026-03-05"},
+            data={"provider": "openai", "model": "gpt-5.5-2026-04-23"},
         )
 
         assert response.status_code == 400
@@ -262,7 +262,7 @@ class TestJobEndpoints:
             response = client.post(
                 "/api/v1/jobs",
                 files={"ppt_file": ("test.pptx", sample_pptx_bytes, "application/octet-stream")},
-                data={"provider": "openai", "model": "gpt-5.4-2026-03-05"},
+                data={"provider": "openai", "model": "gpt-5.5-2026-04-23"},
             )
             assert response.status_code == 429
             assert "바쁩니다" in response.json()["detail"]
@@ -307,7 +307,7 @@ class TestLegacyTranslateEndpoint:
         response = client.post(
             "/translate",
             files={"ppt_file": ("test.txt", b"not a pptx", "text/plain")},
-            data={"provider": "openai", "model": "gpt-5.4-2026-03-05"},
+            data={"provider": "openai", "model": "gpt-5.5-2026-04-23"},
         )
         assert response.status_code == 400
         assert "Invalid file type" in response.json()["detail"]
