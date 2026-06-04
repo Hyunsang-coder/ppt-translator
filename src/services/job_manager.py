@@ -129,6 +129,37 @@ class JobManager:
         self._running_semaphore = asyncio.Semaphore(max_running)
         self._cleanup_task: Optional[asyncio.Task] = None
 
+    def start_cleanup_loop(self, interval: float = 300.0) -> None:
+        """Start a background task that periodically reaps old terminal jobs.
+
+        Without this, ``_cleanup_old_jobs`` only runs when a new job is
+        created at capacity, so an idle server keeps completed jobs (and
+        their output buffers) in memory indefinitely.
+        """
+        if self._cleanup_task is not None and not self._cleanup_task.done():
+            return
+        self._cleanup_task = asyncio.create_task(self._cleanup_loop(interval))
+
+    async def _cleanup_loop(self, interval: float) -> None:
+        while True:
+            try:
+                await asyncio.sleep(interval)
+                self._cleanup_old_jobs()
+            except asyncio.CancelledError:
+                break
+            except Exception:  # noqa: BLE001 - never let the loop die
+                LOGGER.exception("Periodic job cleanup failed")
+
+    async def stop_cleanup_loop(self) -> None:
+        """Cancel the background cleanup task (called on shutdown)."""
+        if self._cleanup_task is not None:
+            self._cleanup_task.cancel()
+            try:
+                await self._cleanup_task
+            except asyncio.CancelledError:
+                pass
+            self._cleanup_task = None
+
     def create_job(self, job_type: JobType) -> Job:
         """Create a new job."""
         # Clean up old completed jobs if at capacity
@@ -345,6 +376,11 @@ class JobManager:
                     to_remove.append(job_id)
 
         for job_id in to_remove:
+            # Dropping the job from the dict releases the only reference to its
+            # output_file BytesIO, so the buffer is GC'd and its bytes freed.
+            # We intentionally do NOT call output_file.close() here: a download
+            # in flight could still be reading it, and closing mid-read raises
+            # ValueError. GC handles the memory; the race does not.
             del self._jobs[job_id]
             LOGGER.info("Cleaned up old job %s", job_id)
 

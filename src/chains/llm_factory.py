@@ -33,26 +33,10 @@ def create_rate_limiter() -> InMemoryRateLimiter:
         max_bucket_size=settings.rate_limit_max_bucket_size,
     )
 
-OPENAI_MODELS = [
-    "gpt-5.5-2026-04-23",
-    "gpt-5.4-mini-2026-03-17",
-]
-
-ANTHROPIC_MODELS = [
-    "claude-sonnet-4-6",
-    "claude-opus-4-8",
-    "claude-haiku-4-5",
-]
-
-ANTHROPIC_MODEL_DISPLAY_NAMES = {
-    "claude-sonnet-4-6": "Claude Sonnet 4.6",
-    "claude-opus-4-8": "Claude Opus 4.8",
-    "claude-haiku-4-5": "Claude Haiku 4.5",
-}
-
-
 def get_models_for_provider(provider: Provider) -> list[str]:
     """Return available models for the given provider.
+
+    Derived from the single source of truth in src/services/models.py.
 
     Args:
         provider: The LLM provider ("openai" or "anthropic").
@@ -60,9 +44,9 @@ def get_models_for_provider(provider: Provider) -> list[str]:
     Returns:
         List of model identifiers available for the provider.
     """
-    if provider == "anthropic":
-        return ANTHROPIC_MODELS.copy()
-    return OPENAI_MODELS.copy()
+    from src.services.models import model_ids
+
+    return model_ids(provider)
 
 
 def create_llm(

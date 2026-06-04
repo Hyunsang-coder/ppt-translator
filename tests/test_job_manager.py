@@ -234,5 +234,8 @@ class TestCleanupReleasesResources:
 
         manager._cleanup_old_jobs()
 
-        # Job should be removed entirely
+        # Job should be removed entirely; dropping it releases the only
+        # reference to output_file so the buffer is GC'd. We do not close it
+        # explicitly (an in-flight download could still be reading it).
         assert manager.get_job(job.id) is None
+        assert job.id not in manager._jobs

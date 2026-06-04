@@ -8,6 +8,39 @@ from enum import Enum
 from typing import Callable, Dict, Optional
 
 
+# ---------------------------------------------------------------------------
+# Model registry — single source of truth for supported LLM models.
+#
+# Each entry is (id, display_name). The order here is the order shown to users.
+# api.py builds its Pydantic ModelInfo list from this, llm_factory derives its
+# allowlists from it, and default model IDs below reference it — so adding or
+# bumping a model is a one-file change.
+# ---------------------------------------------------------------------------
+MODEL_REGISTRY: Dict[str, list[tuple[str, str]]] = {
+    "openai": [
+        ("gpt-5.5-2026-04-23", "GPT-5.5"),
+        ("gpt-5.4-mini-2026-03-17", "GPT-5.4 Mini"),
+    ],
+    "anthropic": [
+        ("claude-opus-4-8", "Claude Opus 4.8"),
+        ("claude-sonnet-4-6", "Claude Sonnet 4.6"),
+        ("claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
+    ],
+}
+
+# Default models referenced by request schemas and endpoints.
+DEFAULT_TRANSLATION_MODEL = "claude-sonnet-4-6"
+DEFAULT_LIGHT_MODEL = {
+    "openai": "gpt-5.4-mini-2026-03-17",
+    "anthropic": "claude-haiku-4-5-20251001",
+}
+
+
+def model_ids(provider: str) -> list[str]:
+    """Return the allowed model ids for a provider (empty if unknown)."""
+    return [model_id for model_id, _ in MODEL_REGISTRY.get(provider, [])]
+
+
 class TextFitMode(Enum):
     """Text fitting mode for translated text boxes."""
 
@@ -38,8 +71,8 @@ class TranslationRequest:
     ppt_file: io.BytesIO
     source_lang: str = "Auto"
     target_lang: str = "Auto"
-    model: str = "gpt-5.5-2026-04-23"
-    provider: str = "openai"
+    model: str = DEFAULT_TRANSLATION_MODEL
+    provider: str = "anthropic"
     context: Optional[str] = None
     instructions: Optional[str] = None
     glossary: Optional[Dict[str, str]] = None

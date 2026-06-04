@@ -5,7 +5,11 @@ from __future__ import annotations
 import types
 import unittest
 
-from src.chains.translation_chain import _force_match_expected
+from src.chains.translation_chain import (
+    TranslationOutput,
+    _batch_translate_with_retry,
+    _force_match_expected,
+)
 from src.utils.glossary_loader import GlossaryLoader
 from src.utils.helpers import chunk_paragraphs, split_text_into_segments
 from src.utils.language_detector import LanguageDetector
@@ -43,6 +47,42 @@ class HelperTestCase(unittest.TestCase):
         segments = split_text_into_segments("abcdefghij", 3, weights=[10, 5, 5])
         self.assertEqual(len(segments), 3)
         self.assertEqual("".join(segments), "abcdefghij")
+
+
+class BatchRetryTestCase(unittest.TestCase):
+    def test_retry_only_resubmits_failed_batches(self) -> None:
+        # Two batches; the first attempt yields only batch 0 (batch 1 missing,
+        # which raises and triggers a tenacity retry). The retry must resubmit
+        # ONLY batch 1 — batch 0 was already translated and must not re-run.
+        batches = [
+            {"paragraphs": [object()], "start_idx": 1, "end_idx": 1},
+            {"paragraphs": [object()], "start_idx": 2, "end_idx": 2},
+        ]
+        submitted_sizes = []
+
+        class FakeChain:
+            def __init__(self):
+                self.calls = 0
+
+            def batch_as_completed(self, submitted, config=None):
+                submitted_sizes.append(len(submitted))
+                self.calls += 1
+                if self.calls == 1:
+                    # Only the first of two batches completes.
+                    yield (0, TranslationOutput(translations=["b0"]))
+                else:
+                    # Retry receives only the still-pending batch.
+                    yield (0, TranslationOutput(translations=["b1"]))
+
+        accumulator = [None, None]
+        results = _batch_translate_with_retry(
+            FakeChain(), batches, config=None,
+            total_batches=2, ordered_results=accumulator,
+        )
+
+        self.assertEqual([r.translations for r in results], [["b0"], ["b1"]])
+        # First attempt submitted 2 batches, retry submitted only 1.
+        self.assertEqual(submitted_sizes, [2, 1])
 
 
 class ForceMatchExpectedTestCase(unittest.TestCase):

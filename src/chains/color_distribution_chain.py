@@ -82,12 +82,11 @@ def _format_items(
 
 
 def _invoke_batch(
+    chain,
     original_groups: list[list[str]],
     translated_texts: list[str],
-    provider: Provider,
-    model_name: str | None,
 ) -> list[list[ColoredSegment]] | None:
-    """Invoke the LLM for a single batch of paragraphs.
+    """Invoke a prebuilt chain for a single batch of paragraphs.
 
     Returns:
         List of distributions for the batch, or None on failure.
@@ -95,20 +94,6 @@ def _invoke_batch(
     items_str = _format_items(original_groups, translated_texts)
 
     try:
-        llm = create_llm(
-            provider=provider,
-            model_name=model_name,
-            max_tokens=4096,
-            temperature=0,
-        )
-        structured_llm = llm.with_structured_output(ColorDistributionOutput)
-
-        prompt = PromptTemplate(
-            input_variables=["items"],
-            template=COLOR_DISTRIBUTION_PROMPT,
-        )
-        chain = prompt | structured_llm
-
         result: ColorDistributionOutput = chain.invoke({"items": items_str})
         return result.distributions
     except Exception:
@@ -149,6 +134,20 @@ def distribute_colors(
         _BATCH_SIZE,
     )
 
+    # Build the LLM and chain once and reuse across batches. Creating them
+    # per batch would also spin up a fresh per-instance rate limiter each
+    # time, defeating rate limiting across the batch loop.
+    llm = create_llm(
+        provider=provider,
+        model_name=model_name,
+        max_tokens=4096,
+        temperature=0,
+    )
+    chain = (
+        PromptTemplate(input_variables=["items"], template=COLOR_DISTRIBUTION_PROMPT)
+        | llm.with_structured_output(ColorDistributionOutput)
+    )
+
     all_distributions: list[list[ColoredSegment] | None] = [None] * total
     any_success = False
 
@@ -157,7 +156,7 @@ def distribute_colors(
         batch_groups = original_groups[start:end]
         batch_texts = translated_texts[start:end]
 
-        batch_result = _invoke_batch(batch_groups, batch_texts, provider, model_name)
+        batch_result = _invoke_batch(chain, batch_groups, batch_texts)
 
         if batch_result is not None and len(batch_result) == len(batch_groups):
             for i, dist in enumerate(batch_result):

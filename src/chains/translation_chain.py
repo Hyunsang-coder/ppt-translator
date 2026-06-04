@@ -162,10 +162,13 @@ def translate_with_progress(
         max_concurrency,
     )
 
-    # Use LangChain batch_as_completed for real-time progress updates
+    # Use LangChain batch_as_completed for real-time progress updates.
+    # The accumulator is shared across tenacity retries so successful
+    # batches are never re-translated.
     config = RunnableConfig(max_concurrency=max(1, int(max_concurrency)))
+    accumulator: List[TranslationOutput | None] = [None] * len(batches)
     ordered_results: List[TranslationOutput | None] = _batch_translate_with_retry(
-        chain, batches, config, progress_tracker, total_batches
+        chain, batches, config, progress_tracker, total_batches, accumulator
     )
 
     # Assemble translations in input order
@@ -208,11 +211,16 @@ def _batch_translate_with_retry(
     config: RunnableConfig,
     progress_tracker: Any = None,
     total_batches: int = 0,
+    ordered_results: List[TranslationOutput | None] | None = None,
 ) -> List[TranslationOutput | None]:
     """Execute batch translation with retry logic and real-time progress.
 
     Uses ``batch_as_completed`` so that each batch reports progress as soon
     as it finishes, instead of waiting for all batches to complete.
+
+    On a tenacity retry, only batches that still have no result are
+    re-submitted — successful batches from a prior attempt are preserved in
+    ``ordered_results`` so we don't pay to re-translate them.
 
     Args:
         chain: Configured LangChain runnable sequence with structured output.
@@ -220,24 +228,44 @@ def _batch_translate_with_retry(
         config: RunnableConfig with max_concurrency setting.
         progress_tracker: Optional tracker for real-time progress updates.
         total_batches: Total number of batches (for logging).
+        ordered_results: Shared accumulator preserved across retries. Caller
+            must pass the same list on every attempt.
 
     Returns:
         List of TranslationOutput results in input order.
     """
-    # Reset progress for this attempt — on the first call this is
-    # redundant (translate_with_progress already called reset), but on
-    # tenacity retries it prevents batch_completed() from double-counting.
+    if ordered_results is None:
+        ordered_results = [None] * len(batches)
+
+    # Only retranslate batches that have not yet succeeded.
+    pending = [i for i, r in enumerate(ordered_results) if r is None]
+    pending_batches = [batches[i] for i in pending]
+
+    # Reset progress for this attempt, then re-credit already-completed
+    # batches so the percentage reflects real total progress (not just this
+    # attempt's pending subset).
     if progress_tracker is not None:
         total_sentences = sum(len(b.get("paragraphs", [])) for b in batches)
         progress_tracker.reset(
             total_batches=total_batches,
             total_sentences=total_sentences,
         )
+        for i, result in enumerate(ordered_results):
+            if result is not None:
+                batch = batches[i]
+                progress_tracker.batch_completed(
+                    int(batch.get("start_idx", i + 1)),
+                    int(batch.get("end_idx", i + 1)),
+                )
 
-    LOGGER.debug("Invoking batch translation for %d batches.", len(batches))
-    ordered_results: List[TranslationOutput | None] = [None] * len(batches)
+    LOGGER.debug(
+        "Invoking batch translation for %d batch(es) (%d already done).",
+        len(pending_batches),
+        len(batches) - len(pending_batches),
+    )
 
-    for completed_idx, result in chain.batch_as_completed(batches, config=config):
+    for local_idx, result in chain.batch_as_completed(pending_batches, config=config):
+        completed_idx = pending[local_idx]
         ordered_results[completed_idx] = result
 
         if progress_tracker is not None:

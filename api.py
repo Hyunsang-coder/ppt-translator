@@ -31,7 +31,7 @@ from src.services import (
     JobState,
     JobType,
 )
-from src.services.models import TextFitMode
+from src.services.models import MODEL_REGISTRY, DEFAULT_LIGHT_MODEL, DEFAULT_TRANSLATION_MODEL, TextFitMode
 from src.utils.config import get_settings
 from src.utils.glossary_loader import GlossaryLoader
 from src.utils.security import sanitize_filename, validate_pptx_file
@@ -47,10 +47,13 @@ _thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=3)
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):  # noqa: ARG001
-    """Set a bounded thread pool as the default executor on startup."""
+    """Set a bounded thread pool and start periodic job cleanup on startup."""
     loop = asyncio.get_running_loop()
     loop.set_default_executor(_thread_pool)
+    job_manager = get_job_manager()
+    job_manager.start_cleanup_loop()
     yield
+    await job_manager.stop_cleanup_loop()
     _thread_pool.shutdown(wait=False)
 
 
@@ -186,7 +189,7 @@ class SummarizeRequest(BaseModel):
 
     markdown: str
     provider: str = "anthropic"
-    model: str = "claude-haiku-4-5-20251001"
+    model: str = DEFAULT_LIGHT_MODEL["anthropic"]
 
 
 class SummarizeResponse(BaseModel):
@@ -288,16 +291,14 @@ def generate_output_filename(
 # Configuration Data
 # ============================================================================
 
+# Built from the single source of truth in src/services/models.py so adding
+# or bumping a model is a one-file change.
 SUPPORTED_MODELS: Dict[str, List[ModelInfo]] = {
-    "openai": [
-        ModelInfo(id="gpt-5.5-2026-04-23", name="GPT-5.5", provider="openai"),
-        ModelInfo(id="gpt-5.4-mini-2026-03-17", name="GPT-5.4 Mini", provider="openai"),
-    ],
-    "anthropic": [
-        ModelInfo(id="claude-opus-4-8", name="Claude Opus 4.8", provider="anthropic"),
-        ModelInfo(id="claude-sonnet-4-6", name="Claude Sonnet 4.6", provider="anthropic"),
-        ModelInfo(id="claude-haiku-4-5-20251001", name="Claude Haiku 4.5", provider="anthropic"),
-    ],
+    provider: [
+        ModelInfo(id=model_id, name=name, provider=provider)
+        for model_id, name in entries
+    ]
+    for provider, entries in MODEL_REGISTRY.items()
 }
 
 def validate_model(provider: str, model: str) -> None:
@@ -501,7 +502,7 @@ async def _run_translation_job(
             LOGGER.info("Translation job %s was cancelled", job_id)
         except Exception as exc:
             LOGGER.exception("Translation job %s failed: %s", job_id, exc)
-            await job_manager.fail_job(job_id, f"번역 중 오류가 발생했습니다: {str(exc)}")
+            await job_manager.fail_job(job_id, "번역 중 오류가 발생했습니다.")
 
 
 @app.post("/api/v1/jobs", response_model=JobCreateResponse)
@@ -512,7 +513,7 @@ async def create_job(
     source_lang: str = Form("Auto", description="Source language"),
     target_lang: str = Form("Auto", description="Target language"),
     provider: str = Form("anthropic", description="LLM provider"),
-    model: str = Form("claude-sonnet-4-6", description="Model to use"),
+    model: str = Form(DEFAULT_TRANSLATION_MODEL, description="Model to use"),
     context: Optional[str] = Form(None, description="Background information about the presentation"),
     instructions: Optional[str] = Form(None, description="Translation style/tone guidelines"),
     preprocess_repetitions: bool = Form(False, description="Deduplicate repeated phrases"),
@@ -578,8 +579,11 @@ async def create_job(
                 detail=f"File size ({size_mb:.1f}MB) exceeds limit ({settings.max_upload_size_mb}MB)",
             )
 
-        # Validate file signature
+        # Validate file signature. BytesIO copies the bytes, so the original
+        # buffer can be released immediately to avoid holding two copies for
+        # the entire job duration (memory pressure on the EC2 host).
         ppt_buffer = io.BytesIO(file_content)
+        del file_content
         is_valid, error_msg = validate_pptx_file(ppt_buffer)
         if not is_valid:
             raise HTTPException(status_code=400, detail=error_msg or "Invalid PPT/PPTX file format")
@@ -592,7 +596,6 @@ async def create_job(
             try:
                 ppt_buffer = compress_pptx_images(ppt_buffer, preset=compress_images)
                 ppt_buffer.seek(0)
-                del file_content  # Free original bytes early
             except Exception as exc:
                 LOGGER.warning("Image compression failed, using original: %s", exc)
                 ppt_buffer.seek(0)
@@ -873,7 +876,7 @@ async def extract_text(
 
     except Exception as exc:
         LOGGER.exception("Failed to extract text: %s", exc)
-        raise HTTPException(status_code=500, detail=f"Failed to extract text: {str(exc)}")
+        raise HTTPException(status_code=500, detail="Failed to extract text")
 
 
 # ============================================================================
@@ -929,7 +932,7 @@ async def summarize_text(request: SummarizeRequest) -> SummarizeResponse:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         LOGGER.exception("Failed to summarize text: %s", exc)
-        raise HTTPException(status_code=500, detail=f"Failed to summarize text: {str(exc)}")
+        raise HTTPException(status_code=500, detail="Failed to summarize text")
 
 
 # ============================================================================
@@ -943,7 +946,7 @@ class GenerateInstructionsRequest(BaseModel):
     target_lang: str
     markdown: str
     provider: str = "anthropic"
-    model: str = "claude-haiku-4-5-20251001"
+    model: str = DEFAULT_LIGHT_MODEL["anthropic"]
 
 
 class GenerateInstructionsResponse(BaseModel):
@@ -1048,7 +1051,7 @@ async def generate_instructions(request: GenerateInstructionsRequest) -> Generat
 
     except Exception as exc:
         LOGGER.exception("Failed to generate instructions: %s", exc)
-        raise HTTPException(status_code=500, detail=f"Failed to generate instructions: {str(exc)}")
+        raise HTTPException(status_code=500, detail="Failed to generate instructions")
 
 
 # ============================================================================
@@ -1065,7 +1068,7 @@ async def translate_ppt(
     source_lang: str = Form("Auto", description="Source language (Auto for detection)"),
     target_lang: str = Form("Auto", description="Target language (Auto for inference)"),
     provider: str = Form("anthropic", description="LLM provider (openai or anthropic)"),
-    model: str = Form("claude-sonnet-4-6", description="Model to use (depends on provider)"),
+    model: str = Form(DEFAULT_TRANSLATION_MODEL, description="Model to use (depends on provider)"),
     context: Optional[str] = Form(None, description="Background information about the presentation"),
     instructions: Optional[str] = Form(None, description="Translation style/tone guidelines"),
     preprocess_repetitions: bool = Form(
@@ -1128,8 +1131,10 @@ async def translate_ppt(
             detail=f"File size ({size_mb:.1f}MB) exceeds limit ({settings.max_upload_size_mb}MB)",
         )
 
-    # Validate file signature
+    # Validate file signature. BytesIO copies the bytes, so the original
+    # buffer can be released immediately to avoid holding two copies.
     ppt_buffer = io.BytesIO(file_content)
+    del file_content
     is_valid, error_msg = validate_pptx_file(ppt_buffer)
     if not is_valid:
         raise HTTPException(
@@ -1144,7 +1149,6 @@ async def translate_ppt(
         try:
             ppt_buffer = compress_pptx_images(ppt_buffer, preset=compress_images)
             ppt_buffer.seek(0)
-            del file_content  # Free original bytes early
         except Exception as exc:
             LOGGER.warning("Image compression failed, using original: %s", exc)
             ppt_buffer.seek(0)

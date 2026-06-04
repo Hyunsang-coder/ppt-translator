@@ -773,8 +773,9 @@ class RuleBasedDistributionTestCase(unittest.TestCase):
 class DistributeColorsBatchingTestCase(unittest.TestCase):
     """Tests for distribute_colors batching behavior."""
 
+    @patch("src.chains.color_distribution_chain.create_llm")
     @patch("src.chains.color_distribution_chain._invoke_batch")
-    def test_single_batch_success(self, mock_invoke) -> None:
+    def test_single_batch_success(self, mock_invoke, mock_create_llm) -> None:
         """Single small batch should work normally."""
         from src.chains.color_distribution_chain import ColoredSegment, distribute_colors
 
@@ -790,9 +791,12 @@ class DistributeColorsBatchingTestCase(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(len(result), 1)
         mock_invoke.assert_called_once()
+        # The LLM/chain must be built exactly once and reused across batches.
+        mock_create_llm.assert_called_once()
 
+    @patch("src.chains.color_distribution_chain.create_llm")
     @patch("src.chains.color_distribution_chain._invoke_batch")
-    def test_partial_batch_failure(self, mock_invoke) -> None:
+    def test_partial_batch_failure(self, mock_invoke, mock_create_llm) -> None:
         """If one batch fails, others should still succeed."""
         from src.chains.color_distribution_chain import ColoredSegment, distribute_colors, _BATCH_SIZE
 
@@ -814,9 +818,13 @@ class DistributeColorsBatchingTestCase(unittest.TestCase):
         self.assertIsNotNone(result[0])
         # Second batch item should be None
         self.assertIsNone(result[_BATCH_SIZE])
+        # One LLM built for the whole call, two batch invocations.
+        mock_create_llm.assert_called_once()
+        self.assertEqual(mock_invoke.call_count, 2)
 
+    @patch("src.chains.color_distribution_chain.create_llm")
     @patch("src.chains.color_distribution_chain._invoke_batch")
-    def test_all_batches_fail(self, mock_invoke) -> None:
+    def test_all_batches_fail(self, mock_invoke, mock_create_llm) -> None:
         """If all batches fail, should return None."""
         from src.chains.color_distribution_chain import distribute_colors
 
