@@ -7,9 +7,17 @@ services:
     restart: unless-stopped
     ports:
       - "80:8000"
+    # Local-only convenience: if a .env exists it is loaded, but it is not
+    # required. In production no .env is present and keys come from SSM.
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
+      # API keys are loaded at startup from SSM Parameter Store via the
+      # entrypoint (EC2 IAM role grants read+decrypt). No keys on disk.
+      # Set SSM_PARAM_PREFIX empty for local dev to skip SSM and use .env.
+      - SSM_PARAM_PREFIX=${SSM_PARAM_PREFIX-/ppt-translator}
+      - AWS_REGION=${AWS_REGION:-ap-northeast-2}
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
       - TRANSLATION_MAX_CONCURRENCY=${TRANSLATION_MAX_CONCURRENCY:-4}
     deploy:

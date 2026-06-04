@@ -35,6 +35,9 @@ COPY --from=builder /install /usr/local
 COPY api.py .
 COPY src/ ./src/
 COPY glossary_template.xlsx .
+COPY fetch_ssm.py .
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 RUN mkdir -p /app/tmp && chown -R appuser:appuser /app
 
@@ -44,6 +47,9 @@ EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
+
+# Entrypoint loads secrets from SSM (when SSM_PARAM_PREFIX is set) then execs CMD.
+ENTRYPOINT ["docker-entrypoint.sh"]
 
 CMD ["uvicorn", "api:app", \
      "--host", "0.0.0.0", \
