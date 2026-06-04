@@ -40,13 +40,13 @@ OPENAI_MODELS = [
 
 ANTHROPIC_MODELS = [
     "claude-sonnet-4-6",
-    "claude-opus-4-7",
+    "claude-opus-4-8",
     "claude-haiku-4-5",
 ]
 
 ANTHROPIC_MODEL_DISPLAY_NAMES = {
     "claude-sonnet-4-6": "Claude Sonnet 4.6",
-    "claude-opus-4-7": "Claude Opus 4.7",
+    "claude-opus-4-8": "Claude Opus 4.8",
     "claude-haiku-4-5": "Claude Haiku 4.5",
 }
 

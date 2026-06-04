@@ -49,7 +49,7 @@ NEXT_PUBLIC_API_URL=    # Default: empty (Vercel proxy); local dev: http://local
 |----------|----------|--------------|
 | OpenAI | `gpt-5.5-2026-04-23` | GPT-5.5 |
 | OpenAI | `gpt-5.4-mini-2026-03-17` | GPT-5.4 Mini |
-| Anthropic | `claude-opus-4-7` | Claude Opus 4.7 |
+| Anthropic | `claude-opus-4-8` | Claude Opus 4.8 |
 | Anthropic | `claude-sonnet-4-6` | Claude Sonnet 4.6 |
 | Anthropic | `claude-haiku-4-5-20251001` | Claude Haiku 4.5 |
 

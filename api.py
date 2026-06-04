@@ -294,7 +294,7 @@ SUPPORTED_MODELS: Dict[str, List[ModelInfo]] = {
         ModelInfo(id="gpt-5.4-mini-2026-03-17", name="GPT-5.4 Mini", provider="openai"),
     ],
     "anthropic": [
-        ModelInfo(id="claude-opus-4-7", name="Claude Opus 4.7", provider="anthropic"),
+        ModelInfo(id="claude-opus-4-8", name="Claude Opus 4.8", provider="anthropic"),
         ModelInfo(id="claude-sonnet-4-6", name="Claude Sonnet 4.6", provider="anthropic"),
         ModelInfo(id="claude-haiku-4-5-20251001", name="Claude Haiku 4.5", provider="anthropic"),
     ],
