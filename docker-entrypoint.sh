@@ -11,8 +11,14 @@ set -e
 
 if [ -n "${SSM_PARAM_PREFIX}" ]; then
     echo "[entrypoint] Loading secrets from SSM prefix ${SSM_PARAM_PREFIX}"
-    # fetch_ssm.py prints `KEY=value` lines for each parameter under the prefix.
-    eval "$(python /app/fetch_ssm.py)"
+    # Capture the export lines first so a fetch failure aborts startup —
+    # `eval "$(...)"` would otherwise swallow the script's non-zero exit and
+    # let the container boot with no/old keys.
+    if ! ssm_exports="$(python /app/fetch_ssm.py)"; then
+        echo "[entrypoint] FATAL: failed to load secrets from SSM; refusing to start" >&2
+        exit 1
+    fi
+    eval "${ssm_exports}"
     echo "[entrypoint] Secrets loaded from SSM"
 else
     echo "[entrypoint] SSM_PARAM_PREFIX unset; using existing environment"
