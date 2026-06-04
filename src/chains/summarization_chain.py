@@ -88,7 +88,7 @@ async def summarize_presentation(
     chain = prompt | llm
 
     # Run in executor for async compatibility
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(
         None,
         lambda: chain.invoke({"markdown": truncated}),

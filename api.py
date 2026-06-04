@@ -300,6 +300,20 @@ SUPPORTED_MODELS: Dict[str, List[ModelInfo]] = {
     ],
 }
 
+def validate_model(provider: str, model: str) -> None:
+    """Raise HTTP 400 if the model is not in the provider's allowlist.
+
+    Prevents callers from charging arbitrary (non-exposed) models to our keys.
+    Assumes the provider has already been validated against SUPPORTED_MODELS.
+    """
+    allowed = {m.id for m in SUPPORTED_MODELS.get(provider, [])}
+    if model not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid model '{model}' for provider '{provider}'. Must be one of: {sorted(allowed)}",
+        )
+
+
 SUPPORTED_LANGUAGES: List[LanguageInfo] = [
     LanguageInfo(code="Auto", name="Auto (자동 감지)"),
     LanguageInfo(code="한국어", name="한국어"),
@@ -457,7 +471,7 @@ async def _run_translation_job(
             service = TranslationService(settings=settings, progress_callback=progress_callback)
 
             # Run translation in thread pool to avoid blocking
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             result = await loop.run_in_executor(None, service.translate, request)
 
             if not result.success:
@@ -520,6 +534,7 @@ async def create_job(
                 status_code=400,
                 detail=f"Invalid provider: {provider}. Must be one of: {list(SUPPORTED_MODELS.keys())}",
             )
+        validate_model(provider, model)
 
         # Validate API key
         if provider == "openai" and not settings.openai_api_key:
@@ -889,6 +904,7 @@ async def summarize_text(request: SummarizeRequest) -> SummarizeResponse:
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY is not configured")
     if request.provider == "anthropic" and not settings.anthropic_api_key:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not configured")
+    validate_model(request.provider, request.model)
 
     # Validate markdown
     if not request.markdown or not request.markdown.strip():
@@ -960,6 +976,7 @@ async def generate_instructions(request: GenerateInstructionsRequest) -> Generat
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY is not configured")
     if request.provider == "anthropic" and not settings.anthropic_api_key:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not configured")
+    validate_model(request.provider, request.model)
 
     # Validate target language
     if not request.target_lang or request.target_lang == "Auto":
@@ -1071,6 +1088,7 @@ async def translate_ppt(
             status_code=400,
             detail=f"Invalid provider: {provider}. Must be 'openai' or 'anthropic'.",
         )
+    validate_model(provider, model)
 
     # Validate API key for selected provider
     if provider == "openai" and not settings.openai_api_key:
@@ -1171,7 +1189,7 @@ async def translate_ppt(
     )
 
     service = TranslationService(settings=settings)
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(None, service.translate, request)
 
     if not result.success:

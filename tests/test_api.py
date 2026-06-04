@@ -229,6 +229,16 @@ class TestJobEndpoints:
         assert response.status_code == 400
         assert "Invalid provider" in response.json()["detail"]
 
+    def test_create_job_invalid_model_for_provider(self, client, sample_pptx_bytes):
+        """A model not in the provider's allowlist must be rejected (no key abuse)."""
+        response = client.post(
+            "/api/v1/jobs",
+            files={"ppt_file": ("test.pptx", sample_pptx_bytes, "application/octet-stream")},
+            data={"provider": "anthropic", "model": "claude-3-opus-20240229"},
+        )
+        assert response.status_code == 400
+        assert "Invalid model" in response.json()["detail"]
+
     def test_get_job_not_found(self, client):
         """Test getting non-existent job."""
         response = client.get("/api/v1/jobs/non-existent-id")

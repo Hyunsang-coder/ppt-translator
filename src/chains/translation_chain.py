@@ -184,13 +184,14 @@ def translate_with_progress(
         parts = result.translations
 
         if len(parts) != expected_count:
-            LOGGER.debug(
+            LOGGER.warning(
                 "Batch %d: translation count %d differs from expected %d.",
                 index,
                 len(parts),
                 expected_count,
             )
-            parts = _force_match_expected(parts, expected_count)
+            originals = [p.original_text for p in batch.get("paragraphs", [])]
+            parts = _force_match_expected(parts, expected_count, originals)
 
         translations.extend(parts)
 
@@ -262,13 +263,24 @@ def _batch_translate_with_retry(
     return ordered_results
 
 
-def _force_match_expected(parts: List[str], expected_count: int) -> List[str]:
-    """Pad or trim decoded translations without emitting warnings."""
+def _force_match_expected(
+    parts: List[str], expected_count: int, originals: List[str] | None = None
+) -> List[str]:
+    """Pad or trim decoded translations to the expected count.
+
+    Missing translations are padded with the corresponding original text (not
+    empty strings) so a count mismatch never erases the source paragraph.
+    """
 
     if len(parts) < expected_count:
         missing = expected_count - len(parts)
-        LOGGER.debug("Padding %d missing translations with empty strings due to format mismatch.", missing)
-        parts = parts + ["" for _ in range(missing)]
+        LOGGER.warning(
+            "Padding %d missing translation(s) with original text due to format mismatch.",
+            missing,
+        )
+        for idx in range(len(parts), expected_count):
+            fallback = originals[idx] if originals and idx < len(originals) else ""
+            parts = parts + [fallback]
     elif len(parts) > expected_count:
         LOGGER.debug(
             "Received %d translations but expected %d; trimming extras after successful parse.",
