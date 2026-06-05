@@ -42,4 +42,4 @@ Detailed documentation in `docs/`:
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — Backend/frontend structure, components, tests
 - [`docs/KEY_PATTERNS.md`](docs/KEY_PATTERNS.md) — Translation flow, job flow, text fit, thread safety, error handling
 - [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md) — Env vars, deployment, models, libraries, API usage
-- [`docs/AWS_OPERATIONS.md`](docs/AWS_OPERATIONS.md) — AWS CLI 운영 가이드 (보안그룹 IP 갱신, 인스턴스 조회, SSH 트러블슈팅)
+- [`docs/AWS_OPERATIONS.md`](docs/AWS_OPERATIONS.md) — AWS CLI 운영 가이드 (보안그룹 IP 갱신, 인스턴스 조회, SSH 트러블슈팅, SSM API 키 관리/로테이션)

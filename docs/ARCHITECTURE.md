@@ -26,10 +26,10 @@
 - `text_extractor.py`: PPTX to structured markdown with `ExtractionOptions`
 
 ## Service Layer (`src/services/`)
-- `models.py`: Data models (`TranslationRequest`, `TranslationResult`, `TranslationProgress`, `TranslationStatus`, `TextFitMode`, `ProgressCallback`)
+- `models.py`: Data models (`TranslationRequest`, `TranslationResult`, `TranslationProgress`, `TranslationStatus`, `TextFitMode`, `ProgressCallback`) + `MODEL_REGISTRY` (single source of truth for supported models / default model IDs)
 - `translation_service.py`: `TranslationService` class with `ServiceProgressTracker` for progress callbacks
 - `job_manager.py`: Async job management
-  - `JobManager`: In-memory store (max 100 jobs, 1h cleanup)
+  - `JobManager`: In-memory store (max 100 jobs, 1h TTL; periodic background cleanup started in the FastAPI lifespan)
   - `Job`: State tracking (pending/running/completed/failed/cancelled)
   - Concurrency: `running_semaphore` + `try_create_job()` atomic admission (429 on overflow)
   - Thread-safe: `add_event()` uses `call_soon_threadsafe` for worker→event-loop bridging

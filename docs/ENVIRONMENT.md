@@ -1,10 +1,24 @@
 # Environment & Deployment
 
-## Backend (.env)
+## API Keys
+
+**Production (EC2)**: API keys live in **AWS SSM Parameter Store** (SecureString),
+not on disk. At container start `docker-entrypoint.sh` fetches `/ppt-translator/*`
+via the instance IAM role and injects them as env vars. Changing a key requires a
+container restart (`docker compose up -d --force-recreate`) — see
+[`AWS_OPERATIONS.md`](AWS_OPERATIONS.md) §4.
+
+**Local dev**: `uvicorn --reload` reads a local `.env` via `load_dotenv()`. The
+entrypoint skips SSM when `SSM_PARAM_PREFIX` is empty, so `docker compose` locally
+falls back to `.env` too.
+
+## Backend env vars
 ```
-OPENAI_API_KEY=         # Required for OpenAI models
-ANTHROPIC_API_KEY=      # Required for Anthropic models
+OPENAI_API_KEY=         # From SSM in prod; .env locally
+ANTHROPIC_API_KEY=      # From SSM in prod; .env locally
 CORS_ALLOWED_ORIGINS=   # Comma-separated (default: http://localhost:3000,http://127.0.0.1:3000)
+SSM_PARAM_PREFIX=       # Prod: /ppt-translator; empty to disable SSM (local)
+AWS_REGION=             # Default: ap-northeast-2
 ```
 
 ### Tuning Variables
@@ -31,8 +45,9 @@ NEXT_PUBLIC_API_URL=    # Default: empty (Vercel proxy); local dev: http://local
 ## Deployment
 
 ### Docker (EC2)
-- **Dockerfile**: Multi-stage (Python 3.12-slim), non-root `appuser`, healthcheck `/health`
-- **docker-compose.yml**: Port 80→8000, 1536M memory, env-based CORS
+- **Dockerfile**: Multi-stage (Python 3.12-slim), non-root `appuser`, healthcheck `/health`, `ENTRYPOINT docker-entrypoint.sh` (loads SSM secrets → execs uvicorn)
+- **docker-compose.yml**: Port 80→8000, 1536M memory, env-based CORS, optional `.env`, `SSM_PARAM_PREFIX`/`AWS_REGION`
+- **IAM**: instance profile `ppt-translator-ssm-profile` grants SSM read + KMS decrypt
 - `docker compose up -d --build`
 
 ### Vercel (Frontend)
@@ -44,6 +59,11 @@ NEXT_PUBLIC_API_URL=    # Default: empty (Vercel proxy); local dev: http://local
 - `predeploy.yml`: Pre-deployment validation
 
 ## Supported Models
+
+Single source of truth: `MODEL_REGISTRY` in `src/services/models.py`. `api.py`
+(`SUPPORTED_MODELS`, validation) and `llm_factory.get_models_for_provider` derive
+from it, so adding/bumping a model is a one-file change. The frontend fallback
+(`frontend/src/hooks/useConfig.ts`) must be kept in sync manually.
 
 | Provider | Model ID | Display Name |
 |----------|----------|--------------|
