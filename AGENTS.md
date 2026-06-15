@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENTS.md
 
 ## Project Overview
 
@@ -26,12 +26,12 @@ cd src-tauri && cargo tauri dev
 TAURI_BUILD=1 cargo tauri build
 ```
 
-## Claude Code Commands
+## Codex Commands
 
 - `/commit` — Review & commit
 - `/push` — Push with safety checks
 - `/dev-backend` / `/dev-frontend` — Start dev servers
-- `/update-docs` — Update CLAUDE.md
+- `/update-docs` — Update AGENTS.md
 
 ### Agents
 - `code-reviewer` — Code quality & security review

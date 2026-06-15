@@ -10,8 +10,8 @@ Analyze the current codebase and update CLAUDE.md to reflect the latest project 
    - Identify new modules, removed files, or renamed components
 
 2. **Analyze Key Areas**
-   - Entry points: `app.py`, `api.py`, CLI scripts
-   - Architecture: `src/core/`, `src/chains/`, `src/services/`, `src/utils/`, `src/ui/`
+   - Entry points: `api.py`, `desktop/sidecar.py`, `src-tauri/`, CLI scripts
+   - Architecture: `src/core/`, `src/chains/`, `src/services/`, `src/utils/`, `frontend/`, `src-tauri/`
    - Dependencies: `requirements.txt`, `pyproject.toml`
    - Configuration: `.env.example`, environment variables
    - Tests: `tests/` structure and patterns

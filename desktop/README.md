@@ -2,11 +2,11 @@
 
 Local desktop packaging of the PPT translator. The Python translation core runs
 as a bundled sidecar; the user supplies their own API keys, stored in the OS
-keychain. No AWS / SSM involved (that path stays in the legacy server build).
+keychain.
 
 ## Layout
 
-- `requirements-desktop.txt` — slimmed Python deps (no boto3/OCR/CV/mangum).
+- `requirements-desktop.txt` — slimmed Python deps for the bundled sidecar.
 - `sidecar.py` — sidecar entrypoint; binds a free port, prints
   `SIDECAR_READY port=N`, then serves the FastAPI app from `api.py`.
 - `sidecar.spec` — PyInstaller spec (onedir; excludes unused native deps).

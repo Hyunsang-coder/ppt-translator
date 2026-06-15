@@ -9,13 +9,21 @@
  * component mounted). We cache the resulting base URL via setSidecarPort() and
  * gate the UI until the API is reachable.
  *
- * Outside Tauri (plain web build) this renders children immediately and the API
- * base falls back to NEXT_PUBLIC_API_URL.
+ * Outside Tauri, local browser development can render the app screens with the
+ * NEXT_PUBLIC_API_URL fallback. Hosted web builds redirect app routes back to
+ * the desktop download 안내 page.
  */
 
 import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { isTauri, setSidecarPort, getApiBase } from "@/lib/api-base";
+
+const LOCAL_WEB_HOSTS = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1"]);
+
+function isHostedWebBuild(): boolean {
+  if (typeof window === "undefined" || isTauri()) return false;
+  return !LOCAL_WEB_HOSTS.has(window.location.hostname);
+}
 
 /** Poll the sidecar /health until it responds 200 (heavy import can take ~20s). */
 async function waitForHealth(signal: () => boolean): Promise<boolean> {
@@ -49,8 +57,15 @@ export function SidecarProvider({ children }: { children: React.ReactNode }) {
   // In the desktop app the web "/" is a "service ended" notice; send the user
   // straight to the translate screen instead.
   useEffect(() => {
-    if (mounted && isTauri() && pathname === "/") {
+    if (!mounted) return;
+
+    if (isTauri() && pathname === "/") {
       router.replace("/translate");
+      return;
+    }
+
+    if (isHostedWebBuild() && pathname !== "/") {
+      router.replace("/");
     }
   }, [mounted, pathname, router]);
 

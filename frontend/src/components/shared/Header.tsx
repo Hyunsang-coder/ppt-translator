@@ -4,13 +4,13 @@ import { useTheme } from "next-themes";
 import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { Moon, Sun, Languages, FileText, Info, ScrollText, KeyRound } from "lucide-react";
+import { Moon, Sun, Languages, FileText, KeyRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { isTauri } from "@/lib/api-base";
 
 interface HeaderProps {
-  activeTab: "translate" | "extract" | "how-it-works" | "patch-notes";
+  activeTab: "translate" | "extract";
 }
 
 export function Header({ activeTab }: HeaderProps) {
@@ -68,18 +68,6 @@ export function Header({ activeTab }: HeaderProps) {
                     <span>텍스트 추출</span>
                   </Link>
                 </TabsTrigger>
-                <TabsTrigger value="how-it-works" asChild className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-muted-foreground">
-                  <Link href="/how-it-works" className="flex items-center gap-2">
-                    <Info className="w-4 h-4" />
-                    <span>작동 원리</span>
-                  </Link>
-                </TabsTrigger>
-                <TabsTrigger value="patch-notes" asChild className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-muted-foreground">
-                  <Link href="/patch-notes" className="flex items-center gap-2">
-                    <ScrollText className="w-4 h-4" />
-                    <span>패치 노트</span>
-                  </Link>
-                </TabsTrigger>
               </TabsList>
             </Tabs>
 
@@ -95,16 +83,6 @@ export function Header({ activeTab }: HeaderProps) {
                   <TabsTrigger value="extract" asChild className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-muted-foreground">
                     <Link href="/extract" className="px-3">
                       <FileText className="w-4 h-4" />
-                    </Link>
-                  </TabsTrigger>
-                  <TabsTrigger value="how-it-works" asChild className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-muted-foreground">
-                    <Link href="/how-it-works" className="px-3">
-                      <Info className="w-4 h-4" />
-                    </Link>
-                  </TabsTrigger>
-                  <TabsTrigger value="patch-notes" asChild className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-muted-foreground">
-                    <Link href="/patch-notes" className="px-3">
-                      <ScrollText className="w-4 h-4" />
                     </Link>
                   </TabsTrigger>
                 </TabsList>

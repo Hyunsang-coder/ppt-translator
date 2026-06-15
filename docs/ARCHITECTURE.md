@@ -1,7 +1,12 @@
 # Architecture
 
 ## Entry Points
-- `api.py`: FastAPI REST API server
+- `src-tauri/`: Tauri desktop shell
+  - Stores API keys in the OS keychain
+  - Spawns the bundled Python sidecar
+  - Emits the sidecar port to the WebView
+- `desktop/sidecar.py`: Sidecar launcher for the local FastAPI server
+- `api.py`: FastAPI REST API app used by the sidecar and local development
   - `GET /health`: Health check
   - `GET /api/v1/config`: Configuration (models, languages)
   - `GET /api/v1/models`: Available models list
@@ -15,8 +20,6 @@
   - `POST /api/v1/extract`: Text extraction
   - `POST /api/v1/summarize`: Context summary generation
   - `POST /api/v1/generate-instructions`: Translation style instructions
-  - Supports AWS Lambda deployment via Mangum
-- `app.py`: Streamlit redirect page (points to Vercel frontend)
 - `main.py`: Placeholder entry point (uv/pyproject.toml default)
 - `glossary_template.xlsx`: Sample glossary file
 
@@ -55,16 +58,15 @@
 Next.js 16, React 19, TypeScript 5, Tailwind CSS 4, Zustand 5.
 
 ### Pages (`src/app/`)
-- `page.tsx`: Home (redirects to translate)
-- `translate/page.tsx`, `extract/page.tsx`, `how-it-works/page.tsx`, `patch-notes/page.tsx`
+- `page.tsx`: Public Vercel download 안내 page
+- `translate/page.tsx`, `extract/page.tsx`, `settings/page.tsx`: Desktop app screens
 - `layout.tsx`: Root layout with ThemeProvider
 
 ### Components (`src/components/`)
 - **shared/**: `Header.tsx`, `FileUploader.tsx`
 - **translation/**: `TranslationForm.tsx`, `SettingsPanel.tsx`, `ProgressPanel.tsx`, `LogViewer.tsx`
 - **extraction/**: `ExtractionForm.tsx`, `MarkdownPreview.tsx`
-- **how-it-works/**: `PipelineTimeline.tsx`, `PipelineStep.tsx`
-- **patch-notes/**: `PatchNotesList.tsx`, `PatchNoteCard.tsx`
+- `sidecar-provider.tsx`: Tauri sidecar port bootstrap and desktop root redirect
 - **ui/**: Shadcn/Radix UI components
 
 ### State & Hooks
@@ -73,7 +75,10 @@ Next.js 16, React 19, TypeScript 5, Tailwind CSS 4, Zustand 5.
 - `hooks/useTranslation.ts`: Translation workflow with markdown caching, `retranslate()`. Uses `getState()` to avoid stale closures
 - `hooks/useExtraction.ts`: Extraction workflow
 - `hooks/useConfig.ts`: Config fetching with graceful fallback
+- `lib/api-base.ts`: Tauri sidecar URL resolution with local browser fallback
 - `lib/api-client.ts`: REST client
+- `lib/keychain.ts`: Tauri keychain command wrappers
+- `lib/save-file.ts`: Native save dialog in Tauri, browser download fallback
 - `lib/sse-client.ts`: Polling client for progress updates
 
 ### Styling (`globals.css`)

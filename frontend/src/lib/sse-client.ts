@@ -1,6 +1,6 @@
 /**
  * Polling client for job progress updates
- * Replaces SSE to avoid Vercel proxy timeout issues
+ * Polling-based progress client used by the desktop sidecar connection.
  */
 
 import type { JobStatusResponse, SSEEvent } from "@/types/api";

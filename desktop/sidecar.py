@@ -6,7 +6,7 @@ for the ``SIDECAR_READY`` line on stdout before pointing the WebView at the
 server.
 
 This is intentionally separate from ``api.py``'s ``__main__`` block, which stays
-as the legacy server entrypoint (hardcoded host/port for EC2).
+as a direct local development entrypoint.
 """
 
 from __future__ import annotations

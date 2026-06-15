@@ -2,13 +2,16 @@
 
 **https://ppt-translator.vercel.app**
 
-PowerPoint 번역 웹 애플리케이션으로, LangChain과 OpenAI GPT / Anthropic Claude 모델을 활용해 슬라이드 텍스트를 고품질로 번역합니다. 원본 서식(볼드, 이탤릭, 폰트, 색상)을 최대한 유지하면서 용어집, 자동 언어 감지, 실시간 진행률 표시를 지원합니다.
+PowerPoint 번역 데스크톱 앱입니다. Tauri 셸이 Next.js UI를 띄우고,
+번역 엔진은 로컬 FastAPI sidecar로 실행됩니다. OpenAI / Anthropic API
+키는 OS 보안 저장소(macOS Keychain, Windows Credential Manager)에 저장됩니다.
 
 ## 아키텍처
 
-- **Frontend**: Next.js 16 + React 19 + TypeScript (Vercel 배포)
-- **Backend**: FastAPI + LangChain (EC2 Docker 배포)
-- **통신**: REST API + Server-Sent Events (SSE) 실시간 진행률
+- **Desktop shell**: Tauri 2 (`src-tauri/`)
+- **UI**: Next.js 16 + React 19 + TypeScript (`frontend/`)
+- **Sidecar**: FastAPI + LangChain Python server (`desktop/`, `api.py`, `src/`)
+- **Public web**: Vercel root page only, for desktop download 안내
 
 ## 주요 기능
 
@@ -26,41 +29,34 @@ PowerPoint 번역 웹 애플리케이션으로, LangChain과 OpenAI GPT / Anthro
 ### 요구 사항
 - Python >= 3.12
 - Node.js >= 18
+- Rust + Cargo
+- Tauri prerequisites for your OS
 
-### Backend
+### Python sidecar
 ```bash
-# 가상 환경 생성 및 활성화
-python3 -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-
-# 의존성 설치
-pip install -r requirements.txt
-
-# 환경 변수 설정
-cp .env.example .env
-# .env 파일에서 OPENAI_API_KEY 또는 ANTHROPIC_API_KEY 설정
+python3 -m venv desktop/.venv-desktop
+desktop/.venv-desktop/bin/pip install -r desktop/requirements-desktop.txt
 ```
 
 ### Frontend
 ```bash
 cd frontend
 npm install
-
-# 로컬 개발용 환경 변수
-echo 'NEXT_PUBLIC_API_URL=http://localhost:8000' > .env.local
 ```
 
 ## 실행 방법
 
 ```bash
-# Backend (FastAPI)
-uvicorn api:app --reload --port 8000
+# 1. Python sidecar 빌드 및 Tauri 리소스 스테이징
+./desktop/build-sidecar.sh
 
-# Frontend (Next.js) - 별도 터미널
-cd frontend && npm run dev
+# 2. 데스크톱 앱 개발 실행
+cd src-tauri
+cargo tauri dev
 ```
 
-브라우저에서 `http://localhost:3000`으로 접속합니다.
+Tauri 개발 실행은 `frontend` 개발 서버를 자동으로 띄우고, Rust 셸이
+sidecar 포트를 WebView에 전달합니다.
 
 ## 용어집 파일 형식
 
@@ -71,10 +67,8 @@ cd frontend && npm run dev
 ## 테스트
 
 ```bash
-# Backend 유닛 테스트
 pytest tests/ -v
 
-# Frontend 타입 체크 및 빌드
 cd frontend && npx tsc --noEmit && npm run build
 ```
 
@@ -90,5 +84,5 @@ cd frontend && npx tsc --noEmit && npm run build
 
 ## 배포
 
-- **Frontend**: Vercel (자동 배포, `vercel.json`으로 API 프록시)
-- **Backend**: EC2 + Docker (`docker compose up -d --build`)
+- **Desktop**: `TAURI_BUILD=1 cargo tauri build`
+- **Vercel**: 데스크톱 앱 다운로드 안내용 루트 페이지만 배포

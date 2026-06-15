@@ -5,9 +5,9 @@
  *   is only known at runtime. The Rust shell emits a `sidecar-ready` event and
  *   exposes a `get_sidecar_port` command; we cache the resulting base URL on
  *   `window.__API_BASE__`.
- * - In the browser/server build we fall back to the build-time
- *   `NEXT_PUBLIC_API_URL` (same-origin "" by default), preserving the legacy
- *   web behaviour.
+ * - In a plain browser build we fall back to the build-time
+ *   `NEXT_PUBLIC_API_URL` for local development. The Vercel deployment is only
+ *   a desktop download page and does not call the API.
  */
 
 const BUILD_TIME_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";

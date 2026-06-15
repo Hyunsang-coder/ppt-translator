@@ -75,9 +75,8 @@ excludes = [
     "cv2",
     "fitz",          # PyMuPDF
     "pytesseract",
-    "boto3",
+    "boto3",         # optional Bedrock path from Anthropic, unused here
     "botocore",
-    "mangum",
     "IPython",
     "jupyter",
     "notebook",

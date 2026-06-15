@@ -97,15 +97,6 @@ app.add_middleware(
     ],
 )
 
-# For AWS Lambda deployment
-try:
-    from mangum import Mangum
-
-    handler = Mangum(app)
-except ImportError:
-    handler = None
-
-
 # ============================================================================
 # Pydantic Models for API responses
 # ============================================================================
@@ -590,7 +581,7 @@ async def create_job(
 
         # Validate file signature. BytesIO copies the bytes, so the original
         # buffer can be released immediately to avoid holding two copies for
-        # the entire job duration (memory pressure on the EC2 host).
+        # the entire job duration (memory pressure in the local sidecar/server).
         ppt_buffer = io.BytesIO(file_content)
         del file_content
         is_valid, error_msg = validate_pptx_file(ppt_buffer)

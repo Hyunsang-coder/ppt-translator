@@ -2,23 +2,19 @@
 
 ## API Keys
 
-**Production (EC2)**: API keys live in **AWS SSM Parameter Store** (SecureString),
-not on disk. At container start `docker-entrypoint.sh` fetches `/ppt-translator/*`
-via the instance IAM role and injects them as env vars. Changing a key requires a
-container restart (`docker compose up -d --force-recreate`) — see
-[`AWS_OPERATIONS.md`](AWS_OPERATIONS.md) §4.
+**Desktop app**: API keys are saved through Tauri commands into the OS keychain
+(macOS Keychain / Windows Credential Manager). When the Python sidecar starts,
+the Rust shell reads those keys and injects them as `OPENAI_API_KEY` and
+`ANTHROPIC_API_KEY` environment variables.
 
-**Local dev**: `uvicorn --reload` reads a local `.env` via `load_dotenv()`. The
-entrypoint skips SSM when `SSM_PARAM_PREFIX` is empty, so `docker compose` locally
-falls back to `.env` too.
+**Local API dev**: `uvicorn --reload` reads a local `.env` via `load_dotenv()`.
 
-## Backend env vars
+## Sidecar env vars
 ```
-OPENAI_API_KEY=         # From SSM in prod; .env locally
-ANTHROPIC_API_KEY=      # From SSM in prod; .env locally
+OPENAI_API_KEY=         # Injected by Tauri, or .env for local API dev
+ANTHROPIC_API_KEY=      # Injected by Tauri, or .env for local API dev
 CORS_ALLOWED_ORIGINS=   # Comma-separated (default: http://localhost:3000,http://127.0.0.1:3000)
-SSM_PARAM_PREFIX=       # Prod: /ppt-translator; empty to disable SSM (local)
-AWS_REGION=             # Default: ap-northeast-2
+CORS_ALLOW_ALL=1        # Set by Tauri for loopback-only desktop sidecar
 ```
 
 ### Tuning Variables
@@ -39,20 +35,19 @@ AWS_REGION=             # Default: ap-northeast-2
 
 ## Frontend (.env.local)
 ```
-NEXT_PUBLIC_API_URL=    # Default: empty (Vercel proxy); local dev: http://localhost:8000
+NEXT_PUBLIC_API_URL=    # Browser-only local dev fallback; Tauri uses runtime sidecar port
 ```
 
 ## Deployment
 
-### Docker (EC2)
-- **Dockerfile**: Multi-stage (Python 3.12-slim), non-root `appuser`, healthcheck `/health`, `ENTRYPOINT docker-entrypoint.sh` (loads SSM secrets → execs uvicorn)
-- **docker-compose.yml**: Port 80→8000, 1536M memory, env-based CORS, optional `.env`, `SSM_PARAM_PREFIX`/`AWS_REGION`
-- **IAM**: instance profile `ppt-translator-ssm-profile` grants SSM read + KMS decrypt
-- `docker compose up -d --build`
+### Desktop (Tauri)
+- `desktop/build-sidecar.sh`: Builds and stages the Python sidecar into `src-tauri/resources/sidecar/`
+- `TAURI_BUILD=1 cargo tauri build`: Builds the static frontend export and packages the desktop app
+- Build the sidecar on each target OS because PyInstaller output is platform-specific
 
-### Vercel (Frontend)
-- `frontend/vercel.json`: Rewrites `/api/*` and `/health` to EC2 backend
-- `NEXT_PUBLIC_API_URL` empty → relative paths use Vercel rewrites
+### Vercel
+- Public web deployment is a download 안내 page only
+- No API rewrites or hosted translation backend are used
 
 ### CI/CD (`.github/workflows/`)
 - `ci.yml`: PR + manual. Backend pytest (Python 3.12), frontend `tsc --noEmit` (Node 20)
@@ -78,7 +73,7 @@ Context/instructions generation uses lightweight models: GPT-5.4 Mini / Haiku 4.
 ## Libraries
 
 ### Backend
-LangChain, langchain-anthropic, python-pptx, FastAPI (v2.4.0), Mangum, tenacity, langdetect, sse-starlette, Pillow, pandas + openpyxl, PyMuPDF + pytesseract + opencv-python-headless
+LangChain, langchain-anthropic, python-pptx, FastAPI, tenacity, langdetect, sse-starlette, Pillow, pandas + openpyxl
 
 ### Frontend
 Next.js 16, React 19, TypeScript 5, Tailwind CSS 4, Zustand 5, Radix UI, Lucide React, react-dropzone, next-themes, sonner, class-variance-authority + tailwind-merge + clsx

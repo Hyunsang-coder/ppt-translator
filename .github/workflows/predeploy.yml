@@ -1,4 +1,4 @@
-name: Predeploy
+name: Full Validation
 
 on:
   push:
@@ -54,16 +54,3 @@ jobs:
 
       - name: Build frontend
         run: npm run build
-
-  docker-build:
-    name: Docker Build
-    runs-on: ubuntu-latest
-    needs:
-      - backend-full
-      - frontend-build
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Build Docker image
-        run: docker build -t ppt-translator:ci .
