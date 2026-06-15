@@ -4,6 +4,7 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import { apiClient } from "@/lib/api-client";
+import { saveBlob } from "@/lib/save-file";
 import { createSSEClient, SSEClient } from "@/lib/sse-client";
 import { useTranslationStore } from "@/stores/translation-store";
 import type { JobProgress, SSEEvent } from "@/types/api";
@@ -313,16 +314,7 @@ export function useTranslation() {
       addLog("파일 다운로드 중...", "info");
       const { blob, filename } = await apiClient.downloadJobResult(currentJobId);
 
-      // Create download link
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      // Delay revoke to ensure download starts
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      await saveBlob(blob, filename);
 
       setResultFilename(filename);
       addLog(`다운로드 완료: ${filename}`, "success");

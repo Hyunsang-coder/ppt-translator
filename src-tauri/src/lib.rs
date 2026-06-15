@@ -103,6 +103,34 @@ fn read_key(provider: &str) -> Option<String> {
         .ok()
 }
 
+/// Kill the running sidecar (if any) and start a fresh one. Used after the user
+/// changes API keys so the new keys take effect without an app restart. Waits
+/// for the new sidecar to report its port (up to ~20s) before returning, so the
+/// caller can translate immediately afterwards.
+#[tauri::command]
+fn restart_sidecar(app: tauri::AppHandle) -> Result<(), AppError> {
+    {
+        let state = app.state::<SidecarState>();
+        if let Some(mut child) = state.child.lock().unwrap().take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        *state.port.lock().unwrap() = None;
+    }
+    spawn_sidecar(&app)?;
+
+    // Wait for the stdout reader thread to record the new port.
+    for _ in 0..200 {
+        if app.state::<SidecarState>().port.lock().unwrap().is_some() {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    Err(AppError::Sidecar(
+        "sidecar did not report a port after restart".into(),
+    ))
+}
+
 /// Resolve the bundled sidecar executable inside the app's resource dir.
 /// The onedir PyInstaller bundle is shipped under resources/sidecar/.
 fn sidecar_executable(app: &tauri::AppHandle) -> Result<std::path::PathBuf, AppError> {
@@ -151,12 +179,10 @@ fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), AppError> {
     command
         .args(["--host", "127.0.0.1", "--port", "0"])
         .env("PYTHONUNBUFFERED", "1")
-        // Lock CORS to the Tauri WebView origin (tauri://localhost on macOS,
-        // https://tauri.localhost on Windows). Allow both so one build works.
-        .env(
-            "CORS_ALLOWED_ORIGINS",
-            "tauri://localhost,https://tauri.localhost,http://localhost,http://tauri.localhost",
-        )
+        // The sidecar only ever binds loopback, and the WebView origin varies by
+        // platform/mode (tauri://localhost, https://tauri.localhost,
+        // http://localhost:3000 in dev). Allow any origin in the desktop build.
+        .env("CORS_ALLOW_ALL", "1")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
@@ -222,12 +248,15 @@ fn parse_ready_port(line: &str) -> Option<u16> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .manage(SidecarState::default())
         .invoke_handler(tauri::generate_handler![
             save_api_key,
             delete_api_key,
             has_api_key,
             get_sidecar_port,
+            restart_sidecar,
         ])
         .setup(|app| {
             // Don't let a sidecar failure abort app startup — surface it to the

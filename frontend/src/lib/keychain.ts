@@ -23,3 +23,10 @@ export async function hasApiKey(provider: Provider): Promise<boolean> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<boolean>("has_api_key", { provider });
 }
+
+/** Restart the sidecar so newly-saved keys take effect (no app restart). */
+export async function restartSidecar(): Promise<void> {
+  if (!isTauri()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("restart_sidecar");
+}

@@ -14,10 +14,11 @@ from __future__ import annotations
 import argparse
 import sys
 
-import uvicorn
-
-# api.py lives at the repo root; PyInstaller bundles it alongside this file.
-from api import app
+# NOTE: `api` and `uvicorn` are intentionally NOT imported at module top level.
+# Importing the FastAPI app pulls in langchain and a large dependency tree,
+# which can take ~20s as a PyInstaller onedir bundle cold-starts. We bind the
+# socket and print SIDECAR_READY *first*, so the Rust shell learns the port
+# immediately and can poll /health while the heavy import finishes.
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -48,8 +49,14 @@ def main(argv: list[str] | None = None) -> None:
     sock.bind((args.host, args.port))
     actual_port = sock.getsockname()[1]
 
-    # Hand the bound port to the Rust shell. It blocks on this line.
+    # Hand the bound port to the Rust shell BEFORE the heavy import, so it can
+    # start polling /health right away instead of blocking ~20s on import.
     print(f"SIDECAR_READY port={actual_port}", flush=True)
+
+    # Now do the expensive imports.
+    import uvicorn
+
+    from api import app
 
     config = uvicorn.Config(app, log_level="info")
     server = uvicorn.Server(config)

@@ -4,9 +4,10 @@ import { useTheme } from "next-themes";
 import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { Moon, Sun, Languages, FileText, Info, ScrollText } from "lucide-react";
+import { Moon, Sun, Languages, FileText, Info, ScrollText, KeyRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { isTauri } from "@/lib/api-base";
 
 interface HeaderProps {
   activeTab: "translate" | "extract" | "how-it-works" | "patch-notes";
@@ -109,6 +110,21 @@ export function Header({ activeTab }: HeaderProps) {
                 </TabsList>
               </Tabs>
             </div>
+
+            {/* API Key settings (desktop app only) */}
+            {mounted && isTauri() && (
+              <Button
+                variant="ghost"
+                size="icon"
+                asChild
+                className="hover:bg-accent"
+                aria-label="API 키 설정"
+              >
+                <Link href="/settings">
+                  <KeyRound className="w-5 h-5 text-foreground" />
+                </Link>
+              </Button>
+            )}
 
             {/* Theme Toggle */}
             <Button

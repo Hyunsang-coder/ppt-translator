@@ -4,6 +4,7 @@
 
 import { useCallback } from "react";
 import { apiClient } from "@/lib/api-client";
+import { saveBlob } from "@/lib/save-file";
 import { useExtractionStore } from "@/stores/extraction-store";
 
 export function useExtraction() {
@@ -56,14 +57,8 @@ export function useExtraction() {
     if (!markdown || !pptFile) return;
 
     const blob = new Blob([markdown], { type: "text/markdown" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${pptFile.name.replace(/\.[^/.]+$/, "")}.md`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    const filename = `${pptFile.name.replace(/\.[^/.]+$/, "")}.md`;
+    void saveBlob(blob, filename);
   }, [markdown, pptFile]);
 
   return {

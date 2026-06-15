@@ -15,30 +15,59 @@
 
 import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { isTauri, setSidecarPort } from "@/lib/api-base";
+import { isTauri, setSidecarPort, getApiBase } from "@/lib/api-base";
 
-type Status = "connecting" | "ready" | "web";
+/** Poll the sidecar /health until it responds 200 (heavy import can take ~20s). */
+async function waitForHealth(signal: () => boolean): Promise<boolean> {
+  for (let i = 0; i < 120; i++) {
+    if (signal()) return false;
+    try {
+      const res = await fetch(`${getApiBase()}/health`);
+      if (res.ok) return true;
+    } catch {
+      // not up yet
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return false;
+}
 
 export function SidecarProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [status, setStatus] = useState<Status>(() =>
-    isTauri() ? "connecting" : "web"
-  );
+
+  // `mounted` stays false during SSR and the first client render, so the very
+  // first render always matches the server (children) — no hydration mismatch.
+  // Tauri-only gating only kicks in after mount.
+  const [mounted, setMounted] = useState(false);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // In the desktop app the web "/" is a "service ended" notice; send the user
   // straight to the translate screen instead.
   useEffect(() => {
-    if (isTauri() && pathname === "/") {
+    if (mounted && isTauri() && pathname === "/") {
       router.replace("/translate");
     }
-  }, [pathname, router]);
+  }, [mounted, pathname, router]);
 
   useEffect(() => {
-    if (!isTauri()) return;
+    if (!mounted || !isTauri()) return;
 
     let unlisten: (() => void) | undefined;
     let cancelled = false;
+
+    const onPort = async (port: number) => {
+      if (cancelled) return;
+      setSidecarPort(port);
+      // The port is known, but the FastAPI app may still be importing
+      // (~20s cold start). Wait until /health answers before showing the UI.
+      const ok = await waitForHealth(() => cancelled);
+      if (!cancelled && ok) setReady(true);
+    };
 
     (async () => {
       const { invoke } = await import("@tauri-apps/api/core");
@@ -46,16 +75,13 @@ export function SidecarProvider({ children }: { children: React.ReactNode }) {
 
       // Subscribe first to avoid missing the event.
       unlisten = await listen<number>("sidecar-ready", (e) => {
-        if (cancelled) return;
-        setSidecarPort(e.payload);
-        setStatus("ready");
+        void onPort(e.payload);
       });
 
       // In case the sidecar was already up before we subscribed.
       const port = await invoke<number | null>("get_sidecar_port");
       if (!cancelled && port) {
-        setSidecarPort(port);
-        setStatus("ready");
+        void onPort(port);
       }
     })();
 
@@ -63,9 +89,11 @@ export function SidecarProvider({ children }: { children: React.ReactNode }) {
       cancelled = true;
       unlisten?.();
     };
-  }, []);
+  }, [mounted]);
 
-  if (status === "connecting") {
+  // Show the loading screen only in Tauri, only after mount, and only until the
+  // sidecar reports its port. Web build and SSR render children directly.
+  if (mounted && isTauri() && !ready) {
     return (
       <div
         style={{
@@ -79,6 +107,9 @@ export function SidecarProvider({ children }: { children: React.ReactNode }) {
         }}
       >
         <div>번역 엔진을 시작하는 중…</div>
+        <div style={{ fontSize: "0.8rem", opacity: 0.7 }}>
+          처음 실행 시 20초 정도 걸릴 수 있습니다.
+        </div>
       </div>
     );
   }

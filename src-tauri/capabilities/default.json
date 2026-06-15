@@ -3,5 +3,10 @@
   "identifier": "default",
   "description": "Core permissions. The sidecar is spawned directly from Rust, so no shell capability is required.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "fs:default",
+    "fs:allow-write-file"
+  ]
 }

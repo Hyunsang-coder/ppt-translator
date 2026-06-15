@@ -71,10 +71,19 @@ _cors_origins = [
     for origin in os.getenv("CORS_ALLOWED_ORIGINS", _default_origins).split(",")
     if origin.strip()
 ]
+# Desktop (Tauri) build: the WebView origin varies by platform/mode and the
+# server only ever binds loopback, so allow any origin when CORS_ALLOW_ALL=1.
+# allow_credentials must be False with a wildcard origin per the CORS spec; we
+# don't use cookie auth, so that's fine.
+_cors_allow_all = os.getenv("CORS_ALLOW_ALL") == "1"
+_cors_kwargs: Dict[str, Any] = (
+    {"allow_origins": ["*"], "allow_credentials": False}
+    if _cors_allow_all
+    else {"allow_origins": _cors_origins, "allow_credentials": True}
+)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_cors_origins,
-    allow_credentials=True,
+    **_cors_kwargs,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=[
