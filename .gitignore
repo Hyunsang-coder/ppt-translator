@@ -25,3 +25,14 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+.vercel
+.env*.local
+
+# Desktop (Tauri) build artifacts
+desktop/.venv-desktop/
+desktop/dist/
+desktop/build/
+src-tauri/target/
+src-tauri/gen/
+src-tauri/resources/sidecar/
+frontend/out/

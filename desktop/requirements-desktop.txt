@@ -1,0 +1,29 @@
+# Slimmed dependency set for the local Tauri desktop sidecar.
+#
+# Dropped vs the server requirements.txt (verified unused in src/ + api.py):
+#   - PyMuPDF, pytesseract, opencv-python-headless  (OCR/CV path never imported)
+#   - boto3      (only used by fetch_ssm.py, which the desktop build does not run)
+#   - mangum     (AWS Lambda adapter; imported under try/except, optional)
+#   - numpy is NOT listed directly: it comes in transitively via pandas; we let pip
+#     resolve it but exclude unused native deps in the PyInstaller spec.
+#
+# Keep this in sync with ../requirements.txt for the shared core packages.
+
+langchain>=0.1.0
+langchain-openai>=0.0.5
+langchain-anthropic>=0.3.0
+python-pptx>=0.6.21
+Pillow>=10.0.0
+pandas>=2.0.0
+openpyxl>=3.1.0
+python-dotenv>=1.0.0
+langdetect>=1.0.9
+tenacity>=8.2.2
+openai>=1.14.0
+fastapi>=0.109.0
+uvicorn>=0.27.0
+python-multipart>=0.0.6
+sse-starlette>=1.8.0
+
+# Build-time only (not a runtime dependency of the app)
+pyinstaller>=6.3.0

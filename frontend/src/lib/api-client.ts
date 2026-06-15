@@ -13,8 +13,7 @@ import type {
   SummarizeResponse,
   TranslationSettings,
 } from "@/types/api";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
+import { getApiBase } from "@/lib/api-base";
 
 class ApiError extends Error {
   constructor(
@@ -60,7 +59,7 @@ export const apiClient = {
    * Get available models
    */
   async getModels(provider?: string): Promise<ModelInfo[]> {
-    const url = new URL(`${API_BASE}/api/v1/models`);
+    const url = new URL(`${getApiBase()}/api/v1/models`);
     if (provider) {
       url.searchParams.set("provider", provider);
     }
@@ -79,7 +78,7 @@ export const apiClient = {
    */
   async getLanguages(): Promise<LanguageInfo[]> {
     try {
-      const response = await fetch(`${API_BASE}/api/v1/languages`);
+      const response = await fetch(`${getApiBase()}/api/v1/languages`);
       const data = await handleResponse<{ languages: LanguageInfo[] }>(response);
       return data.languages;
     } catch {
@@ -93,7 +92,7 @@ export const apiClient = {
    */
   async getConfig(): Promise<ConfigResponse | null> {
     try {
-      const response = await fetch(`${API_BASE}/api/v1/config`);
+      const response = await fetch(`${getApiBase()}/api/v1/config`);
       return handleResponse<ConfigResponse>(response);
     } catch {
       // Return null when backend is unavailable
@@ -139,7 +138,7 @@ export const apiClient = {
       formData.append("length_limit", String(settings.lengthLimit));
     }
 
-    const response = await fetch(`${API_BASE}/api/v1/jobs`, {
+    const response = await fetch(`${getApiBase()}/api/v1/jobs`, {
       method: "POST",
       body: formData,
       signal,
@@ -151,7 +150,7 @@ export const apiClient = {
    * Get job status
    */
   async getJobStatus(jobId: string): Promise<JobStatusResponse> {
-    const response = await fetch(`${API_BASE}/api/v1/jobs/${jobId}`);
+    const response = await fetch(`${getApiBase()}/api/v1/jobs/${jobId}`);
     return handleResponse<JobStatusResponse>(response);
   },
 
@@ -159,7 +158,7 @@ export const apiClient = {
    * Cancel a job
    */
   async cancelJob(jobId: string): Promise<void> {
-    const response = await fetch(`${API_BASE}/api/v1/jobs/${jobId}`, {
+    const response = await fetch(`${getApiBase()}/api/v1/jobs/${jobId}`, {
       method: "DELETE",
     });
     if (!response.ok) {
@@ -171,7 +170,7 @@ export const apiClient = {
    * Download job result
    */
   async downloadJobResult(jobId: string): Promise<{ blob: Blob; filename: string }> {
-    const response = await fetch(`${API_BASE}/api/v1/jobs/${jobId}/result`);
+    const response = await fetch(`${getApiBase()}/api/v1/jobs/${jobId}/result`);
     if (!response.ok) {
       throw new ApiError("Failed to download result", response.status);
     }
@@ -202,7 +201,7 @@ export const apiClient = {
     formData.append("with_notes", String(settings.withNotes));
     formData.append("table_header", String(settings.tableHeader));
 
-    const response = await fetch(`${API_BASE}/api/v1/extract`, {
+    const response = await fetch(`${getApiBase()}/api/v1/extract`, {
       method: "POST",
       body: formData,
       signal,
@@ -219,7 +218,7 @@ export const apiClient = {
     model?: string,
     signal?: AbortSignal
   ): Promise<SummarizeResponse> {
-    const response = await fetch(`${API_BASE}/api/v1/summarize`, {
+    const response = await fetch(`${getApiBase()}/api/v1/summarize`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -244,7 +243,7 @@ export const apiClient = {
     model?: string,
     signal?: AbortSignal
   ): Promise<{ instructions: string }> {
-    const response = await fetch(`${API_BASE}/api/v1/generate-instructions`, {
+    const response = await fetch(`${getApiBase()}/api/v1/generate-instructions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -263,7 +262,7 @@ export const apiClient = {
    */
   async healthCheck(): Promise<boolean> {
     try {
-      const response = await fetch(`${API_BASE}/health`);
+      const response = await fetch(`${getApiBase()}/health`);
       return response.ok;
     } catch {
       return false;
