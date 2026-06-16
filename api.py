@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import resource
+import tempfile
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -17,7 +18,7 @@ from urllib.parse import quote
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from src.core.text_extractor import ExtractionOptions, docs_to_markdown, extract_pptx_to_docs
@@ -411,6 +412,57 @@ async def get_config() -> ConfigResponse:
     )
 
 
+PPTX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+_UPLOAD_CHUNK_SIZE = 1024 * 1024
+
+
+async def _save_upload_to_temp_path(
+    upload: UploadFile,
+    directory: Path,
+    *,
+    suffix: str,
+    max_size_mb: int,
+) -> tuple[Path, int]:
+    """Stream an uploaded file to a temp path and enforce size while reading."""
+    directory.mkdir(parents=True, exist_ok=True)
+    max_bytes = max_size_mb * 1024 * 1024
+    written = 0
+    temp_file = tempfile.NamedTemporaryFile(
+        mode="wb",
+        suffix=suffix,
+        dir=directory,
+        delete=False,
+    )
+    path = Path(temp_file.name)
+
+    try:
+        with temp_file:
+            while True:
+                chunk = await upload.read(_UPLOAD_CHUNK_SIZE)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > max_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File size exceeds limit ({max_size_mb}MB)",
+                    )
+                temp_file.write(chunk)
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+
+    return path, written
+
+
+def _validate_ppt_path(path: Path) -> None:
+    """Validate PPT/PPTX signature from a filesystem path."""
+    with path.open("rb") as file_obj:
+        is_valid, error_msg = validate_pptx_file(file_obj)
+    if not is_valid:
+        raise HTTPException(status_code=400, detail=error_msg or "Invalid PPT/PPTX file format")
+
+
 # ============================================================================
 # Job System Endpoints
 # ============================================================================
@@ -428,7 +480,8 @@ def _create_progress_callback(job_id: str):
 
 async def _run_translation_job(
     job_id: str,
-    ppt_buffer: io.BytesIO,
+    ppt_path: Path,
+    work_dir: Path,
     filename: str,
     source_lang: str,
     target_lang: str,
@@ -452,34 +505,35 @@ async def _run_translation_job(
     # The job is in RUNNING state, but it waits here until a slot is free.
     async with job_manager.running_semaphore:
         try:
-            request = TranslationRequest(
-                ppt_file=ppt_buffer,
-                source_lang=source_lang,
-                target_lang=target_lang,
-                provider=provider,
-                model=model,
-                context=context,
-                instructions=instructions,
-                glossary=glossary,
-                preprocess_repetitions=preprocess_repetitions,
-                translate_notes=translate_notes,
-                text_fit_mode=text_fit_mode,
-                min_font_ratio=min_font_ratio,
-                length_limit=length_limit,
-            )
+            output_path = work_dir / "translated.pptx"
+            with ppt_path.open("rb") as ppt_file_obj:
+                request = TranslationRequest(
+                    ppt_file=ppt_file_obj,
+                    source_lang=source_lang,
+                    target_lang=target_lang,
+                    provider=provider,
+                    model=model,
+                    context=context,
+                    instructions=instructions,
+                    glossary=glossary,
+                    preprocess_repetitions=preprocess_repetitions,
+                    translate_notes=translate_notes,
+                    text_fit_mode=text_fit_mode,
+                    min_font_ratio=min_font_ratio,
+                    length_limit=length_limit,
+                    output_path=output_path,
+                )
 
-            progress_callback = _create_progress_callback(job_id)
-            service = TranslationService(settings=settings, progress_callback=progress_callback)
+                progress_callback = _create_progress_callback(job_id)
+                service = TranslationService(settings=settings, progress_callback=progress_callback)
 
-            # Run translation in thread pool to avoid blocking
-            loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(None, service.translate, request)
+                result = await service.translate_async(request)
 
             if not result.success:
                 await job_manager.fail_job(job_id, result.error_message or "Translation failed")
                 return
 
-            if result.output_file is None:
+            if result.output_path is None and result.output_file is None:
                 await job_manager.fail_job(job_id, "Translation succeeded but no output file was generated")
                 return
 
@@ -495,11 +549,13 @@ async def _run_translation_job(
                 job_id,
                 result=result,
                 output_file=result.output_file,
+                output_path=result.output_path,
                 output_filename=download_name,
             )
 
         except asyncio.CancelledError:
             LOGGER.info("Translation job %s was cancelled", job_id)
+            raise
         except Exception as exc:
             LOGGER.exception("Translation job %s failed: %s", job_id, exc)
             await job_manager.fail_job(job_id, "번역 중 오류가 발생했습니다.")
@@ -564,41 +620,50 @@ async def create_job(
                 detail="서버가 바쁩니다. 잠시 후 다시 시도해주세요.",
             )
 
-        # Read file content
+        work_dir = Path(tempfile.mkdtemp(prefix=f"ppt-translator-{job.id}-"))
+        job.work_dir = work_dir
+
+        # Stream upload to disk so large PPT files are not retained in memory
+        # for the full queued/running job lifetime.
         try:
-            file_content = await ppt_file.read()
+            suffix = ".pptx" if filename_lower.endswith(".pptx") else ".ppt"
+            ppt_path, written_bytes = await _save_upload_to_temp_path(
+                ppt_file,
+                work_dir,
+                suffix=suffix,
+                max_size_mb=settings.max_upload_size_mb,
+            )
+        except HTTPException:
+            raise
         except Exception as exc:
             LOGGER.exception("Failed to read uploaded file: %s", exc)
             raise HTTPException(status_code=400, detail="Failed to read uploaded file")
 
-        # Validate file size
-        size_mb = len(file_content) / (1024 * 1024)
+        size_mb = written_bytes / (1024 * 1024)
         if size_mb > settings.max_upload_size_mb:
             raise HTTPException(
                 status_code=413,
                 detail=f"File size ({size_mb:.1f}MB) exceeds limit ({settings.max_upload_size_mb}MB)",
             )
 
-        # Validate file signature. BytesIO copies the bytes, so the original
-        # buffer can be released immediately to avoid holding two copies for
-        # the entire job duration (memory pressure in the local sidecar/server).
-        ppt_buffer = io.BytesIO(file_content)
-        del file_content
-        is_valid, error_msg = validate_pptx_file(ppt_buffer)
-        if not is_valid:
-            raise HTTPException(status_code=400, detail=error_msg or "Invalid PPT/PPTX file format")
-        ppt_buffer.seek(0)
+        _validate_ppt_path(ppt_path)
 
         # Compress images if requested
         if compress_images and compress_images != "none":
-            from src.utils.image_compressor import compress_pptx_images
+            from src.utils.image_compressor import compress_pptx_images_to_file
 
             try:
-                ppt_buffer = compress_pptx_images(ppt_buffer, preset=compress_images)
-                ppt_buffer.seek(0)
+                compressed_path = work_dir / "compressed.pptx"
+                with ppt_path.open("rb") as source_file:
+                    compressed_result = compress_pptx_images_to_file(
+                        source_file,
+                        preset=compress_images,
+                        output_path=compressed_path,
+                    )
+                if isinstance(compressed_result, Path):
+                    ppt_path = compressed_result
             except Exception as exc:
                 LOGGER.warning("Image compression failed, using original: %s", exc)
-                ppt_buffer.seek(0)
 
         # Load glossary if provided
         glossary = None
@@ -646,7 +711,8 @@ async def create_job(
         task = asyncio.create_task(
             _run_translation_job(
                 job_id=job.id,
-                ppt_buffer=ppt_buffer,
+                ppt_path=ppt_path,
+                work_dir=work_dir,
                 filename=ppt_file.filename,
                 source_lang=source_lang,
                 target_lang=target_lang,
@@ -766,11 +832,8 @@ async def download_job_result(job_id: str) -> Response:
             detail=f"Job is not completed. Current state: {job.state.value}",
         )
 
-    if job.output_file is None:
+    if job.output_path is None and job.output_file is None:
         raise HTTPException(status_code=500, detail="No output file available")
-
-    job.output_file.seek(0)
-    content = job.output_file.read()
 
     filename = job.output_filename or "translated.pptx"
     encoded_filename = quote(filename, safe="")
@@ -791,9 +854,20 @@ async def download_job_result(job_id: str) -> Response:
             }
         )
 
+    if job.output_path is not None:
+        if not job.output_path.exists():
+            raise HTTPException(status_code=500, detail="Output file is no longer available")
+        return FileResponse(
+            path=job.output_path,
+            media_type=PPTX_MEDIA_TYPE,
+            headers=headers,
+        )
+
+    job.output_file.seek(0)
+    content = job.output_file.read()
     return Response(
         content=content,
-        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        media_type=PPTX_MEDIA_TYPE,
         headers=headers,
     )
 
@@ -955,15 +1029,28 @@ class GenerateInstructionsResponse(BaseModel):
     instructions: str
 
 
+def _build_markdown_preview(markdown: str, max_chars: int = 6000) -> str:
+    """Keep both the beginning and end of long extracted markdown."""
+    if len(markdown) <= max_chars:
+        return markdown
+
+    head_chars = int(max_chars * 0.65)
+    tail_chars = max_chars - head_chars
+    return (
+        markdown[:head_chars].rstrip()
+        + "\n\n...[middle content omitted for instruction generation]...\n\n"
+        + markdown[-tail_chars:].lstrip()
+    )
+
+
 @app.post("/api/v1/generate-instructions", response_model=GenerateInstructionsResponse)
 async def generate_instructions(request: GenerateInstructionsRequest) -> GenerateInstructionsResponse:
     """Generate translation instructions based on target language.
 
     Creates style/tone guidelines appropriate for the target language and culture.
     """
-    from langchain_openai import ChatOpenAI
-    from langchain_anthropic import ChatAnthropic
     from langchain_core.prompts import ChatPromptTemplate
+    from src.chains.llm_factory import create_llm
 
     settings = get_settings()
 
@@ -986,38 +1073,34 @@ async def generate_instructions(request: GenerateInstructionsRequest) -> Generat
         raise HTTPException(status_code=400, detail="Target language must be specified")
 
     try:
-        # Create LLM with max_tokens limit
-        if request.provider == "openai":
-            llm = ChatOpenAI(
-                model=request.model,
-                api_key=settings.openai_api_key,
-                temperature=0.7,
-                max_tokens=512,  # Limit for concise output (~300 chars)
-            )
-        else:
-            llm = ChatAnthropic(
-                model=request.model,
-                api_key=settings.anthropic_api_key,
-                temperature=0.7,
-                max_tokens=512,  # Limit for concise output (~300 chars)
-            )
+        api_key = settings.openai_api_key if request.provider == "openai" else settings.anthropic_api_key
+        llm = create_llm(
+            provider=request.provider,
+            model_name=request.model,
+            api_key=api_key,
+            temperature=0.2,
+            max_tokens=700,
+        )
 
-        # Truncate markdown if too long (keep first ~2000 chars for context)
-        markdown_preview = request.markdown[:2000] if len(request.markdown) > 2000 else request.markdown
+        markdown_preview = _build_markdown_preview(request.markdown)
 
         # Create prompt
         prompt = ChatPromptTemplate.from_messages([
-            ("system", """번역 스타일 전문가로서 문서에 맞는 번역 지침을 **300자 이내**로 생성하세요.
+            ("system", """번역 지침 설계자로서 PPT 번역에 바로 사용할 지침을 **500자 이내**로 생성하세요.
 
-**출력 형식 (한국어, 3-4개 bullet):**
-- 톤/문체 (격식체/비격식체 등)
-- 용어 처리 방침 (원문 유지할 용어, 번역할 용어)
-- 문장 스타일 (간결하게, 자연스럽게 등)
+**출력 규칙:**
+- 반드시 한국어로 4-6개 bullet만 출력하세요.
+- 실제 번역을 하지 말고, 번역자가 따라야 할 정책만 쓰세요.
+- 문서 내용 요약이 아니라 톤, 용어, 보존 규칙, 문장 스타일 중심으로 쓰세요.
+- 근거가 부족한 고유명사는 임의 번역 지시하지 말고 원문 유지로 안내하세요.
+- 숫자, 단위, 날짜, 버전, URL, 코드, 변수, 괄호 안 토큰 보존 규칙을 포함하세요.
+- 슬라이드 제목/불릿/표 셀은 간결한 PPT 문장으로 번역하도록 안내하세요.
 
 **예시:**
 - 격식체, 전문적 톤 유지
-- 게임 용어(Binary Spot, Heist Royale) 원문 유지
-- 간결한 문장, 명확한 표현 사용"""),
+- Binary Spot, Heist Royale 등 게임 모드/이벤트명은 원문 유지
+- 숫자, %, 날짜, 버전, URL, 괄호 안 토큰은 원문 형식 보존
+- 제목/불릿/표 셀은 짧고 명확한 문장으로 정리"""),
             ("user", """타겟 언어: {target_lang}
 
 문서 내용:
@@ -1193,8 +1276,7 @@ async def translate_ppt(
     )
 
     service = TranslationService(settings=settings)
-    loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(None, service.translate, request)
+    result = await service.translate_async(request)
 
     if not result.success:
         raise HTTPException(
@@ -1229,7 +1311,7 @@ async def translate_ppt(
 
     return Response(
         content=result.output_file.getvalue(),
-        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        media_type=PPTX_MEDIA_TYPE,
         headers={
             "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_download_name}",
             "X-Translation-Source-Lang": encoded_source_lang,

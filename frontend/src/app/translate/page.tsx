@@ -1,26 +1,29 @@
 "use client";
 
 import { Header } from "@/components/shared/Header";
+import { DesktopShell } from "@/components/desktop-shell";
 import { TranslationForm } from "@/components/translation/TranslationForm";
 
 export default function TranslatePage() {
   return (
-    <div className="min-h-screen animated-gradient-bg flex flex-col">
-      <Header activeTab="translate" />
+    <DesktopShell>
+      <div className="min-h-screen animated-gradient-bg flex flex-col">
+        <Header activeTab="translate" />
 
-      {/* Main Content */}
-      <main className="container mx-auto px-4 py-8 flex-1">
-        <TranslationForm />
-      </main>
+        {/* Main Content */}
+        <main className="container mx-auto px-4 py-8 flex-1">
+          <TranslationForm />
+        </main>
 
-      {/* Footer */}
-      <footer className="border-t border-border/50 mt-auto">
-        <div className="container mx-auto px-4 py-4 text-center text-sm text-muted-foreground">
-          <span className="font-medium text-foreground">PPT 번역캣</span>
-          <span className="mx-2">-</span>
-          <span>created by Hyunsang Joo</span>
-        </div>
-      </footer>
-    </div>
+        {/* Footer */}
+        <footer className="border-t border-border/50 mt-auto">
+          <div className="container mx-auto px-4 py-4 text-center text-sm text-muted-foreground">
+            <span className="font-medium text-foreground">PPT 번역캣</span>
+            <span className="mx-2">-</span>
+            <span>created by Hyunsang Joo</span>
+          </div>
+        </footer>
+      </div>
+    </DesktopShell>
   );
 }

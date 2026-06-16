@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import shutil
 import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 
 from src.services.models import TranslationProgress, TranslationResult, TranslationStatus
@@ -62,7 +64,9 @@ class Job:
     progress: Optional[TranslationProgress] = None
     result: Optional[TranslationResult] = None
     output_file: Optional[io.BytesIO] = None
+    output_path: Optional[Path] = None
     output_filename: Optional[str] = None
+    work_dir: Optional[Path] = None
     error_message: Optional[str] = None
     extraction_result: Optional[str] = None  # For extraction jobs (markdown)
     events: deque = field(default_factory=lambda: deque(maxlen=_MAX_EVENTS))
@@ -225,6 +229,7 @@ class JobManager:
             job.state = JobState.CANCELLED
             job.completed_at = time.time()
 
+        self._cleanup_job_files(job)
         job.add_event("cancelled", {"message": "Job cancelled by user"})
         LOGGER.info("Cancelled job %s", job_id)
         return True
@@ -254,6 +259,7 @@ class JobManager:
         job_id: str,
         result: Optional[TranslationResult] = None,
         output_file: Optional[io.BytesIO] = None,
+        output_path: Optional[Path] = None,
         output_filename: Optional[str] = None,
         extraction_result: Optional[str] = None,
     ) -> None:
@@ -272,6 +278,7 @@ class JobManager:
             job.completed_at = time.time()
             job.result = result
             job.output_file = output_file
+            job.output_path = output_path
             job.output_filename = output_filename
             job.extraction_result = extraction_result
 
@@ -309,6 +316,7 @@ class JobManager:
 
         job.add_event("error", {"message": error_message})
         LOGGER.error("Job %s failed: %s", job_id, error_message)
+        self._cleanup_job_files(job)
 
     def start_job(self, job_id: str, task: asyncio.Task) -> None:
         """Mark job as running with associated task."""
@@ -376,13 +384,33 @@ class JobManager:
                     to_remove.append(job_id)
 
         for job_id in to_remove:
+            self._cleanup_job_files(self._jobs[job_id])
             # Dropping the job from the dict releases the only reference to its
             # output_file BytesIO, so the buffer is GC'd and its bytes freed.
-            # We intentionally do NOT call output_file.close() here: a download
-            # in flight could still be reading it, and closing mid-read raises
-            # ValueError. GC handles the memory; the race does not.
             del self._jobs[job_id]
             LOGGER.info("Cleaned up old job %s", job_id)
+
+    @staticmethod
+    def _cleanup_job_files(job: Job) -> None:
+        """Delete temporary files owned by a terminal job."""
+        work_dir = job.work_dir
+        if work_dir is not None:
+            try:
+                shutil.rmtree(work_dir, ignore_errors=True)
+            except Exception:
+                LOGGER.exception("Failed to clean up job work directory %s", work_dir)
+            finally:
+                job.work_dir = None
+                job.output_path = None
+            return
+
+        if job.output_path is not None:
+            try:
+                job.output_path.unlink(missing_ok=True)
+            except Exception:
+                LOGGER.exception("Failed to clean up job output file %s", job.output_path)
+            finally:
+                job.output_path = None
 
     def get_all_jobs(self) -> List[Job]:
         """Get all jobs."""

@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import html
-import io
 import logging
-from typing import Optional
+from typing import BinaryIO, Optional
 
 LOGGER = logging.getLogger(__name__)
 
@@ -19,7 +18,7 @@ XLS_OLD_SIGNATURE = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"  # OLE2 format (Excel 97
 MAX_FILENAME_LENGTH = 200
 
 
-def validate_pptx_file(file_buffer: io.BytesIO) -> tuple[bool, Optional[str]]:
+def validate_pptx_file(file_buffer: BinaryIO) -> tuple[bool, Optional[str]]:
     """Validate PPTX file by checking file signature.
 
     Args:
@@ -47,7 +46,7 @@ def validate_pptx_file(file_buffer: io.BytesIO) -> tuple[bool, Optional[str]]:
         return False, "파일을 읽는 중 오류가 발생했습니다."
 
 
-def validate_excel_file(file_buffer: io.BytesIO) -> tuple[bool, Optional[str]]:
+def validate_excel_file(file_buffer: BinaryIO) -> tuple[bool, Optional[str]]:
     """Validate Excel file by checking file signature.
 
     Args:
@@ -130,4 +129,3 @@ def sanitize_html_content(text: str, max_length: int = 10000) -> str:
     # Escape HTML special characters — sufficient for XSS prevention
     # since all < > " ' & are converted to HTML entities.
     return html.escape(text, quote=True)
-

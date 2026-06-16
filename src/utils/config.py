@@ -26,6 +26,7 @@ class Settings:
     min_batch_size: int = 60
     max_batch_size: int = 100
     target_batch_count: int = 5
+    batch_max_tokens: int = 6_000
     max_concurrency: int = 8
     wave_multiplier: float = 1.2
     tpm_limit: int = 30_000
@@ -125,6 +126,18 @@ def get_settings() -> Settings:
                 target_batch_count,
             )
 
+    batch_max_tokens = base_settings.batch_max_tokens
+    token_raw = os.getenv("TRANSLATION_BATCH_MAX_TOKENS")
+    if token_raw:
+        try:
+            batch_max_tokens = max(500, int(token_raw))
+        except ValueError:
+            LOGGER.warning(
+                "Invalid TRANSLATION_BATCH_MAX_TOKENS=%s; using default %d.",
+                token_raw,
+                batch_max_tokens,
+            )
+
     tpm_limit_raw = os.getenv("TRANSLATION_TPM_LIMIT")
     tpm_limit = base_settings.tpm_limit
 
@@ -212,6 +225,7 @@ def get_settings() -> Settings:
         max_concurrency=max_concurrency,
         wave_multiplier=wave_multiplier,
         target_batch_count=target_batch_count,
+        batch_max_tokens=batch_max_tokens,
         tpm_limit=tpm_limit,
         max_running_jobs=max_running_jobs,
         max_queued_jobs=max_queued_jobs,

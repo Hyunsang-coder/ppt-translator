@@ -10,122 +10,66 @@
  * gate the UI until the API is reachable.
  *
  * Outside Tauri, local browser development can render the app screens with the
- * NEXT_PUBLIC_API_URL fallback. Hosted web builds redirect app routes back to
- * the desktop download 안내 page.
+ * NEXT_PUBLIC_API_URL fallback.
  */
 
 import { useEffect, useState } from "react";
-import { usePathname, useRouter } from "next/navigation";
-import { isTauri, setSidecarPort, getApiBase } from "@/lib/api-base";
-
-const LOCAL_WEB_HOSTS = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1"]);
-
-function isHostedWebBuild(): boolean {
-  if (typeof window === "undefined" || isTauri()) return false;
-  return !LOCAL_WEB_HOSTS.has(window.location.hostname);
-}
-
-/** Poll the sidecar /health until it responds 200 (heavy import can take ~20s). */
-async function waitForHealth(signal: () => boolean): Promise<boolean> {
-  for (let i = 0; i < 120; i++) {
-    if (signal()) return false;
-    try {
-      const res = await fetch(`${getApiBase()}/health`);
-      if (res.ok) return true;
-    } catch {
-      // not up yet
-    }
-    await new Promise((r) => setTimeout(r, 500));
-  }
-  return false;
-}
+import { ensureApiBase, isTauri } from "@/lib/api-base";
 
 export function SidecarProvider({ children }: { children: React.ReactNode }) {
-  const router = useRouter();
-  const pathname = usePathname();
+  const runningInTauri = isTauri();
+  const [engineState, setEngineState] = useState<"ready" | "starting" | "failed">("ready");
+  const [engineError, setEngineError] = useState<string | null>(null);
 
-  // `mounted` stays false during SSR and the first client render, so the very
-  // first render always matches the server (children) — no hydration mismatch.
-  // Tauri-only gating only kicks in after mount.
+  // `mounted` stays false during SSR and the first client render, so the first
+  // client render matches the server HTML. Tauri-only loading can start after
+  // hydration without causing a mismatch.
   const [mounted, setMounted] = useState(false);
-  const [ready, setReady] = useState(false);
-
   useEffect(() => {
     setMounted(true);
   }, []);
 
-  // In the desktop app the web "/" is a "service ended" notice; send the user
-  // straight to the translate screen instead.
   useEffect(() => {
-    if (!mounted) return;
+    if (!mounted || !runningInTauri) return;
 
-    if (isTauri() && pathname === "/") {
-      router.replace("/translate");
-      return;
-    }
-
-    if (isHostedWebBuild() && pathname !== "/") {
-      router.replace("/");
-    }
-  }, [mounted, pathname, router]);
-
-  useEffect(() => {
-    if (!mounted || !isTauri()) return;
-
-    let unlisten: (() => void) | undefined;
     let cancelled = false;
-
-    const onPort = async (port: number) => {
-      if (cancelled) return;
-      setSidecarPort(port);
-      // The port is known, but the FastAPI app may still be importing
-      // (~20s cold start). Wait until /health answers before showing the UI.
-      const ok = await waitForHealth(() => cancelled);
-      if (!cancelled && ok) setReady(true);
-    };
+    setEngineState("starting");
+    setEngineError(null);
 
     (async () => {
-      const { invoke } = await import("@tauri-apps/api/core");
-      const { listen } = await import("@tauri-apps/api/event");
-
-      // Subscribe first to avoid missing the event.
-      unlisten = await listen<number>("sidecar-ready", (e) => {
-        void onPort(e.payload);
-      });
-
-      // In case the sidecar was already up before we subscribed.
-      const port = await invoke<number | null>("get_sidecar_port");
-      if (!cancelled && port) {
-        void onPort(port);
+      try {
+        await ensureApiBase();
+        if (!cancelled) {
+          setEngineState("ready");
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error("[sidecar] failed to initialize", error);
+          setEngineError(error instanceof Error ? error.message : "번역 엔진을 시작하지 못했습니다.");
+          setEngineState("failed");
+        }
       }
     })();
 
     return () => {
       cancelled = true;
-      unlisten?.();
     };
-  }, [mounted]);
+  }, [mounted, runningInTauri]);
 
-  // Show the loading screen only in Tauri, only after mount, and only until the
-  // sidecar reports its port. Web build and SSR render children directly.
-  if (mounted && isTauri() && !ready) {
+  if (mounted && runningInTauri && engineState !== "ready") {
     return (
-      <div
-        style={{
-          display: "flex",
-          height: "100vh",
-          alignItems: "center",
-          justifyContent: "center",
-          flexDirection: "column",
-          gap: "1rem",
-          color: "var(--muted-foreground, #888)",
-        }}
-      >
-        <div>번역 엔진을 시작하는 중…</div>
-        <div style={{ fontSize: "0.8rem", opacity: 0.7 }}>
-          처음 실행 시 20초 정도 걸릴 수 있습니다.
+      <main className="min-h-screen animated-gradient-bg flex items-center justify-center px-6">
+        <div className="w-full max-w-md rounded-lg border border-border bg-card p-6 text-center shadow-sm">
+          <h1 className="text-lg font-semibold">
+            {engineState === "starting" ? "번역 엔진 준비 중" : "번역 엔진 시작 실패"}
+          </h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            {engineState === "starting"
+              ? "파일 처리 기능을 준비하고 있습니다. 잠시만 기다려주세요."
+              : engineError || "앱을 다시 실행해 주세요."}
+          </p>
         </div>
-      </div>
+      </main>
     );
   }
 

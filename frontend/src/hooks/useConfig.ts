@@ -4,6 +4,7 @@
 
 import { useEffect, useState } from "react";
 import { apiClient } from "@/lib/api-client";
+import { isWaitingForSidecarBase } from "@/lib/api-base";
 import type { ConfigResponse, LanguageInfo, ModelInfo } from "@/types/api";
 
 const DEFAULT_MAX_UPLOAD_SIZE_MB = 1024;
@@ -68,6 +69,18 @@ export function useConfig() {
     let mounted = true;
 
     async function fetchConfig() {
+      if (isWaitingForSidecarBase()) {
+        setState({
+          models: FALLBACK_MODELS,
+          languages: FALLBACK_LANGUAGES,
+          config: FALLBACK_CONFIG,
+          isLoading: false,
+          error: null,
+          isBackendConnected: false,
+        });
+        return;
+      }
+
       try {
         const [models, languages, config] = await Promise.all([
           apiClient.getModels(),

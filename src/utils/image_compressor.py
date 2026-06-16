@@ -9,7 +9,8 @@ from __future__ import annotations
 import io
 import logging
 import os
-from typing import Dict, Literal
+from pathlib import Path
+from typing import BinaryIO, Dict, Literal
 
 from PIL import Image
 
@@ -91,9 +92,24 @@ def _compress_image(
 
 
 def compress_pptx_images(
-    input_buffer: io.BytesIO,
+    input_buffer: BinaryIO,
     preset: CompressionPreset = "medium",
 ) -> io.BytesIO:
+    """Backward-compatible in-memory wrapper for PPTX image compression."""
+    result = compress_pptx_images_to_file(input_buffer, preset=preset)
+    if isinstance(result, Path):
+        buffer = io.BytesIO(result.read_bytes())
+        result.unlink(missing_ok=True)
+        buffer.seek(0)
+        return buffer
+    return result
+
+
+def compress_pptx_images_to_file(
+    input_buffer: BinaryIO,
+    preset: CompressionPreset = "medium",
+    output_path: str | Path | None = None,
+) -> io.BytesIO | Path:
     """Compress images inside a PPTX file to reduce memory usage.
 
     Operates at the ZIP level: reads the PPTX as a ZIP archive, compresses
@@ -101,12 +117,13 @@ def compress_pptx_images(
     extensions are preserved so no XML modifications are needed.
 
     Args:
-        input_buffer: BytesIO containing the original PPTX file.
+        input_buffer: File-like object containing the original PPTX file.
         preset: Compression preset (``"high"``, ``"medium"``, or ``"low"``).
+        output_path: Optional path to write the compressed PPTX directly.
 
     Returns:
-        A new BytesIO containing the compressed PPTX. If compression fails
-        entirely, returns the original buffer with seek position reset.
+        A new BytesIO or the output path. If compression fails entirely,
+        returns the original buffer with seek position reset.
     """
     import zipfile
 
@@ -121,41 +138,40 @@ def compress_pptx_images(
         return input_buffer
 
     input_buffer.seek(0)
-    output_buffer = io.BytesIO()
+    output_buffer: io.BytesIO | None = None
+    output_target = Path(output_path) if output_path is not None else None
     compressed_count = 0
     saved_bytes = 0
 
     try:
         with zipfile.ZipFile(input_buffer, "r") as zin:
-            with zipfile.ZipFile(output_buffer, "w", zipfile.ZIP_DEFLATED) as zout:
-                for item in zin.infolist():
-                    data = zin.read(item.filename)
-
-                    # Only process images in ppt/media/
-                    if item.filename.startswith("ppt/media/"):
-                        _, ext = os.path.splitext(item.filename.lower())
-
-                        if ext in _RASTER_EXTENSIONS:
-                            compressed = _compress_image(
-                                data, ext, quality, max_dimension
-                            )
-                            if compressed is not None:
-                                saved_bytes += len(data) - len(compressed)
-                                data = compressed
-                                compressed_count += 1
-
-                    # Write entry (compressed or original)
-                    zout.writestr(item, data)
+            if output_target is not None:
+                with output_target.open("wb") as raw_output:
+                    with zipfile.ZipFile(raw_output, "w", zipfile.ZIP_DEFLATED) as zout:
+                        compressed_count, saved_bytes = _copy_zip_with_compressed_images(
+                            zin, zout, quality, max_dimension
+                        )
+            else:
+                output_buffer = io.BytesIO()
+                with zipfile.ZipFile(output_buffer, "w", zipfile.ZIP_DEFLATED) as zout:
+                    compressed_count, saved_bytes = _copy_zip_with_compressed_images(
+                        zin, zout, quality, max_dimension
+                    )
 
     except Exception:
         LOGGER.exception("Failed to compress PPTX images, returning original.")
+        if output_target is not None:
+            output_target.unlink(missing_ok=True)
         input_buffer.seek(0)
         return input_buffer
 
-    output_buffer.seek(0)
     original_size = input_buffer.seek(0, 2)
-    output_size = output_buffer.seek(0, 2)
-    output_buffer.seek(0)
+    if output_target is not None:
+        output_size = output_target.stat().st_size
+    else:
+        assert output_buffer is not None
+        output_size = output_buffer.seek(0, 2)
+        output_buffer.seek(0)
 
     LOGGER.info(
         "Image compression complete: %d images compressed, "
@@ -169,4 +185,38 @@ def compress_pptx_images(
         output_size / (1024 * 1024),
     )
 
+    if output_target is not None:
+        return output_target
+
+    assert output_buffer is not None
     return output_buffer
+
+
+def _copy_zip_with_compressed_images(
+    zin,
+    zout,
+    quality: int,
+    max_dimension: int,
+) -> tuple[int, int]:
+    """Copy ZIP entries, compressing raster PPT media entries opportunistically."""
+    compressed_count = 0
+    saved_bytes = 0
+
+    for item in zin.infolist():
+        data = zin.read(item.filename)
+
+        if item.filename.startswith("ppt/media/"):
+            _, ext = os.path.splitext(item.filename.lower())
+
+            if ext in _RASTER_EXTENSIONS:
+                compressed = _compress_image(
+                    data, ext, quality, max_dimension
+                )
+                if compressed is not None:
+                    saved_bytes += len(data) - len(compressed)
+                    data = compressed
+                    compressed_count += 1
+
+        zout.writestr(item, data)
+
+    return compressed_count, saved_bytes

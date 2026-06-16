@@ -23,13 +23,16 @@ class TranslationOutput(BaseModel):
 PROMPT_TEMPLATE = """
 You are a professional translator specializing in PowerPoint presentations.
 
-**Context (Full Presentation):**
+**Presentation Context (reference only; do not translate this section):**
 {ppt_context}
 
-**Background Information:**
+**Current Batch Context (reference only; use for disambiguation):**
+{batch_context}
+
+**User Background Information:**
 {context}
 
-**Glossary:**
+**Glossary (highest priority terminology rules):**
 {glossary_terms}
 
 **Translation Style/Tone Guidelines:**
@@ -37,10 +40,16 @@ You are a professional translator specializing in PowerPoint presentations.
 {length_constraint}
 **Task:**
 Translate the following texts from {source_lang} to {target_lang}.
-Maintain consistency with the context, background information, and glossary.
-Follow the translation style/tone guidelines if provided.
-If a sentence or phrase appears more than once in the source, translate it identically every time unless the glossary overrides it.
-Return exactly {expected_count} translated texts in the translations array.
+
+**Rules:**
+- Return exactly {expected_count} translated texts in the translations array, in the same order as the input.
+- Translate only the numbered texts under "Texts to translate". Do not translate or include the context sections.
+- The glossary overrides all other context, style guidance, and model assumptions.
+- Preserve numbers, units, dates, times, versions, URLs, email addresses, code, variables, placeholders, and bracketed tokens unless the glossary explicitly says otherwise.
+- Preserve product names, brand names, feature names, acronyms, and proper nouns when no clear target-language convention is provided.
+- Keep repeated source phrases translated consistently unless the glossary requires a different term.
+- For slide titles, bullets, table cells, labels, and UI-like short phrases, prefer concise, presentation-ready wording.
+- Do not add explanations, notes, markdown, numbering, or extra items outside the translations array.
 
 **Texts to translate:**
 {texts}
@@ -113,6 +122,7 @@ def create_translation_chain(
     chain = (
         RunnablePassthrough.assign(
             ppt_context=lambda x: x.get("ppt_context", ""),
+            batch_context=lambda x: x.get("batch_context", "No nearby context."),
             glossary_terms=lambda x: x.get("glossary_terms", "None"),
             source_lang=lambda _: source_lang,
             target_lang=lambda _: target_lang,
@@ -194,6 +204,90 @@ def translate_with_progress(
                 expected_count,
             )
             retry_result = _retry_count_mismatch_batch(
+                chain=chain,
+                batch=batch,
+                config=config,
+                batch_index=index,
+                expected_count=expected_count,
+            )
+            if retry_result is not None and len(retry_result.translations) == expected_count:
+                parts = retry_result.translations
+            else:
+                if retry_result is not None:
+                    LOGGER.error(
+                        "Batch %d: retry still returned %d translations; "
+                        "falling back to safe padding/trimming.",
+                        index,
+                        len(retry_result.translations),
+                    )
+                else:
+                    LOGGER.error(
+                        "Batch %d: retry failed; falling back to safe padding/trimming.",
+                        index,
+                    )
+                originals = [p.original_text for p in batch.get("paragraphs", [])]
+                parts = _force_match_expected(parts, expected_count, originals)
+
+        translations.extend(parts)
+
+    return translations
+
+
+async def translate_with_progress_async(
+    chain,
+    batches: List[Dict[str, object]],
+    progress_tracker: Any = None,
+    max_concurrency: int = 1,
+) -> List[str]:
+    """Translate batches asynchronously with progress updates.
+
+    This mirrors :func:`translate_with_progress` but uses LangChain's async
+    runnable APIs so cancelling the surrounding task can interrupt in-flight
+    provider calls instead of only cancelling the FastAPI wrapper task.
+    """
+
+    total_batches = len(batches)
+    total_sentences = sum(len(batch.get("paragraphs", [])) for batch in batches)
+
+    if progress_tracker is not None:
+        progress_tracker.reset(
+            total_batches=total_batches,
+            total_sentences=total_sentences,
+        )
+
+    LOGGER.info(
+        "Beginning async translation of %d batches (total %d sentences) with max_concurrency=%d.",
+        total_batches,
+        total_sentences,
+        max_concurrency,
+    )
+
+    config = RunnableConfig(max_concurrency=max(1, int(max_concurrency)))
+    accumulator: List[TranslationOutput | None] = [None] * len(batches)
+    ordered_results: List[TranslationOutput | None] = await _abatch_translate_with_retry(
+        chain, batches, config, progress_tracker, total_batches, accumulator
+    )
+
+    translations: List[str] = []
+    for index, (batch, result) in enumerate(zip(batches, ordered_results), start=1):
+        expected_count = len(batch.get("paragraphs", []))
+
+        if result is None:
+            raise RuntimeError(
+                f"Batch {index} of {len(batches)} returned no result "
+                "after all retry attempts"
+            )
+
+        parts = result.translations
+
+        if len(parts) != expected_count:
+            LOGGER.warning(
+                "Batch %d: translation count %d differs from expected %d.",
+                index,
+                len(parts),
+                expected_count,
+            )
+            retry_result = await _retry_count_mismatch_batch_async(
                 chain=chain,
                 batch=batch,
                 config=config,
@@ -313,6 +407,73 @@ def _batch_translate_with_retry(
     return ordered_results
 
 
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+)
+async def _abatch_translate_with_retry(
+    chain,
+    batches: List[Dict[str, object]],
+    config: RunnableConfig,
+    progress_tracker: Any = None,
+    total_batches: int = 0,
+    ordered_results: List[TranslationOutput | None] | None = None,
+) -> List[TranslationOutput | None]:
+    """Execute async batch translation with retry and real-time progress."""
+    if ordered_results is None:
+        ordered_results = [None] * len(batches)
+
+    pending = [i for i, r in enumerate(ordered_results) if r is None]
+    pending_batches = [batches[i] for i in pending]
+
+    if progress_tracker is not None:
+        total_sentences = sum(len(b.get("paragraphs", [])) for b in batches)
+        progress_tracker.reset(
+            total_batches=total_batches,
+            total_sentences=total_sentences,
+        )
+        for i, result in enumerate(ordered_results):
+            if result is not None:
+                batch = batches[i]
+                progress_tracker.batch_completed(
+                    int(batch.get("start_idx", i + 1)),
+                    int(batch.get("end_idx", i + 1)),
+                )
+
+    LOGGER.debug(
+        "Invoking async batch translation for %d batch(es) (%d already done).",
+        len(pending_batches),
+        len(batches) - len(pending_batches),
+    )
+
+    async for local_idx, result in chain.abatch_as_completed(
+        pending_batches, config=config
+    ):
+        completed_idx = pending[local_idx]
+        ordered_results[completed_idx] = result
+
+        if progress_tracker is not None:
+            batch = batches[completed_idx]
+            start_idx = int(batch.get("start_idx", completed_idx + 1))
+            end_idx = int(batch.get("end_idx", completed_idx + 1))
+            progress_tracker.batch_completed(start_idx, end_idx)
+
+        LOGGER.info(
+            "Completed batch %d/%d.",
+            completed_idx + 1,
+            total_batches,
+        )
+
+    missing = [i for i, r in enumerate(ordered_results) if r is None]
+    if missing:
+        raise RuntimeError(
+            f"{len(missing)} of {len(batches)} batch(es) returned no result "
+            f"(batch indices: {missing})"
+        )
+
+    return ordered_results
+
+
 def _retry_count_mismatch_batch(
     chain,
     batch: Dict[str, object],
@@ -332,6 +493,33 @@ def _retry_count_mismatch_batch(
     if actual_count != expected_count:
         LOGGER.warning(
             "Batch %d: single-batch retry count %d still differs from expected %d.",
+            batch_index,
+            actual_count,
+            expected_count,
+        )
+
+    return result
+
+
+async def _retry_count_mismatch_batch_async(
+    chain,
+    batch: Dict[str, object],
+    config: RunnableConfig,
+    batch_index: int,
+    expected_count: int,
+) -> TranslationOutput | None:
+    """Async retry for a single batch with a wrong structured-output count."""
+
+    try:
+        result: TranslationOutput = await chain.ainvoke(batch, config=config)
+    except Exception:
+        LOGGER.exception("Batch %d: async single-batch retry failed.", batch_index)
+        return None
+
+    actual_count = len(result.translations)
+    if actual_count != expected_count:
+        LOGGER.warning(
+            "Batch %d: async single-batch retry count %d still differs from expected %d.",
             batch_index,
             actual_count,
             expected_count,

@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import io
+from pathlib import Path
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable, Dict, Optional
+from typing import BinaryIO, Callable, Dict, Optional
 
 
 # ---------------------------------------------------------------------------
@@ -68,7 +69,7 @@ class TranslationStatus(Enum):
 class TranslationRequest:
     """Request model for PPT translation."""
 
-    ppt_file: io.BytesIO
+    ppt_file: BinaryIO
     source_lang: str = "Auto"
     target_lang: str = "Auto"
     model: str = DEFAULT_TRANSLATION_MODEL
@@ -81,6 +82,7 @@ class TranslationRequest:
     text_fit_mode: TextFitMode = TextFitMode.NONE
     min_font_ratio: int = 80
     length_limit: Optional[int] = None
+    output_path: Optional[Path] = None
 
 
 @dataclass
@@ -89,6 +91,7 @@ class TranslationResult:
 
     success: bool
     output_file: Optional[io.BytesIO] = None
+    output_path: Optional[Path] = None
     error_message: Optional[str] = None
     source_language_detected: str = ""
     target_language_used: str = ""

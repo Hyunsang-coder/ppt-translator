@@ -95,13 +95,3 @@ export interface ExtractionSettings {
   withNotes: boolean;
   tableHeader: boolean;
 }
-
-export interface SummarizeRequest {
-  markdown: string;
-  provider?: string;
-  model?: string;
-}
-
-export interface SummarizeResponse {
-  summary: string;
-}

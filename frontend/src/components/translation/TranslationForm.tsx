@@ -19,10 +19,6 @@ export function TranslationForm() {
     pptFile,
     glossaryFile,
     settings,
-    generatedContext,
-    isGeneratingContext,
-    generatedInstructions,
-    isGeneratingInstructions,
     status,
     progress,
     errorMessage,
@@ -36,10 +32,6 @@ export function TranslationForm() {
     setPptFile,
     setGlossaryFile,
     updateSettings,
-    setGeneratedContext,
-    generateContext,
-    setGeneratedInstructions,
-    generateInstructions,
     startTranslation,
     cancelTranslation,
     downloadResult,
@@ -123,15 +115,6 @@ export function TranslationForm() {
           }}
           glossaryFile={glossaryFile}
           onGlossaryFileChange={setGlossaryFile}
-          pptFile={pptFile}
-          generatedContext={generatedContext}
-          generatedInstructions={generatedInstructions}
-          isGeneratingContext={isGeneratingContext}
-          isGeneratingInstructions={isGeneratingInstructions}
-          onGenerateContext={generateContext}
-          onGenerateInstructions={generateInstructions}
-          onContextChange={setGeneratedContext}
-          onInstructionsChange={setGeneratedInstructions}
           disabled={isTranslating}
         />
       </div>

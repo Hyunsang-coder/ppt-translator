@@ -70,8 +70,6 @@ from it, so adding/bumping a model is a one-file change. The frontend fallback
 | Anthropic | `claude-sonnet-4-6` | Claude Sonnet 4.6 |
 | Anthropic | `claude-haiku-4-5-20251001` | Claude Haiku 4.5 |
 
-Context/instructions generation uses lightweight models: GPT-5.4 Mini / Haiku 4.5.
-
 ## Libraries
 
 ### Backend
@@ -98,13 +96,4 @@ curl -N http://localhost:8000/api/v1/jobs/{job_id}/events
 # Download result
 curl http://localhost:8000/api/v1/jobs/{job_id}/result -o translated.pptx
 
-# Generate context summary
-curl -X POST http://localhost:8000/api/v1/summarize \
-  -H "Content-Type: application/json" \
-  -d '{"markdown": "...", "provider": "anthropic", "model": "claude-haiku-4-5-20251001"}'
-
-# Generate translation instructions
-curl -X POST http://localhost:8000/api/v1/generate-instructions \
-  -H "Content-Type: application/json" \
-  -d '{"target_lang": "한국어", "markdown": "...", "provider": "anthropic", "model": "claude-haiku-4-5-20251001"}'
 ```

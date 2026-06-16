@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from typing import Literal, Optional
 
 from langchain_core.prompts import PromptTemplate
 
@@ -13,22 +11,28 @@ from src.services.models import DEFAULT_LIGHT_MODEL
 
 LOGGER = logging.getLogger(__name__)
 
-SUMMARIZATION_PROMPT = """프레젠테이션 번역에 필요한 핵심 컨텍스트를 **300자 이내**로 추출하세요.
+SUMMARIZATION_PROMPT = """프레젠테이션 번역 품질을 높이기 위한 핵심 컨텍스트를 **500자 이내**로 추출하세요.
 
 **프레젠테이션:**
 {markdown}
 
 **규칙:**
-- 반드시 300자 이내
-- 핵심만 간결하게
+- 반드시 500자 이내
+- 번역자가 실제로 참고할 정보만 남기세요.
+- 원문 고유명사, 제품명, 기능명, 캠페인명은 임의 번역하지 말고 원문 표기를 유지하세요.
+- 추측이 필요한 항목은 쓰지 마세요.
 
 **출력 형식:**
-- 문서 유형/주제
-- 대상 독자
-- 주요 용어나 고유명사 (있으면)
+- 문서 유형/목적:
+- 대상 독자:
+- 핵심 용어/고유명사:
+- 번역상 주의:
 
 **예시:**
-> 게임 이벤트 운영 전략 문서. 비수기 트래픽 유지를 위한 콘텐츠/이벤트 기획안. 대상: 이벤트 기획자, 마케터. 주요 용어: Binary Spot, Heist Royale.
+문서 유형/목적: 게임 이벤트 운영 전략 문서. 비수기 트래픽 유지를 위한 콘텐츠/이벤트 기획안.
+대상 독자: 이벤트 기획자, 마케터.
+핵심 용어/고유명사: Binary Spot, Heist Royale.
+번역상 주의: 이벤트명과 게임 모드는 원문 유지, 운영 지표는 숫자/단위 보존.
 
 **컨텍스트:**"""
 
@@ -82,18 +86,14 @@ async def summarize_presentation(
     llm = create_llm(
         provider=provider,
         model_name=model,
-        max_tokens=512,  # Limit for concise output (~300 chars)
+        max_tokens=700,  # Limit for concise output (~500 chars)
+        temperature=0.2,
     )
 
     prompt = create_summarization_prompt()
     chain = prompt | llm
 
-    # Run in executor for async compatibility
-    loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(
-        None,
-        lambda: chain.invoke({"markdown": truncated}),
-    )
+    result = await chain.ainvoke({"markdown": truncated})
 
     summary = result.content if hasattr(result, "content") else str(result)
     summary = summary.strip()

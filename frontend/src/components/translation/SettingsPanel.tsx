@@ -11,11 +11,10 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Button } from "@/components/ui/button";
 import { FileUploader } from "@/components/shared/FileUploader";
 import { useConfig } from "@/hooks/useConfig";
 import type { TranslationSettings, FilenameSettings, TextFitMode, ImageCompression, LengthLimit } from "@/types/api";
-import { Sparkles, Loader2, FileText, Type, ImageDown } from "lucide-react";
+import { FileText, Type, ImageDown } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
 import {
   Tooltip,
@@ -31,15 +30,6 @@ interface SettingsPanelProps {
   onSettingsChange: (settings: Partial<TranslationSettings>) => void;
   glossaryFile: File | null;
   onGlossaryFileChange: (file: File | null) => void;
-  pptFile: File | null;
-  generatedContext: string;
-  generatedInstructions: string;
-  isGeneratingContext: boolean;
-  isGeneratingInstructions: boolean;
-  onGenerateContext: () => void;
-  onGenerateInstructions: () => void;
-  onContextChange: (context: string) => void;
-  onInstructionsChange: (instructions: string) => void;
   disabled?: boolean;
 }
 
@@ -48,15 +38,6 @@ export function SettingsPanel({
   onSettingsChange,
   glossaryFile,
   onGlossaryFileChange,
-  pptFile,
-  generatedContext,
-  generatedInstructions,
-  isGeneratingContext,
-  isGeneratingInstructions,
-  onGenerateContext,
-  onGenerateInstructions,
-  onContextChange,
-  onInstructionsChange,
   disabled = false,
 }: SettingsPanelProps) {
   const { languages, getModelsForProvider, isLoading, error } = useConfig();
@@ -358,106 +339,30 @@ export function SettingsPanel({
 
       {/* Context (Background Information) */}
       <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <Label htmlFor="context">컨텍스트 (배경 정보)</Label>
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] text-muted-foreground">
-              using {settings.provider === "openai" ? "GPT-5.4 Mini" : "Haiku 4.5"}
-            </span>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={onGenerateContext}
-              disabled={disabled || isGeneratingContext || !pptFile}
-              className="h-7 text-xs gap-1.5"
-            >
-              {isGeneratingContext ? (
-                <>
-                  <Loader2 className="w-3 h-3 animate-spin" />
-                  생성 중...
-                </>
-              ) : (
-                <>
-                  <Sparkles className="w-3 h-3" />
-                  자동 생성
-                </>
-              )}
-            </Button>
-          </div>
-        </div>
+        <Label htmlFor="context">컨텍스트 (배경 정보)</Label>
         <Textarea
           id="context"
           placeholder="문서의 주제, 도메인, 대상 독자 등 배경 정보를 입력하세요."
-          value={generatedContext || settings.context}
-          onChange={(e) => {
-            if (generatedContext) {
-              onContextChange(e.target.value);
-            } else {
-              onSettingsChange({ context: e.target.value });
-            }
-          }}
-          disabled={disabled || isGeneratingContext}
+          value={settings.context}
+          onChange={(e) => onSettingsChange({ context: e.target.value })}
+          disabled={disabled}
           rows={3}
-          className="resize-none"
+          className="h-28 max-h-28 resize-none overflow-y-auto [field-sizing:fixed]"
         />
-        {generatedContext && (
-          <p className="text-xs text-muted-foreground">
-            * 자동 생성된 컨텍스트입니다. 필요에 따라 수정할 수 있습니다.
-          </p>
-        )}
       </div>
 
       {/* Instructions (Style/Tone) */}
       <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <Label htmlFor="instructions">번역 지침 (스타일/톤)</Label>
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] text-muted-foreground">
-              using {settings.provider === "openai" ? "GPT-5.4 Mini" : "Haiku 4.5"}
-            </span>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={onGenerateInstructions}
-              disabled={disabled || isGeneratingInstructions || !pptFile || !settings.targetLang}
-              className="h-7 text-xs gap-1.5"
-            >
-              {isGeneratingInstructions ? (
-                <>
-                  <Loader2 className="w-3 h-3 animate-spin" />
-                  생성 중...
-                </>
-              ) : (
-                <>
-                  <Sparkles className="w-3 h-3" />
-                  자동 생성
-                </>
-              )}
-            </Button>
-          </div>
-        </div>
+        <Label htmlFor="instructions">번역 지침 (스타일/톤)</Label>
         <Textarea
           id="instructions"
           placeholder="격식체/비격식체, 직역/의역 선호, 특정 용어 처리 방식 등을 입력하세요."
-          value={generatedInstructions || settings.instructions}
-          onChange={(e) => {
-            if (generatedInstructions) {
-              onInstructionsChange(e.target.value);
-            } else {
-              onSettingsChange({ instructions: e.target.value });
-            }
-          }}
-          disabled={disabled || isGeneratingInstructions}
+          value={settings.instructions}
+          onChange={(e) => onSettingsChange({ instructions: e.target.value })}
+          disabled={disabled}
           rows={3}
-          className="resize-none"
+          className="h-28 max-h-28 resize-none overflow-y-auto [field-sizing:fixed]"
         />
-        {generatedInstructions && (
-          <p className="text-xs text-muted-foreground">
-            * 자동 생성된 지침입니다. 필요에 따라 수정할 수 있습니다.
-          </p>
-        )}
       </div>
 
 

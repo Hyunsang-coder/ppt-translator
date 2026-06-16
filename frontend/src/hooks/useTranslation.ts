@@ -7,38 +7,23 @@ import { apiClient } from "@/lib/api-client";
 import { saveBlob } from "@/lib/save-file";
 import { createSSEClient, SSEClient } from "@/lib/sse-client";
 import { useTranslationStore } from "@/stores/translation-store";
+import { useExtractionStore } from "@/stores/extraction-store";
+import { getFileKey, useSharedFileStore } from "@/stores/shared-file-store";
 import type { JobProgress, SSEEvent } from "@/types/api";
 
-// Generate a unique key for a file (for caching)
-function getFileKey(file: File): string {
-  return `${file.name}|${file.size}|${file.lastModified}`;
-}
-
 export function useTranslation() {
+  const { pptFile, setPptFile: setSharedPptFile } = useSharedFileStore();
   const {
-    pptFile,
     glossaryFile,
     settings,
-    cachedMarkdown,
-    cachedMarkdownFileKey,
-    generatedContext,
-    isGeneratingContext,
-    generatedInstructions,
-    isGeneratingInstructions,
     jobId,
     status,
     progress,
     errorMessage,
     resultFilename,
     logs,
-    setPptFile,
     setGlossaryFile,
     updateSettings,
-    setCachedMarkdown,
-    setGeneratedContext,
-    setIsGeneratingContext,
-    setGeneratedInstructions,
-    setIsGeneratingInstructions,
     setJobId,
     setStatus,
     setProgress,
@@ -46,134 +31,21 @@ export function useTranslation() {
     setResultFilename,
     addLog,
     clearLogs,
+    resetForPptFileChange,
     resetJobState,
     reset,
   } = useTranslationStore();
 
   const sseClientRef = useRef<SSEClient | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
-  const generationAbortRef = useRef<AbortController | null>(null);
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
       sseClientRef.current?.close();
       abortControllerRef.current?.abort();
-      generationAbortRef.current?.abort();
     };
   }, []);
-
-  // Extract markdown with caching
-  const extractMarkdown = useCallback(async (signal?: AbortSignal): Promise<string | null> => {
-    if (!pptFile) return null;
-
-    const fileKey = getFileKey(pptFile);
-
-    // Check cache
-    if (cachedMarkdown && cachedMarkdownFileKey === fileKey) {
-      addLog("캐시된 마크다운 사용", "info");
-      return cachedMarkdown;
-    }
-
-    // Extract new markdown
-    addLog("PPT에서 텍스트를 추출하는 중...", "info");
-    const extractionResult = await apiClient.extractText(pptFile, {
-      figures: "omit",
-      charts: "labels",
-      withNotes: false,
-      tableHeader: true,
-    }, signal);
-    addLog(`${extractionResult.slide_count}개 슬라이드에서 텍스트 추출 완료`, "info");
-
-    // Cache the result
-    setCachedMarkdown(extractionResult.markdown, fileKey);
-
-    return extractionResult.markdown;
-  }, [pptFile, cachedMarkdown, cachedMarkdownFileKey, setCachedMarkdown, addLog]);
-
-  const generateContext = useCallback(async () => {
-    if (!pptFile) return;
-
-    // Abort any previous generation
-    generationAbortRef.current?.abort();
-    const abortController = new AbortController();
-    generationAbortRef.current = abortController;
-
-    try {
-      setIsGeneratingContext(true);
-      addLog("컨텍스트 생성을 시작합니다...", "info");
-
-      // Step 1: Extract text from PPT (with caching)
-      const markdown = await extractMarkdown(abortController.signal);
-      if (!markdown) {
-        throw new Error("마크다운 추출 실패");
-      }
-
-      // Step 2: Summarize the extracted text
-      addLog("AI가 프레젠테이션 내용을 요약하는 중...", "info");
-      const summaryResult = await apiClient.summarizeText(
-        markdown,
-        settings.provider,
-        settings.provider === "openai" ? "gpt-5.4-mini-2026-03-17" : "claude-haiku-4-5-20251001",
-        abortController.signal
-      );
-
-      setGeneratedContext(summaryResult.summary);
-      addLog("컨텍스트 생성 완료!", "success");
-    } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") return;
-      const message = err instanceof Error ? err.message : "컨텍스트 생성 실패";
-      addLog(`컨텍스트 생성 실패: ${message}`, "error");
-    } finally {
-      setIsGeneratingContext(false);
-    }
-  }, [pptFile, settings.provider, extractMarkdown, addLog, setGeneratedContext, setIsGeneratingContext]);
-
-  const generateInstructions = useCallback(async () => {
-    if (!pptFile) {
-      addLog("PPT 파일을 먼저 업로드해주세요.", "warning");
-      return;
-    }
-    if (!settings.targetLang) {
-      addLog("타겟 언어를 먼저 선택해주세요.", "warning");
-      return;
-    }
-
-    // Abort any previous generation
-    generationAbortRef.current?.abort();
-    const abortController = new AbortController();
-    generationAbortRef.current = abortController;
-
-    try {
-      setIsGeneratingInstructions(true);
-      addLog("번역 지침을 생성합니다...", "info");
-
-      // Step 1: Extract text from PPT (with caching)
-      const markdown = await extractMarkdown(abortController.signal);
-      if (!markdown) {
-        throw new Error("마크다운 추출 실패");
-      }
-
-      // Step 2: Generate instructions based on target language and document content
-      addLog("AI가 문서에 맞는 번역 지침을 생성하는 중...", "info");
-      const response = await apiClient.generateInstructions(
-        settings.targetLang,
-        markdown,
-        settings.provider,
-        settings.provider === "openai" ? "gpt-5.4-mini-2026-03-17" : "claude-haiku-4-5-20251001",
-        abortController.signal
-      );
-
-      setGeneratedInstructions(response.instructions);
-      addLog("번역 지침 생성 완료!", "success");
-    } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") return;
-      const message = err instanceof Error ? err.message : "지침 생성 실패";
-      addLog(`지침 생성 실패: ${message}`, "error");
-    } finally {
-      setIsGeneratingInstructions(false);
-    }
-  }, [pptFile, settings.targetLang, settings.provider, extractMarkdown, addLog, setGeneratedInstructions, setIsGeneratingInstructions]);
 
   const startTranslation = useCallback(async () => {
     if (!pptFile) {
@@ -191,15 +63,8 @@ export function useTranslation() {
       const abortController = new AbortController();
       abortControllerRef.current = abortController;
 
-      // Merge generated context and instructions into settings if available
-      const effectiveSettings = {
-        ...settings,
-        context: generatedContext || settings.context,
-        instructions: generatedInstructions || settings.instructions,
-      };
-
       // Create job
-      const response = await apiClient.createJob(pptFile, effectiveSettings, glossaryFile ?? undefined, abortController.signal);
+      const response = await apiClient.createJob(pptFile, settings, glossaryFile ?? undefined, abortController.signal);
       abortControllerRef.current = null;
       setJobId(response.job_id);
       addLog(`작업 생성 완료 (ID: ${response.job_id.slice(0, 8)}...)`, "info");
@@ -273,8 +138,6 @@ export function useTranslation() {
     pptFile,
     glossaryFile,
     settings,
-    generatedContext,
-    generatedInstructions,
     setStatus,
     setErrorMessage,
     clearLogs,
@@ -331,29 +194,31 @@ export function useTranslation() {
     await startTranslation();
   }, [resetJobState, startTranslation]);
 
-  // Wrap setPptFile to abort in-progress generation when file changes
+  // Wrap setPptFile so translation/extraction state follows the shared file.
   const handleSetPptFile = useCallback((file: File | null) => {
-    generationAbortRef.current?.abort();
-    generationAbortRef.current = null;
-    setPptFile(file);
-  }, [setPptFile]);
+    const currentFileKey = getFileKey(useSharedFileStore.getState().pptFile);
+    const nextFileKey = getFileKey(file);
+    if (currentFileKey === nextFileKey) {
+      return;
+    }
+
+    setSharedPptFile(file);
+    resetForPptFileChange();
+    useExtractionStore.getState().resetForPptFileChange();
+  }, [resetForPptFileChange, setSharedPptFile]);
 
   const resetTranslation = useCallback(() => {
     sseClientRef.current?.close();
-    generationAbortRef.current?.abort();
-    generationAbortRef.current = null;
+    setSharedPptFile(null);
+    useExtractionStore.getState().resetForPptFileChange();
     reset();
-  }, [reset]);
+  }, [reset, setSharedPptFile]);
 
   return {
     // State
     pptFile,
     glossaryFile,
     settings,
-    generatedContext,
-    isGeneratingContext,
-    generatedInstructions,
-    isGeneratingInstructions,
     jobId,
     status,
     progress,
@@ -369,8 +234,6 @@ export function useTranslation() {
     canStart:
       pptFile !== null &&
       status === "idle" &&
-      !isGeneratingContext &&
-      !isGeneratingInstructions &&
       // 타겟 언어 필수 선택
       settings.targetLang !== "" &&
       settings.targetLang !== "Auto" &&
@@ -384,10 +247,6 @@ export function useTranslation() {
     setPptFile: handleSetPptFile,
     setGlossaryFile,
     updateSettings,
-    setGeneratedContext,
-    generateContext,
-    setGeneratedInstructions,
-    generateInstructions,
     startTranslation,
     cancelTranslation,
     downloadResult,

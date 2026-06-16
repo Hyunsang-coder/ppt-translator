@@ -54,6 +54,7 @@ src/
 │   ├── shared/           # Header, FileUploader
 │   ├── translation/      # TranslationForm, SettingsPanel, ProgressPanel, LogViewer
 │   ├── extraction/       # ExtractionForm, MarkdownPreview
+│   ├── desktop-shell.tsx # 데스크톱 화면 전용 래퍼
 │   ├── sidecar-provider.tsx
 │   └── ui/               # Shadcn/Radix 컴포넌트
 ├── hooks/                # useTranslation, useExtraction, useConfig

@@ -22,23 +22,10 @@ export type TranslationStatus =
 
 interface TranslationState {
   // File state
-  pptFile: File | null;
   glossaryFile: File | null;
 
   // Settings
   settings: TranslationSettings;
-
-  // Markdown cache (for context/instructions generation)
-  cachedMarkdown: string | null;
-  cachedMarkdownFileKey: string | null; // file name + size + lastModified
-
-  // Context generation
-  generatedContext: string;
-  isGeneratingContext: boolean;
-
-  // Instructions generation
-  generatedInstructions: string;
-  isGeneratingInstructions: boolean;
 
   // Job state
   jobId: string | null;
@@ -53,14 +40,8 @@ interface TranslationState {
   logs: LogEntry[];
 
   // Actions
-  setPptFile: (file: File | null) => void;
   setGlossaryFile: (file: File | null) => void;
   updateSettings: (settings: Partial<TranslationSettings>) => void;
-  setCachedMarkdown: (markdown: string | null, fileKey: string | null) => void;
-  setGeneratedContext: (context: string) => void;
-  setIsGeneratingContext: (loading: boolean) => void;
-  setGeneratedInstructions: (instructions: string) => void;
-  setIsGeneratingInstructions: (loading: boolean) => void;
   setJobId: (jobId: string | null) => void;
   setStatus: (status: TranslationStatus) => void;
   setProgress: (progress: JobProgress | null) => void;
@@ -68,6 +49,7 @@ interface TranslationState {
   setResultFilename: (filename: string | null) => void;
   addLog: (message: string, type?: LogEntry["type"]) => void;
   clearLogs: () => void;
+  resetForPptFileChange: () => void;
   resetJobState: () => void;
   reset: () => void;
 }
@@ -100,15 +82,8 @@ const MAX_LOGS = 400;
 
 export const useTranslationStore = create<TranslationState>((set) => ({
   // Initial state
-  pptFile: null,
   glossaryFile: null,
   settings: DEFAULT_SETTINGS,
-  cachedMarkdown: null,
-  cachedMarkdownFileKey: null,
-  generatedContext: "",
-  isGeneratingContext: false,
-  generatedInstructions: "",
-  isGeneratingInstructions: false,
   jobId: null,
   status: "idle",
   progress: null,
@@ -117,41 +92,12 @@ export const useTranslationStore = create<TranslationState>((set) => ({
   logs: [],
 
   // Actions
-  setPptFile: (file) =>
-    set((state) => ({
-      pptFile: file,
-      // Reset job state when file changes
-      ...(file !== state.pptFile
-        ? {
-            cachedMarkdown: null,
-            cachedMarkdownFileKey: null,
-            generatedContext: "",
-            isGeneratingContext: false,
-            generatedInstructions: "",
-            isGeneratingInstructions: false,
-            jobId: null,
-            status: "idle" as const,
-            progress: null,
-            errorMessage: null,
-            resultFilename: null,
-            logs: [],
-          }
-        : {}),
-    })),
   setGlossaryFile: (file) => set({ glossaryFile: file }),
 
   updateSettings: (newSettings) =>
     set((state) => ({
       settings: { ...state.settings, ...newSettings },
     })),
-
-  setCachedMarkdown: (markdown, fileKey) =>
-    set({ cachedMarkdown: markdown, cachedMarkdownFileKey: fileKey }),
-
-  setGeneratedContext: (context) => set({ generatedContext: context }),
-  setIsGeneratingContext: (loading) => set({ isGeneratingContext: loading }),
-  setGeneratedInstructions: (instructions) => set({ generatedInstructions: instructions }),
-  setIsGeneratingInstructions: (loading) => set({ isGeneratingInstructions: loading }),
 
   setJobId: (jobId) => set({ jobId }),
   setStatus: (status) => set({ status }),
@@ -174,6 +120,16 @@ export const useTranslationStore = create<TranslationState>((set) => ({
 
   clearLogs: () => set({ logs: [] }),
 
+  resetForPptFileChange: () =>
+    set({
+      jobId: null,
+      status: "idle",
+      progress: null,
+      errorMessage: null,
+      resultFilename: null,
+      logs: [],
+    }),
+
   resetJobState: () =>
     set({
       jobId: null,
@@ -186,14 +142,7 @@ export const useTranslationStore = create<TranslationState>((set) => ({
 
   reset: () =>
     set({
-      pptFile: null,
       glossaryFile: null,
-      cachedMarkdown: null,
-      cachedMarkdownFileKey: null,
-      generatedContext: "",
-      isGeneratingContext: false,
-      generatedInstructions: "",
-      isGeneratingInstructions: false,
       jobId: null,
       status: "idle",
       progress: null,
