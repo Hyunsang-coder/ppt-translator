@@ -97,7 +97,7 @@ jobs:
       - name: Build sidecar and frontend
         shell: bash
         run: |
-          ./desktop/ensure-sidecar.sh --force
+          node ./desktop/ensure-sidecar.mjs --force
           cd frontend
           npm run build
 

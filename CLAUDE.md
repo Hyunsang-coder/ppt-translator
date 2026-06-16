@@ -24,8 +24,8 @@ cd frontend && npm run dev
 cd frontend && npm run build
 cd frontend && npx tsc --noEmit     # type check
 
-# Desktop
-./desktop/build-sidecar.sh
+# Desktop (cross-platform Node sidecar build; Windows/macOS/Linux)
+node desktop/build-sidecar.mjs
 cd src-tauri && cargo tauri dev
 TAURI_BUILD=1 cargo tauri build
 ```

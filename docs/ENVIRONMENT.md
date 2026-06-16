@@ -43,7 +43,7 @@ NEXT_PUBLIC_API_URL=    # Browser-only local dev fallback; Tauri uses runtime si
 ## Deployment
 
 ### Desktop (Tauri)
-- `desktop/build-sidecar.sh`: Builds and stages the Python sidecar into `src-tauri/resources/sidecar/`
+- `node desktop/build-sidecar.mjs`: Builds and stages the Python sidecar into `src-tauri/resources/sidecar/` (cross-platform; auto-creates the desktop venv on first run)
 - `TAURI_BUILD=1 cargo tauri build`: Builds the static frontend export and packages the desktop app
 - Build the sidecar on each target OS because PyInstaller output is platform-specific
 

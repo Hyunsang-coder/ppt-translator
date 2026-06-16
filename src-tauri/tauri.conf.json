@@ -1,18 +1,18 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "PPT 번역캣",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "identifier": "com.ppttranslator.desktop",
   "build": {
     "frontendDist": "../frontend/out",
     "devUrl": "http://localhost:3000",
     "beforeDevCommand": {
       "cwd": "..",
-      "script": "./desktop/ensure-sidecar.sh && cd frontend && npm run dev"
+      "script": "node ./desktop/ensure-sidecar.mjs && cd frontend && npm run dev"
     },
     "beforeBuildCommand": {
       "cwd": "..",
-      "script": "./desktop/ensure-sidecar.sh --force && cd frontend && npm run build"
+      "script": "node ./desktop/ensure-sidecar.mjs --force && cd frontend && npm run build"
     }
   },
   "app": {
