@@ -3,24 +3,14 @@
 from __future__ import annotations
 
 import io
-import asyncio
 import logging
 import math
 import time
-from pathlib import Path
 from typing import Dict, List, Optional
 
-from src.chains.color_distribution_chain import (
-    ColoredSegment,
-    distribute_colors,
-    distribute_colors_async,
-)
+from src.chains.color_distribution_chain import ColoredSegment, distribute_colors
 from src.chains.context_manager import ContextManager
-from src.chains.translation_chain import (
-    create_translation_chain,
-    translate_with_progress,
-    translate_with_progress_async,
-)
+from src.chains.translation_chain import create_translation_chain, translate_with_progress
 from src.core.ppt_parser import PPTParser
 from src.core.ppt_writer import PPTWriter, _group_runs_by_format
 from src.services.models import (
@@ -33,7 +23,7 @@ from src.services.models import (
 )
 from src.utils.config import Settings, get_settings
 from src.utils.glossary_loader import GlossaryLoader
-from src.utils.helpers import chunk_paragraphs_by_tokens
+from src.utils.helpers import chunk_paragraphs
 from src.utils.language_detector import LanguageDetector
 from src.utils.repetition import build_repetition_plan, expand_translations
 
@@ -333,15 +323,13 @@ class TranslationService:
         """Estimate total prompt tokens for a single translation batch."""
         texts = str(batch.get("texts", ""))
         ppt_context = str(batch.get("ppt_context", ""))
-        batch_context = str(batch.get("batch_context", ""))
         glossary_terms = str(batch.get("glossary_terms", ""))
 
         token_estimate = (
             TranslationService._approximate_tokens(texts)
             + TranslationService._approximate_tokens(ppt_context)
-            + TranslationService._approximate_tokens(batch_context)
             + TranslationService._approximate_tokens(glossary_terms)
-            + 350  # instructions + response padding
+            + 200  # instructions + response padding
         )
 
         return max(1, token_estimate)
@@ -546,101 +534,8 @@ class TranslationService:
         )
         return result if result else None
 
-    @staticmethod
-    async def _fix_color_distributions_async(
-        paragraphs,
-        translated_texts: list[str],
-        provider: str,
-        model_name: str | None = None,
-    ) -> dict[int, list[ColoredSegment]] | None:
-        """Async color distribution pass for cancellable translation jobs."""
-        candidates: list[tuple[int, list[str], str]] = []
-
-        for idx, (para, translation) in enumerate(zip(paragraphs, translated_texts)):
-            if para.is_note:
-                continue
-            runs = list(para.paragraph.runs)
-            if len(runs) <= 1:
-                continue
-            groups = _group_runs_by_format(runs)
-            if len(groups) <= 1:
-                continue
-            group_texts = [
-                "".join(run.text for run in group) for group in groups
-            ]
-            candidates.append((idx, group_texts, translation))
-
-        if not candidates:
-            LOGGER.info("No multi-color paragraphs found; skipping color distribution.")
-            return None
-
-        LOGGER.info("Found %d multi-color paragraphs for color distribution.", len(candidates))
-
-        result: dict[int, list[ColoredSegment]] = {}
-        llm_candidates: list[tuple[int, list[str], str]] = []
-        rule_count = 0
-
-        for para_idx, group_texts, translation in candidates:
-            rule_result = TranslationService._try_rule_based_distribution(
-                group_texts, translation,
-            )
-            if rule_result is not None:
-                result[para_idx] = rule_result
-                rule_count += 1
-            else:
-                llm_candidates.append((para_idx, group_texts, translation))
-
-        if rule_count:
-            LOGGER.info("Rule-based color distribution resolved %d/%d paragraphs.", rule_count, len(candidates))
-
-        if not llm_candidates:
-            return result if result else None
-
-        original_groups = [c[1] for c in llm_candidates]
-        translations_for_dist = [c[2] for c in llm_candidates]
-
-        distributions = await distribute_colors_async(
-            original_groups, translations_for_dist,
-            provider=provider, model_name=model_name,
-        )
-
-        if distributions is None:
-            LOGGER.warning("Color distribution chain returned None; using fallback for all.")
-        else:
-            for (para_idx, group_texts, translation), dist in zip(llm_candidates, distributions):
-                if dist is None:
-                    continue
-                validated = _validate_colored_segments(
-                    segments=dist,
-                    translation=translation,
-                    num_groups=len(group_texts),
-                    para_idx=para_idx,
-                )
-                if validated is not None:
-                    result[para_idx] = validated
-
-        LOGGER.info(
-            "Color distribution validated %d/%d paragraphs.",
-            len(result), len(candidates),
-        )
-        return result if result else None
-
     def translate(self, request: TranslationRequest) -> TranslationResult:
-        """Translate a PowerPoint presentation synchronously.
-
-        This compatibility wrapper is intended for tests and legacy callers.
-        Async API paths should use :meth:`translate_async` so cancellation can
-        propagate into LangChain provider calls.
-        """
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return asyncio.run(self.translate_async(request))
-
-        raise RuntimeError("TranslationService.translate() cannot run inside an active event loop; use translate_async().")
-
-    async def translate_async(self, request: TranslationRequest) -> TranslationResult:
-        """Translate a PowerPoint presentation asynchronously.
+        """Translate a PowerPoint presentation.
 
         Args:
             request: Translation request containing the PPT file and options.
@@ -651,10 +546,7 @@ class TranslationService:
         start_time = time.time()
 
         try:
-            return await self._execute_translation_async(request, start_time)
-        except asyncio.CancelledError:
-            LOGGER.info("Translation task was cancelled.")
-            raise
+            return self._execute_translation(request, start_time)
         except Exception as exc:
             LOGGER.exception("Translation failed: %s", exc)
             return TranslationResult(
@@ -663,7 +555,7 @@ class TranslationService:
                 elapsed_seconds=time.time() - start_time,
             )
 
-    async def _execute_translation_async(
+    def _execute_translation(
         self, request: TranslationRequest, start_time: float
     ) -> TranslationResult:
         """Execute the translation workflow."""
@@ -678,11 +570,9 @@ class TranslationService:
 
         parser = PPTParser()
         request.ppt_file.seek(0)
-        paragraphs, presentation = await asyncio.to_thread(
-            parser.extract_paragraphs,
+        paragraphs, presentation = parser.extract_paragraphs(
             request.ppt_file, translate_notes=request.translate_notes
         )
-        await asyncio.sleep(0)
 
         if not paragraphs:
             return TranslationResult(
@@ -707,7 +597,6 @@ class TranslationService:
                 prepared_texts, glossary
             )
             glossary_terms = GlossaryLoader.format_glossary_terms(glossary)
-        await asyncio.sleep(0)
 
         # Phase 4: Handle repetitions
         repetition_plan = None
@@ -762,7 +651,6 @@ class TranslationService:
         if target_language == "Auto":
             target_language = detector.infer_target_language(source_language)
             LOGGER.info("Inferred target language: %s", target_language)
-        await asyncio.sleep(0)
 
         # Phase 6: Prepare batches
         self._notify_progress(
@@ -775,31 +663,18 @@ class TranslationService:
 
         batch_size = self._determine_batch_size(len(target_paragraphs))
 
-        batch_max_tokens = int(getattr(self._settings, "batch_max_tokens", 6000))
-        batches = chunk_paragraphs_by_tokens(
+        batches = chunk_paragraphs(
             target_paragraphs,
-            max_items=batch_size,
-            max_tokens=batch_max_tokens,
+            batch_size=batch_size,
             ppt_context=ppt_context,
             glossary_terms=glossary_terms,
             prepared_texts=target_prepared_texts,
         )
-        batch_context_manager = ContextManager(target_paragraphs)
-        for batch in batches:
-            start_index = max(0, int(batch.get("start_idx", 1)) - 1)
-            end_index = max(start_index + 1, int(batch.get("end_idx", start_index + 1)))
-            batch["batch_context"] = batch_context_manager.build_batch_context(
-                start_index,
-                end_index,
-                window=2,
-                max_chars=1200,
-            )
 
         LOGGER.info(
-            "Prepared %d batches (max items %d, max tokens %d, unique paragraphs %d of %d total).",
+            "Prepared %d batches (batch size %d, unique paragraphs %d of %d total).",
             len(batches),
             batch_size,
-            batch_max_tokens,
             len(target_paragraphs),
             total_paragraphs,
         )
@@ -864,13 +739,12 @@ class TranslationService:
             request.model,
         )
 
-        translated_unique = await translate_with_progress_async(
+        translated_unique = translate_with_progress(
             chain,
             batches,
             progress_tracker,
             max_concurrency=safe_concurrency,
         )
-        await asyncio.sleep(0)
 
         # Phase 8: Expand repetitions
         if repetition_plan is not None:
@@ -897,7 +771,7 @@ class TranslationService:
                 message="다색 문단 서식 분석 중...",
             )
         )
-        color_distributions = await self._fix_color_distributions_async(
+        color_distributions = self._fix_color_distributions(
             paragraphs, translated_texts, request.provider,
             model_name=self._color_distribution_model(request.provider, request.model),
         )
@@ -928,20 +802,14 @@ class TranslationService:
         )
 
         writer = PPTWriter()
-        output = await asyncio.to_thread(
-            writer.apply_translations,
+        output_buffer = writer.apply_translations(
             paragraphs,
             translated_texts,
             presentation,
             text_fit_mode=request.text_fit_mode.value,
             min_font_ratio=request.min_font_ratio,
             color_distributions=color_distributions,
-            output_path=request.output_path,
         )
-        await asyncio.sleep(0)
-
-        output_buffer = output if isinstance(output, io.BytesIO) else None
-        output_path = Path(output) if output is not None and not isinstance(output, io.BytesIO) else None
 
         elapsed = progress_tracker.finish()
 
@@ -963,7 +831,6 @@ class TranslationService:
         return TranslationResult(
             success=True,
             output_file=output_buffer,
-            output_path=output_path,
             source_language_detected=source_language,
             target_language_used=target_language,
             total_paragraphs=total_paragraphs,

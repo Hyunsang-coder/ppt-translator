@@ -17,7 +17,6 @@ PPT 번역캣 — Tauri desktop app for PowerPoint translation (LangChain + Open
 uvicorn api:app --reload --port 8000
 pytest tests/ -v                    # all tests
 pytest tests/ -v -m slow            # slow tests (API calls)
-python scripts/verify_color_matching.py --iterations 3  # live color matching smoke test
 
 # Frontend
 cd frontend && npm install

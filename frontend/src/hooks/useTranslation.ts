@@ -7,13 +7,11 @@ import { apiClient } from "@/lib/api-client";
 import { saveBlob } from "@/lib/save-file";
 import { createSSEClient, SSEClient } from "@/lib/sse-client";
 import { useTranslationStore } from "@/stores/translation-store";
-import { useExtractionStore } from "@/stores/extraction-store";
-import { getFileKey, useSharedFileStore } from "@/stores/shared-file-store";
 import type { JobProgress, SSEEvent } from "@/types/api";
 
 export function useTranslation() {
-  const { pptFile, setPptFile: setSharedPptFile } = useSharedFileStore();
   const {
+    pptFile,
     glossaryFile,
     settings,
     jobId,
@@ -22,6 +20,7 @@ export function useTranslation() {
     errorMessage,
     resultFilename,
     logs,
+    setPptFile,
     setGlossaryFile,
     updateSettings,
     setJobId,
@@ -31,7 +30,6 @@ export function useTranslation() {
     setResultFilename,
     addLog,
     clearLogs,
-    resetForPptFileChange,
     resetJobState,
     reset,
   } = useTranslationStore();
@@ -194,25 +192,14 @@ export function useTranslation() {
     await startTranslation();
   }, [resetJobState, startTranslation]);
 
-  // Wrap setPptFile so translation/extraction state follows the shared file.
   const handleSetPptFile = useCallback((file: File | null) => {
-    const currentFileKey = getFileKey(useSharedFileStore.getState().pptFile);
-    const nextFileKey = getFileKey(file);
-    if (currentFileKey === nextFileKey) {
-      return;
-    }
-
-    setSharedPptFile(file);
-    resetForPptFileChange();
-    useExtractionStore.getState().resetForPptFileChange();
-  }, [resetForPptFileChange, setSharedPptFile]);
+    setPptFile(file);
+  }, [setPptFile]);
 
   const resetTranslation = useCallback(() => {
     sseClientRef.current?.close();
-    setSharedPptFile(null);
-    useExtractionStore.getState().resetForPptFileChange();
     reset();
-  }, [reset, setSharedPptFile]);
+  }, [reset]);
 
   return {
     // State

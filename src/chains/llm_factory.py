@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-import hashlib
-import threading
 from typing import Literal, Optional
 
 from dotenv import load_dotenv
@@ -20,8 +18,6 @@ load_dotenv()
 LOGGER = logging.getLogger(__name__)
 
 Provider = Literal["openai", "anthropic"]
-_RATE_LIMITERS: dict[tuple[str, str], InMemoryRateLimiter] = {}
-_RATE_LIMITER_LOCK = threading.Lock()
 
 
 def create_rate_limiter() -> InMemoryRateLimiter:
@@ -36,25 +32,6 @@ def create_rate_limiter() -> InMemoryRateLimiter:
         check_every_n_seconds=settings.rate_limit_check_interval,
         max_bucket_size=settings.rate_limit_max_bucket_size,
     )
-
-
-def _rate_limiter_key(provider: Provider, api_key: Optional[str]) -> tuple[str, str]:
-    """Build a stable non-secret key for provider/API-key scoped limiting."""
-    key_material = api_key or "<missing>"
-    fingerprint = hashlib.sha256(key_material.encode("utf-8")).hexdigest()
-    return provider, fingerprint
-
-
-def get_shared_rate_limiter(provider: Provider, api_key: Optional[str]) -> InMemoryRateLimiter:
-    """Return a process-wide limiter shared by provider and API key."""
-    key = _rate_limiter_key(provider, api_key)
-    with _RATE_LIMITER_LOCK:
-        limiter = _RATE_LIMITERS.get(key)
-        if limiter is None:
-            limiter = create_rate_limiter()
-            _RATE_LIMITERS[key] = limiter
-        return limiter
-
 
 def get_models_for_provider(provider: Provider) -> list[str]:
     """Return available models for the given provider.
@@ -96,15 +73,12 @@ def create_llm(
     Raises:
         ValueError: If the provider is not supported.
     """
+    _rate_limiter = rate_limiter if rate_limiter is not None else create_rate_limiter()
+
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
 
         key = api_key or os.getenv("ANTHROPIC_API_KEY")
-        _rate_limiter = (
-            rate_limiter
-            if rate_limiter is not None
-            else get_shared_rate_limiter(provider, key)
-        )
         LOGGER.debug("Creating ChatAnthropic with model=%s, max_tokens=%d", model_name, max_tokens)
         kwargs: dict = dict(
             model=model_name,
@@ -120,11 +94,6 @@ def create_llm(
         from langchain_openai import ChatOpenAI
 
         key = api_key or os.getenv("OPENAI_API_KEY")
-        _rate_limiter = (
-            rate_limiter
-            if rate_limiter is not None
-            else get_shared_rate_limiter(provider, key)
-        )
         LOGGER.debug("Creating ChatOpenAI with model=%s", model_name)
         kwargs: dict = dict(
             model=model_name,

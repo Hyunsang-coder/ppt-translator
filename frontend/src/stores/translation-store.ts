@@ -22,6 +22,7 @@ export type TranslationStatus =
 
 interface TranslationState {
   // File state
+  pptFile: File | null;
   glossaryFile: File | null;
 
   // Settings
@@ -40,6 +41,7 @@ interface TranslationState {
   logs: LogEntry[];
 
   // Actions
+  setPptFile: (file: File | null) => void;
   setGlossaryFile: (file: File | null) => void;
   updateSettings: (settings: Partial<TranslationSettings>) => void;
   setJobId: (jobId: string | null) => void;
@@ -49,7 +51,6 @@ interface TranslationState {
   setResultFilename: (filename: string | null) => void;
   addLog: (message: string, type?: LogEntry["type"]) => void;
   clearLogs: () => void;
-  resetForPptFileChange: () => void;
   resetJobState: () => void;
   reset: () => void;
 }
@@ -82,6 +83,7 @@ const MAX_LOGS = 400;
 
 export const useTranslationStore = create<TranslationState>((set) => ({
   // Initial state
+  pptFile: null,
   glossaryFile: null,
   settings: DEFAULT_SETTINGS,
   jobId: null,
@@ -92,6 +94,21 @@ export const useTranslationStore = create<TranslationState>((set) => ({
   logs: [],
 
   // Actions
+  setPptFile: (file) =>
+    set((state) => ({
+      pptFile: file,
+      ...(file !== state.pptFile
+        ? {
+            jobId: null,
+            status: "idle" as const,
+            progress: null,
+            errorMessage: null,
+            resultFilename: null,
+            logs: [],
+          }
+        : {}),
+    })),
+
   setGlossaryFile: (file) => set({ glossaryFile: file }),
 
   updateSettings: (newSettings) =>
@@ -120,16 +137,6 @@ export const useTranslationStore = create<TranslationState>((set) => ({
 
   clearLogs: () => set({ logs: [] }),
 
-  resetForPptFileChange: () =>
-    set({
-      jobId: null,
-      status: "idle",
-      progress: null,
-      errorMessage: null,
-      resultFilename: null,
-      logs: [],
-    }),
-
   resetJobState: () =>
     set({
       jobId: null,
@@ -142,6 +149,7 @@ export const useTranslationStore = create<TranslationState>((set) => ({
 
   reset: () =>
     set({
+      pptFile: null,
       glossaryFile: null,
       jobId: null,
       status: "idle",

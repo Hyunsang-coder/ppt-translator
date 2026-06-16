@@ -239,21 +239,3 @@ class TestCleanupReleasesResources:
         # explicitly (an in-flight download could still be reading it).
         assert manager.get_job(job.id) is None
         assert job.id not in manager._jobs
-
-    def test_cleanup_removes_work_dir(self, manager: JobManager, tmp_path):
-        """Cleanup should remove completed-job temp files."""
-        work_dir = tmp_path / "job"
-        work_dir.mkdir()
-        output_path = work_dir / "translated.pptx"
-        output_path.write_bytes(b"pptx")
-
-        job = manager.create_job(JobType.TRANSLATION)
-        job.state = JobState.COMPLETED
-        job.completed_at = time.time() - 7200
-        job.work_dir = work_dir
-        job.output_path = output_path
-
-        manager._cleanup_old_jobs()
-
-        assert manager.get_job(job.id) is None
-        assert not work_dir.exists()

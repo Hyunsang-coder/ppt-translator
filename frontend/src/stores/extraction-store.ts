@@ -8,6 +8,9 @@ import type { ExtractionSettings } from "@/types/api";
 export type ExtractionStatus = "idle" | "extracting" | "completed" | "failed";
 
 interface ExtractionState {
+  // File state
+  pptFile: File | null;
+
   // Settings
   settings: ExtractionSettings;
 
@@ -20,11 +23,11 @@ interface ExtractionState {
   slideCount: number | null;
 
   // Actions
+  setPptFile: (file: File | null) => void;
   updateSettings: (settings: Partial<ExtractionSettings>) => void;
   setStatus: (status: ExtractionStatus) => void;
   setErrorMessage: (message: string | null) => void;
   setResult: (markdown: string, slideCount: number) => void;
-  resetForPptFileChange: () => void;
   reset: () => void;
 }
 
@@ -37,6 +40,7 @@ const DEFAULT_SETTINGS: ExtractionSettings = {
 
 export const useExtractionStore = create<ExtractionState>((set) => ({
   // Initial state
+  pptFile: null,
   settings: DEFAULT_SETTINGS,
   status: "idle",
   errorMessage: null,
@@ -44,6 +48,8 @@ export const useExtractionStore = create<ExtractionState>((set) => ({
   slideCount: null,
 
   // Actions
+  setPptFile: (file) => set({ pptFile: file }),
+
   updateSettings: (newSettings) =>
     set((state) => ({
       settings: { ...state.settings, ...newSettings },
@@ -59,16 +65,9 @@ export const useExtractionStore = create<ExtractionState>((set) => ({
       status: "completed",
     }),
 
-  resetForPptFileChange: () =>
-    set({
-      status: "idle",
-      errorMessage: null,
-      markdown: null,
-      slideCount: null,
-    }),
-
   reset: () =>
     set({
+      pptFile: null,
       status: "idle",
       errorMessage: null,
       markdown: null,

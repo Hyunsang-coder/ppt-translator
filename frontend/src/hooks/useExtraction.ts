@@ -6,24 +6,22 @@ import { useCallback, useEffect, useRef } from "react";
 import { apiClient } from "@/lib/api-client";
 import { saveBlob } from "@/lib/save-file";
 import { useExtractionStore } from "@/stores/extraction-store";
-import { useTranslationStore } from "@/stores/translation-store";
-import { getFileKey, useSharedFileStore } from "@/stores/shared-file-store";
 
 const EXTRACTION_TIMEOUT_MS = 5 * 60 * 1000;
 
 export function useExtraction() {
-  const { pptFile, setPptFile: setSharedPptFile } = useSharedFileStore();
   const {
+    pptFile,
     settings,
     status,
     errorMessage,
     markdown,
     slideCount,
+    setPptFile,
     updateSettings,
     setStatus,
     setErrorMessage,
     setResult,
-    resetForPptFileChange,
     reset,
   } = useExtractionStore();
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -88,18 +86,6 @@ export function useExtraction() {
     const filename = `${pptFile.name.replace(/\.[^/.]+$/, "")}.md`;
     void saveBlob(blob, filename);
   }, [markdown, pptFile]);
-
-  const setPptFile = useCallback((file: File | null) => {
-    const currentFileKey = getFileKey(useSharedFileStore.getState().pptFile);
-    const nextFileKey = getFileKey(file);
-    if (currentFileKey === nextFileKey) {
-      return;
-    }
-
-    setSharedPptFile(file);
-    resetForPptFileChange();
-    useTranslationStore.getState().resetForPptFileChange();
-  }, [resetForPptFileChange, setSharedPptFile]);
 
   return {
     // State

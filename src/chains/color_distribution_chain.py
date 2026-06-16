@@ -47,9 +47,6 @@ COLOR_DISTRIBUTION_PROMPT = """원본 텍스트의 서식 구간별 텍스트와
 입력: 원본 구간(2개): [[0]"Total: " | [1]"$1,500"], 번역: "합계: $1,500"
 출력: [{{"text": "합계: ", "group_index": 0}}, {{"text": "$1,500", "group_index": 1}}]
 
-입력: 원본 구간(2개): [[0]"strongly " | [1]"recommend this approach"], 번역: "이 접근 방식을 강력히 추천합니다"
-출력: [{{"text": "이 접근 방식을 ", "group_index": 1}}, {{"text": "강력히", "group_index": 0}}, {{"text": " 추천합니다", "group_index": 1}}]
-
 지금 분배할 항목:
 {items}
 
@@ -58,7 +55,6 @@ COLOR_DISTRIBUTION_PROMPT = """원본 텍스트의 서식 구간별 텍스트와
 - 세그먼트 순서는 번역문의 어순을 따르세요 (원본과 달라도 됩니다).
 - 모든 세그먼트의 text를 이어 붙이면 번역 텍스트와 정확히 동일해야 합니다. 공백 하나도 빠지면 안 됩니다.
 - 원본 각 구간의 의미에 대응하는 번역 부분을 해당 group_index에 배치하세요.
-- 강조 단어, 부사, 링크 텍스트처럼 짧은 원본 구간은 번역 후 위치가 바뀌어도 의미가 대응하는 번역어에 같은 group_index를 배치하세요.
 - 대응하는 의미가 없는 구간은 빈 문자열("")로 채우세요.
 - 숫자, 기호, 고유명사 등 번역 후에도 동일한 텍스트는 반드시 해당 원본 구간에 배치하세요."""
 
@@ -102,22 +98,6 @@ def _invoke_batch(
         return result.distributions
     except Exception:
         LOGGER.exception("Color distribution chain failed for batch of %d", len(original_groups))
-        return None
-
-
-async def _ainvoke_batch(
-    chain,
-    original_groups: list[list[str]],
-    translated_texts: list[str],
-) -> list[list[ColoredSegment]] | None:
-    """Invoke a prebuilt chain asynchronously for a single batch."""
-    items_str = _format_items(original_groups, translated_texts)
-
-    try:
-        result: ColorDistributionOutput = await chain.ainvoke({"items": items_str})
-        return result.distributions
-    except Exception:
-        LOGGER.exception("Async color distribution chain failed for batch of %d", len(original_groups))
         return None
 
 
@@ -177,64 +157,6 @@ def distribute_colors(
         batch_texts = translated_texts[start:end]
 
         batch_result = _invoke_batch(chain, batch_groups, batch_texts)
-
-        if batch_result is not None and len(batch_result) == len(batch_groups):
-            for i, dist in enumerate(batch_result):
-                all_distributions[start + i] = dist
-            any_success = True
-        else:
-            LOGGER.warning(
-                "Color distribution batch [%d:%d] failed or returned wrong count "
-                "(expected %d, got %s). These paragraphs will use fallback.",
-                start, end, len(batch_groups),
-                len(batch_result) if batch_result else "None",
-            )
-
-    if not any_success:
-        return None
-
-    return all_distributions
-
-
-async def distribute_colors_async(
-    original_groups: list[list[str]],
-    translated_texts: list[str],
-    provider: Provider = "openai",
-    model_name: str | None = None,
-) -> list[list[ColoredSegment]] | None:
-    """Async variant of :func:`distribute_colors` for cancellable jobs."""
-    if not original_groups:
-        return None
-
-    total = len(original_groups)
-    LOGGER.info(
-        "Distributing colors asynchronously for %d paragraphs with provider=%s, model=%s (batch_size=%d)",
-        total,
-        provider,
-        model_name,
-        _BATCH_SIZE,
-    )
-
-    llm = create_llm(
-        provider=provider,
-        model_name=model_name,
-        max_tokens=4096,
-        temperature=0,
-    )
-    chain = (
-        PromptTemplate(input_variables=["items"], template=COLOR_DISTRIBUTION_PROMPT)
-        | llm.with_structured_output(ColorDistributionOutput)
-    )
-
-    all_distributions: list[list[ColoredSegment] | None] = [None] * total
-    any_success = False
-
-    for start in range(0, total, _BATCH_SIZE):
-        end = min(start + _BATCH_SIZE, total)
-        batch_groups = original_groups[start:end]
-        batch_texts = translated_texts[start:end]
-
-        batch_result = await _ainvoke_batch(chain, batch_groups, batch_texts)
 
         if batch_result is not None and len(batch_result) == len(batch_groups):
             for i, dist in enumerate(batch_result):

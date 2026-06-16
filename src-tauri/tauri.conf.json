@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "PPT 번역캣",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "identifier": "com.ppttranslator.desktop",
   "build": {
     "frontendDist": "../frontend/out",

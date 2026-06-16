@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import io
 import logging
-from pathlib import Path
 from typing import Iterable, List
 
 from lxml import etree
@@ -400,9 +399,8 @@ class PPTWriter:
         text_fit_mode: str = "none",
         min_font_ratio: int = 80,
         color_distributions: dict[int, list[str]] | None = None,
-        output_path: str | Path | None = None,
-    ) -> io.BytesIO | Path:
-        """Apply translated paragraphs and return or save the updated PPT.
+    ) -> io.BytesIO:
+        """Apply translated paragraphs and return the updated PPT as bytes.
 
         Args:
             paragraphs: Iterable of :class:`ParagraphInfo` objects sharing paragraph references.
@@ -412,11 +410,9 @@ class PPTWriter:
             min_font_ratio: Minimum font size as percentage of original (50-100).
             color_distributions: Optional mapping from paragraph index to list of
                 text segments for each format group. Used for multi-color paragraphs.
-            output_path: Optional filesystem path. When provided, the PPTX is
-                saved directly there instead of being buffered in memory.
 
         Returns:
-            BytesIO buffer containing the updated PPTX file, or the saved path.
+            BytesIO buffer containing the updated PPTX file.
         """
 
         translation_list: List[str] = list(translations)
@@ -550,13 +546,6 @@ class PPTWriter:
                 "Text fitting applied to %d text frames (mode=%s, min_ratio=%d%%).",
                 fit_adjusted_count, text_fit_mode, min_font_ratio,
             )
-
-        if output_path is not None:
-            path = Path(output_path)
-            LOGGER.info("Saving translated presentation to %s...", path)
-            presentation.save(path)
-            LOGGER.info("Applied %d translated paragraphs to presentation.", len(translation_list))
-            return path
 
         LOGGER.info("Saving translated presentation to buffer...")
         buffer = io.BytesIO()

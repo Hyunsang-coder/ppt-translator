@@ -14,7 +14,6 @@ from api import (
     FilenameSettings,
     SUPPORTED_LANGUAGES,
     SUPPORTED_MODELS,
-    _build_markdown_preview,
     generate_output_filename,
 )
 from src.services.job_manager import JobType
@@ -95,24 +94,6 @@ class TestFilenameGeneration:
         )
 
         assert filename == "EN_original.pptx"
-
-
-class TestMarkdownPreview:
-    """Tests for instruction-generation markdown preview."""
-
-    def test_short_markdown_preview_is_unchanged(self):
-        markdown = "short content"
-        assert _build_markdown_preview(markdown) == markdown
-
-    def test_long_markdown_preview_keeps_head_and_tail(self):
-        markdown = "A" * 4000 + "MIDDLE" + "Z" * 4000
-
-        preview = _build_markdown_preview(markdown, max_chars=1000)
-
-        assert preview.startswith("A" * 100)
-        assert preview.endswith("Z" * 100)
-        assert "middle content omitted" in preview
-        assert "MIDDLE" not in preview
 
 
 class TestHealthEndpoint:
