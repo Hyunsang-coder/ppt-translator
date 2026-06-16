@@ -80,3 +80,18 @@ class TestDetermineBatchSize:
         service = _make_service()
         result = service._determine_batch_size(10000)
         assert 60 <= result <= 100  # within configured bounds
+
+    def test_high_target_batch_count_can_request_smaller_batches(self):
+        """A high target_batch_count should be honored down to min_batch_size."""
+        service = _make_service(
+            batch_size=80,
+            min_batch_size=10,
+            max_batch_size=100,
+            max_concurrency=2,
+            wave_multiplier=1.0,
+            target_batch_count=20,
+        )
+
+        result = service._determine_batch_size(1000)
+
+        assert result == 50

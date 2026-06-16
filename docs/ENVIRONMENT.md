@@ -15,16 +15,18 @@ OPENAI_API_KEY=         # Injected by Tauri, or .env for local API dev
 ANTHROPIC_API_KEY=      # Injected by Tauri, or .env for local API dev
 CORS_ALLOWED_ORIGINS=   # Comma-separated (default: http://localhost:3000,http://127.0.0.1:3000)
 CORS_ALLOW_ALL=1        # Set by Tauri for loopback-only desktop sidecar
+MAX_UPLOAD_SIZE_MB=1024 # Max uploaded PPT/PPTX size
 ```
 
 ### Tuning Variables
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `MAX_UPLOAD_SIZE_MB` | 1024 | Max uploaded PPT/PPTX size |
 | `TRANSLATION_MAX_CONCURRENCY` | 8 | Max concurrent API calls |
 | `TRANSLATION_BATCH_SIZE` | 80 | Default batch size |
 | `TRANSLATION_MIN_BATCH_SIZE` | 60 | Min batch size |
 | `TRANSLATION_MAX_BATCH_SIZE` | 100 | Max batch size |
-| `TRANSLATION_TARGET_BATCH_COUNT` | 5 | Target number of batches |
+| `TRANSLATION_TARGET_BATCH_COUNT` | 5 | Minimum target number of translation batches |
 | `TRANSLATION_WAVE_MULTIPLIER` | 1.2 | Concurrency wave multiplier |
 | `TRANSLATION_TPM_LIMIT` | 30000 | Tokens per minute limit |
 | `TRANSLATION_MAX_RUNNING_JOBS` | 2 | Max concurrent running jobs |

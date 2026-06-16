@@ -31,18 +31,20 @@ CARGO_TARGET_DIR=~/_NOAV/cargo-target cargo install tauri-cli --version "^2.0.0"
 ## Build
 
 ```bash
-# 1. Build + stage the Python sidecar
-./desktop/build-sidecar.sh
-
-# 2. Dev run (hot-reload frontend, spawns sidecar)
+# Dev run (auto-stages sidecar when missing/stale, hot-reload frontend)
 cd src-tauri && CARGO_TARGET_DIR=~/_NOAV/cargo-target cargo tauri dev
 
-# 3. Production bundle (.app/.dmg on macOS, .msi/.exe on Windows)
+# Production bundle (.app/.dmg on macOS, .msi/.exe on Windows)
 TAURI_BUILD=1 CARGO_TARGET_DIR=~/_NOAV/cargo-target cargo tauri build
 ```
 
 `TAURI_BUILD=1` switches the Next.js build to static export (`output: 'export'`)
 into `frontend/out`, which Tauri bundles as the frontend.
+
+Tauri's `beforeDevCommand` runs `desktop/ensure-sidecar.sh`, so normal dev only
+needs `cargo tauri dev`. The script rebuilds the sidecar only when it is missing
+or backend/sidecar files are newer than the staged executable. Production builds
+force a fresh sidecar stage before packaging.
 
 ## Cross-platform note
 

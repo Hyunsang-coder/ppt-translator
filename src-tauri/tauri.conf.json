@@ -7,12 +7,12 @@
     "frontendDist": "../frontend/out",
     "devUrl": "http://localhost:3000",
     "beforeDevCommand": {
-      "cwd": "../frontend",
-      "script": "npm run dev"
+      "cwd": "..",
+      "script": "./desktop/ensure-sidecar.sh && cd frontend && npm run dev"
     },
     "beforeBuildCommand": {
-      "cwd": "../frontend",
-      "script": "npm run build"
+      "cwd": "..",
+      "script": "./desktop/ensure-sidecar.sh --force && cd frontend && npm run build"
     }
   },
   "app": {

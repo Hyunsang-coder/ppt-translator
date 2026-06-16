@@ -9,6 +9,7 @@ from src.chains.translation_chain import (
     TranslationOutput,
     _batch_translate_with_retry,
     _force_match_expected,
+    translate_with_progress,
 )
 from src.utils.glossary_loader import GlossaryLoader
 from src.utils.helpers import chunk_paragraphs, split_text_into_segments
@@ -83,6 +84,52 @@ class BatchRetryTestCase(unittest.TestCase):
         self.assertEqual([r.translations for r in results], [["b0"], ["b1"]])
         # First attempt submitted 2 batches, retry submitted only 1.
         self.assertEqual(submitted_sizes, [2, 1])
+
+    def test_count_mismatch_retries_single_batch(self) -> None:
+        batches = [
+            {
+                "paragraphs": [_fake_paragraph("a"), _fake_paragraph("b")],
+                "start_idx": 1,
+                "end_idx": 2,
+            }
+        ]
+
+        class FakeChain:
+            def __init__(self):
+                self.invoke_calls = 0
+
+            def batch_as_completed(self, submitted, config=None):
+                yield (0, TranslationOutput(translations=["하나만"]))
+
+            def invoke(self, batch, config=None):
+                self.invoke_calls += 1
+                return TranslationOutput(translations=["하나", "둘"])
+
+        chain = FakeChain()
+        result = translate_with_progress(chain, batches, max_concurrency=1)
+
+        self.assertEqual(result, ["하나", "둘"])
+        self.assertEqual(chain.invoke_calls, 1)
+
+    def test_count_mismatch_retry_falls_back_to_originals(self) -> None:
+        batches = [
+            {
+                "paragraphs": [_fake_paragraph("a"), _fake_paragraph("b")],
+                "start_idx": 1,
+                "end_idx": 2,
+            }
+        ]
+
+        class FakeChain:
+            def batch_as_completed(self, submitted, config=None):
+                yield (0, TranslationOutput(translations=["하나만"]))
+
+            def invoke(self, batch, config=None):
+                return TranslationOutput(translations=["아직 하나만"])
+
+        result = translate_with_progress(FakeChain(), batches, max_concurrency=1)
+
+        self.assertEqual(result, ["하나만", "b"])
 
 
 class ForceMatchExpectedTestCase(unittest.TestCase):

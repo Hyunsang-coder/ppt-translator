@@ -18,7 +18,7 @@ interface FileUploaderProps {
 
 export function FileUploader({
   accept,
-  maxSizeMB = 200,
+  maxSizeMB = 1024,
   onFileSelect,
   selectedFile,
   label,
@@ -54,6 +54,7 @@ export function FileUploader({
     onDrop,
     accept,
     maxFiles: 1,
+    noDrag: true,
     disabled,
   });
 
@@ -134,7 +135,7 @@ export function FileUploader({
               </div>
               <div className="text-left">
                 <p className={`text-sm font-medium transition-colors ${isDragActive ? "text-primary" : ""}`}>
-                  {isDragActive ? "파일을 여기에 놓으세요" : "클릭 또는 드래그"}
+                  {isDragActive ? "파일을 선택하려면 클릭하세요" : "클릭해서 파일 선택"}
                 </p>
                 {description && (
                   <p className="text-xs text-muted-foreground">{description}</p>

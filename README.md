@@ -47,16 +47,14 @@ npm install
 ## 실행 방법
 
 ```bash
-# 1. Python sidecar 빌드 및 Tauri 리소스 스테이징
-./desktop/build-sidecar.sh
-
-# 2. 데스크톱 앱 개발 실행
+# 데스크톱 앱 개발 실행
 cd src-tauri
 cargo tauri dev
 ```
 
-Tauri 개발 실행은 `frontend` 개발 서버를 자동으로 띄우고, Rust 셸이
-sidecar 포트를 WebView에 전달합니다.
+Tauri 개발 실행은 Python sidecar가 없거나 오래된 경우 자동으로 빌드하고,
+`frontend` 개발 서버도 자동으로 띄웁니다. Rust 셸이 sidecar 포트를 WebView에
+전달합니다.
 
 ## 용어집 파일 형식
 
@@ -84,5 +82,5 @@ cd frontend && npx tsc --noEmit && npm run build
 
 ## 배포
 
-- **Desktop**: `TAURI_BUILD=1 cargo tauri build`
+- **Desktop**: `cd src-tauri && TAURI_BUILD=1 cargo tauri build`
 - **Vercel**: 데스크톱 앱 다운로드 안내용 루트 페이지만 배포

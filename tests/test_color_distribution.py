@@ -837,5 +837,27 @@ class DistributeColorsBatchingTestCase(unittest.TestCase):
         self.assertIsNone(result)
 
 
+class ColorDistributionModelSelectionTestCase(unittest.TestCase):
+    def test_uses_lightweight_model_for_known_provider(self) -> None:
+        from src.services.translation_service import TranslationService
+
+        model = TranslationService._color_distribution_model(
+            "anthropic",
+            "claude-opus-4-8",
+        )
+
+        self.assertEqual(model, "claude-haiku-4-5-20251001")
+
+    def test_unknown_provider_keeps_fallback_model(self) -> None:
+        from src.services.translation_service import TranslationService
+
+        model = TranslationService._color_distribution_model(
+            "custom",
+            "custom-model",
+        )
+
+        self.assertEqual(model, "custom-model")
+
+
 if __name__ == "__main__":
     unittest.main()

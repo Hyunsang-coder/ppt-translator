@@ -14,6 +14,7 @@ from src.chains.translation_chain import create_translation_chain, translate_wit
 from src.core.ppt_parser import PPTParser
 from src.core.ppt_writer import PPTWriter, _group_runs_by_format
 from src.services.models import (
+    DEFAULT_LIGHT_MODEL,
     ProgressCallback,
     TranslationProgress,
     TranslationRequest,
@@ -353,9 +354,14 @@ class TranslationService:
         wave_multiplier = float(getattr(settings, "wave_multiplier", 1.2) or 1.2)
         wave_multiplier = max(1.0, wave_multiplier)
 
-        target_batches = max(
+        configured_target_batches = max(
+            1,
+            int(getattr(settings, "target_batch_count", 1) or 1),
+        )
+        baseline_target_batches = max(
             concurrency, int(math.ceil(concurrency * wave_multiplier * 2))
         )
+        target_batches = max(configured_target_batches, baseline_target_batches)
         suggested_size = (
             math.ceil(total_paragraphs / target_batches)
             if target_batches > 0
@@ -363,7 +369,9 @@ class TranslationService:
         )
 
         batch_size = max(min_size, min(max_size, suggested_size))
-        if batch_size < default_size:
+        # Keep legacy defaults stable, but allow an explicitly higher
+        # target_batch_count to request smaller batches down to min_size.
+        if configured_target_batches <= baseline_target_batches and batch_size < default_size:
             batch_size = max(batch_size, min(default_size, max_size))
 
         actual_batches = max(1, math.ceil(total_paragraphs / batch_size))
@@ -424,6 +432,12 @@ class TranslationService:
         return None
 
     @staticmethod
+    def _color_distribution_model(provider: str, fallback_model: str) -> str:
+        """Use a lightweight model for color-distribution post-processing."""
+
+        return DEFAULT_LIGHT_MODEL.get(provider, fallback_model)
+
+    @staticmethod
     def _fix_color_distributions(
         paragraphs,
         translated_texts: list[str],
@@ -441,7 +455,7 @@ class TranslationService:
             paragraphs: List of ParagraphInfo objects.
             translated_texts: Translated text for each paragraph.
             provider: LLM provider ("openai" or "anthropic").
-            model_name: Model to use. Uses the same model as main translation.
+            model_name: Model to use for color distribution.
 
         Returns:
             Mapping from paragraph index to list of ColoredSegment, or None if
@@ -759,7 +773,7 @@ class TranslationService:
         )
         color_distributions = self._fix_color_distributions(
             paragraphs, translated_texts, request.provider,
-            model_name=request.model,
+            model_name=self._color_distribution_model(request.provider, request.model),
         )
         if color_distributions:
             self._notify_progress(

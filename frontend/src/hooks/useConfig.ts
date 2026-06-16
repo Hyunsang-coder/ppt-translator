@@ -6,6 +6,8 @@ import { useEffect, useState } from "react";
 import { apiClient } from "@/lib/api-client";
 import type { ConfigResponse, LanguageInfo, ModelInfo } from "@/types/api";
 
+const DEFAULT_MAX_UPLOAD_SIZE_MB = 1024;
+
 // Fallback data when backend is unavailable
 const FALLBACK_MODELS: ModelInfo[] = [
   { id: "gpt-5.5-2026-04-23", name: "GPT-5.5", provider: "openai" },
@@ -27,11 +29,21 @@ const FALLBACK_LANGUAGES: LanguageInfo[] = [
 ];
 
 const FALLBACK_CONFIG: ConfigResponse = {
-  max_upload_size_mb: 200,
+  max_upload_size_mb: DEFAULT_MAX_UPLOAD_SIZE_MB,
   providers: ["openai", "anthropic"],
   default_provider: "anthropic",
   default_model: "claude-sonnet-4-6",
 };
+
+function normalizeConfig(config: ConfigResponse): ConfigResponse {
+  return {
+    ...config,
+    max_upload_size_mb: Math.max(
+      config.max_upload_size_mb || DEFAULT_MAX_UPLOAD_SIZE_MB,
+      DEFAULT_MAX_UPLOAD_SIZE_MB
+    ),
+  };
+}
 
 interface ConfigState {
   models: ModelInfo[];
@@ -70,7 +82,7 @@ export function useConfig() {
           setState({
             models: hasBackendData ? models : FALLBACK_MODELS,
             languages: hasBackendData ? languages : FALLBACK_LANGUAGES,
-            config: hasBackendData ? config : FALLBACK_CONFIG,
+            config: hasBackendData ? normalizeConfig(config) : FALLBACK_CONFIG,
             isLoading: false,
             error: null,
             isBackendConnected: hasBackendData,

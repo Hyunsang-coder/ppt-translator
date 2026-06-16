@@ -193,8 +193,30 @@ def translate_with_progress(
                 len(parts),
                 expected_count,
             )
-            originals = [p.original_text for p in batch.get("paragraphs", [])]
-            parts = _force_match_expected(parts, expected_count, originals)
+            retry_result = _retry_count_mismatch_batch(
+                chain=chain,
+                batch=batch,
+                config=config,
+                batch_index=index,
+                expected_count=expected_count,
+            )
+            if retry_result is not None and len(retry_result.translations) == expected_count:
+                parts = retry_result.translations
+            else:
+                if retry_result is not None:
+                    LOGGER.error(
+                        "Batch %d: retry still returned %d translations; "
+                        "falling back to safe padding/trimming.",
+                        index,
+                        len(retry_result.translations),
+                    )
+                else:
+                    LOGGER.error(
+                        "Batch %d: retry failed; falling back to safe padding/trimming.",
+                        index,
+                    )
+                originals = [p.original_text for p in batch.get("paragraphs", [])]
+                parts = _force_match_expected(parts, expected_count, originals)
 
         translations.extend(parts)
 
@@ -289,6 +311,33 @@ def _batch_translate_with_retry(
         )
 
     return ordered_results
+
+
+def _retry_count_mismatch_batch(
+    chain,
+    batch: Dict[str, object],
+    config: RunnableConfig,
+    batch_index: int,
+    expected_count: int,
+) -> TranslationOutput | None:
+    """Retry a single batch when structured output has the wrong item count."""
+
+    try:
+        result: TranslationOutput = chain.invoke(batch, config=config)
+    except Exception:
+        LOGGER.exception("Batch %d: single-batch retry failed.", batch_index)
+        return None
+
+    actual_count = len(result.translations)
+    if actual_count != expected_count:
+        LOGGER.warning(
+            "Batch %d: single-batch retry count %d still differs from expected %d.",
+            batch_index,
+            actual_count,
+            expected_count,
+        )
+
+    return result
 
 
 def _force_match_expected(

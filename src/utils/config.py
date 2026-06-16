@@ -20,7 +20,7 @@ class Settings:
 
     openai_api_key: Optional[str]
     anthropic_api_key: Optional[str] = None
-    max_upload_size_mb: int = 200
+    max_upload_size_mb: int = 1024
     batch_size: int = 80
     max_retries: int = 3
     min_batch_size: int = 60
@@ -50,6 +50,18 @@ def get_settings() -> Settings:
     openai_api_key = os.getenv("OPENAI_API_KEY")
     anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
     base_settings = Settings(openai_api_key=openai_api_key, anthropic_api_key=anthropic_api_key)
+
+    max_upload_size_mb = base_settings.max_upload_size_mb
+    max_upload_raw = os.getenv("MAX_UPLOAD_SIZE_MB")
+    if max_upload_raw:
+        try:
+            max_upload_size_mb = max(1, int(max_upload_raw))
+        except ValueError:
+            LOGGER.warning(
+                "Invalid MAX_UPLOAD_SIZE_MB=%s; using default %d.",
+                max_upload_raw,
+                max_upload_size_mb,
+            )
 
     concurrency_raw = os.getenv("TRANSLATION_MAX_CONCURRENCY")
     max_concurrency = base_settings.max_concurrency
@@ -193,6 +205,7 @@ def get_settings() -> Settings:
 
     return replace(
         base_settings,
+        max_upload_size_mb=max_upload_size_mb,
         batch_size=batch_size,
         min_batch_size=min_batch_size,
         max_batch_size=max_batch_size,
