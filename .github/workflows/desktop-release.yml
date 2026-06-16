@@ -77,12 +77,12 @@ jobs:
         run: |
           python -m venv desktop/.venv-desktop
           if [[ "$RUNNER_OS" == "Windows" ]]; then
-            PIP="desktop/.venv-desktop/Scripts/pip.exe"
+            PYTHON="desktop/.venv-desktop/Scripts/python.exe"
           else
-            PIP="desktop/.venv-desktop/bin/pip"
+            PYTHON="desktop/.venv-desktop/bin/python"
           fi
-          "$PIP" install --upgrade pip
-          "$PIP" install -r desktop/requirements-desktop.txt
+          "$PYTHON" -m pip install --upgrade pip
+          "$PYTHON" -m pip install -r desktop/requirements-desktop.txt
 
       - name: Setup Rust
         shell: bash
@@ -92,13 +92,12 @@ jobs:
           rustup target add "${{ matrix.target }}"
 
       - name: Install Tauri CLI
-        shell: bash
-        run: cargo install tauri-cli --version "^2.0.0" --locked
+        run: npm install --global @tauri-apps/cli@^2
 
       - name: Build installer
         shell: bash
         working-directory: src-tauri
-        run: cargo tauri build --target "${{ matrix.target }}" --bundles "${{ matrix.bundle }}"
+        run: tauri build --target "${{ matrix.target }}" --bundles "${{ matrix.bundle }}"
 
       - name: Collect installer
         shell: bash
