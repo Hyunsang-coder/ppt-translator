@@ -8,7 +8,11 @@ import io
 import json
 import logging
 import os
-import resource
+
+try:
+    import resource  # Unix-only stdlib module; absent on Windows.
+except ModuleNotFoundError:  # pragma: no cover - Windows has no `resource`
+    resource = None
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -344,7 +348,9 @@ LANGUAGE_CODE_MAP: Dict[str, str] = {
 
 
 def _get_memory_usage_mb() -> float:
-    """Return current process RSS memory usage in MB (Linux/macOS)."""
+    """Return current process RSS memory usage in MB (Linux/macOS; 0 on Windows)."""
+    if resource is None:
+        return 0.0
     try:
         ru = resource.getrusage(resource.RUSAGE_SELF)
         # macOS returns bytes, Linux returns kilobytes

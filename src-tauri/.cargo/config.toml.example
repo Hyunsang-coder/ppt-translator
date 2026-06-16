@@ -1,0 +1,21 @@
+# Template for a machine-specific Cargo config.
+#
+# The real `config.toml` is intentionally gitignored: it holds ABSOLUTE paths
+# that are valid only on one machine, and committing it broke Windows builds
+# (the macOS path resolved to C:/Users/.../_NOAV and failed with "access denied").
+#
+# You usually do NOT need this file:
+#   - Windows / Linux: plain `cargo tauri dev` and `cargo tauri build` work as-is.
+#   - macOS (managed, Defender/DLP): prefer the wrapper `./desktop/tauri.sh dev`,
+#     which sets the same env without any committed config.
+#
+# Only create a local `config.toml` (copy this file, drop the .example suffix,
+# and replace the paths) if you want plain `cargo tauri dev` on a Defender-managed
+# Mac where the linker is blocked from the default temp dir. Point both the Rust
+# target dir and TMPDIR at a Defender-excluded folder:
+#
+# [build]
+# target-dir = "/Users/<you>/_NOAV/XcodeDerivedData/cargo-target"
+#
+# [env]
+# TMPDIR = { value = "/Users/<you>/_NOAV/XcodeDerivedData/tmp", force = true }

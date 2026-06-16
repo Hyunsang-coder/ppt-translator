@@ -36,3 +36,7 @@ src-tauri/target/
 src-tauri/gen/
 src-tauri/resources/sidecar/
 frontend/out/
+
+# Machine-specific Cargo config (e.g. macOS Defender/DLP target-dir workaround).
+# Keep this local — its absolute paths break other machines (notably Windows).
+src-tauri/.cargo/config.toml
