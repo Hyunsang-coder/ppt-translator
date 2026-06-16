@@ -101,6 +101,36 @@ jobs:
           cd frontend
           npm run build
 
+      # Launch the staged sidecar and assert it actually boots. Catches runtime
+      # crashes (e.g. Unix-only imports on Windows) that compile/package fine but
+      # fail on the user's machine — the exact class of bug that shipped in 0.1.3.
+      - name: Smoke-test sidecar
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            EXE="src-tauri/resources/sidecar/ppt-translator-sidecar.exe"
+          else
+            EXE="src-tauri/resources/sidecar/ppt-translator-sidecar"
+          fi
+          echo "Launching $EXE"
+          "$EXE" > sidecar.log 2>&1 &
+          PID=$!
+          ok=0
+          for _ in $(seq 1 30); do
+            if grep -q "SIDECAR_READY" sidecar.log 2>/dev/null; then ok=1; break; fi
+            if ! kill -0 "$PID" 2>/dev/null; then break; fi  # process died early
+            sleep 1
+          done
+          kill "$PID" 2>/dev/null || true
+          wait "$PID" 2>/dev/null || true
+          echo "----- sidecar.log -----"
+          cat sidecar.log || true
+          if [[ "$ok" != "1" ]]; then
+            echo "error: sidecar never reported SIDECAR_READY (startup crash?)" >&2
+            exit 1
+          fi
+          echo "Sidecar startup OK"
+
       - name: Build installer
         shell: bash
         working-directory: src-tauri
