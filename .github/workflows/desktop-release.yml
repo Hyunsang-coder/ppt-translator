@@ -94,10 +94,17 @@ jobs:
       - name: Install Tauri CLI
         run: npm install --global @tauri-apps/cli@^2
 
+      - name: Build sidecar and frontend
+        shell: bash
+        run: |
+          ./desktop/ensure-sidecar.sh --force
+          cd frontend
+          npm run build
+
       - name: Build installer
         shell: bash
         working-directory: src-tauri
-        run: tauri build --target "${{ matrix.target }}" --bundles "${{ matrix.bundle }}"
+        run: tauri build --config ../.github/tauri-ci.conf.json --target "${{ matrix.target }}" --bundles "${{ matrix.bundle }}"
 
       - name: Collect installer
         shell: bash
