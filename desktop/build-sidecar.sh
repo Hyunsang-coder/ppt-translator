@@ -8,16 +8,24 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-VENV="desktop/.venv-desktop"
-if [ ! -x "$VENV/bin/pyinstaller" ]; then
-  echo "error: $VENV/bin/pyinstaller not found. Create the venv first:" >&2
-  echo "  python3 -m venv $VENV && $VENV/bin/pip install -r desktop/requirements-desktop.txt" >&2
+VENV="${DESKTOP_VENV:-desktop/.venv-desktop}"
+if [[ "${OS:-}" == "Windows_NT" ]]; then
+  PYINSTALLER="$VENV/Scripts/pyinstaller.exe"
+  PIP="$VENV/Scripts/pip.exe"
+else
+  PYINSTALLER="$VENV/bin/pyinstaller"
+  PIP="$VENV/bin/pip"
+fi
+
+if [ ! -x "$PYINSTALLER" ]; then
+  echo "error: $PYINSTALLER not found. Create the venv first:" >&2
+  echo "  python3 -m venv $VENV && $PIP install -r desktop/requirements-desktop.txt" >&2
   exit 1
 fi
 
 echo "==> Building sidecar (onedir) with PyInstaller"
 rm -rf desktop/dist desktop/build
-"$VENV/bin/pyinstaller" desktop/sidecar.spec --noconfirm \
+"$PYINSTALLER" desktop/sidecar.spec --noconfirm \
   --distpath desktop/dist --workpath desktop/build
 
 SRC="desktop/dist/ppt-translator-sidecar"

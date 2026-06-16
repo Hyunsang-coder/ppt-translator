@@ -1,0 +1,163 @@
+name: Desktop Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version without the leading v, for example 0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.label }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macOS Apple Silicon
+            runner: macos-15
+            target: aarch64-apple-darwin
+            bundle: dmg
+            asset_name: ppt-translator-macos-arm64.dmg
+            asset_glob: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+          - label: macOS Intel
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+            bundle: dmg
+            asset_name: ppt-translator-macos-x64.dmg
+            asset_glob: src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+          - label: Windows x64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundle: nsis
+            asset_name: ppt-translator-windows-x64-setup.exe
+            asset_glob: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe
+
+    env:
+      CI: "true"
+      TAURI_BUILD: "1"
+      CARGO_TARGET_DIR: target
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ignore local-only Cargo config
+        shell: bash
+        run: rm -f src-tauri/.cargo/config.toml
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: desktop/requirements-desktop.txt
+
+      - name: Install sidecar dependencies
+        shell: bash
+        run: |
+          python -m venv desktop/.venv-desktop
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            PIP="desktop/.venv-desktop/Scripts/pip.exe"
+          else
+            PIP="desktop/.venv-desktop/bin/pip"
+          fi
+          "$PIP" install --upgrade pip
+          "$PIP" install -r desktop/requirements-desktop.txt
+
+      - name: Setup Rust
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add "${{ matrix.target }}"
+
+      - name: Install Tauri CLI
+        shell: bash
+        run: cargo install tauri-cli --version "^2.0.0" --locked
+
+      - name: Build installer
+        shell: bash
+        working-directory: src-tauri
+        run: cargo tauri build --target "${{ matrix.target }}" --bundles "${{ matrix.bundle }}"
+
+      - name: Collect installer
+        shell: bash
+        run: |
+          mkdir -p release-assets
+          shopt -s nullglob
+          matches=( ${{ matrix.asset_glob }} )
+          if [[ "${#matches[@]}" -ne 1 ]]; then
+            printf 'Expected one installer matching %s, found %s\n' "${{ matrix.asset_glob }}" "${#matches[@]}" >&2
+            printf '%s\n' "${matches[@]}" >&2
+            exit 1
+          fi
+          cp "${matches[0]}" "release-assets/${{ matrix.asset_name }}"
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: release-assets/${{ matrix.asset_name }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download installer artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            TAG="v${{ inputs.version }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+
+          NOTES=$(cat <<'EOF'
+          Unsigned desktop installers for PPT 번역캣.
+
+          macOS builds are not notarized yet and can show a Gatekeeper warning.
+          Windows builds are not code-signed yet and can show a SmartScreen warning.
+          EOF
+          )
+
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --target "$GITHUB_SHA" \
+              --title "PPT 번역캣 $TAG" \
+              --notes "$NOTES" \
+              --latest
+          fi
+
+          gh release upload "$TAG" release-assets/* --clobber

@@ -1,6 +1,27 @@
 import Image from "next/image";
-import { Download, Github } from "lucide-react";
+import { Apple, Download, Github, MonitorDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
+
+const releaseBase =
+  "https://github.com/Hyunsang-coder/ppt-translator/releases/latest/download";
+
+const downloads = [
+  {
+    label: "macOS Apple Silicon",
+    href: `${releaseBase}/ppt-translator-macos-arm64.dmg`,
+    icon: Apple,
+  },
+  {
+    label: "macOS Intel",
+    href: `${releaseBase}/ppt-translator-macos-x64.dmg`,
+    icon: Apple,
+  },
+  {
+    label: "Windows",
+    href: `${releaseBase}/ppt-translator-windows-x64-setup.exe`,
+    icon: MonitorDown,
+  },
+];
 
 export default function Home() {
   return (
@@ -24,17 +45,27 @@ export default function Home() {
           웹 번역 서비스는 종료되었습니다. 최신 버전은 macOS와 Windows용
           데스크톱 앱으로 배포됩니다.
         </p>
-        <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-          <Button asChild size="lg" className="gap-2">
-            <a href="https://github.com/Hyunsang-coder/ppt-translator/releases">
-              <Download className="h-4 w-4" />
-              다운로드
-            </a>
-          </Button>
+        <div className="mt-8 grid w-full gap-3 sm:grid-cols-3">
+          {downloads.map(({ label, href, icon: Icon }) => (
+            <Button key={href} asChild size="lg" className="gap-2">
+              <a href={href}>
+                <Icon className="h-4 w-4" />
+                {label}
+              </a>
+            </Button>
+          ))}
+        </div>
+        <div className="mt-4 flex flex-col gap-3 sm:flex-row">
           <Button asChild variant="outline" size="lg" className="gap-2">
             <a href="https://github.com/Hyunsang-coder/ppt-translator">
               <Github className="h-4 w-4" />
               GitHub
+            </a>
+          </Button>
+          <Button asChild variant="outline" size="lg" className="gap-2">
+            <a href="https://github.com/Hyunsang-coder/ppt-translator/releases">
+              <Download className="h-4 w-4" />
+              전체 릴리스
             </a>
           </Button>
         </div>
