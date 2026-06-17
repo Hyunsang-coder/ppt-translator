@@ -51,11 +51,14 @@ NEXT_PUBLIC_API_URL=    # Browser-only local dev fallback; Tauri uses runtime si
 - Public web deployment is a download 안내 page only
 - No API rewrites or hosted translation backend are used
 - The root page shows the latest GitHub Release tag and published date
-- Optional `VERCEL_DEPLOY_HOOK_URL` GitHub secret triggers a redeploy after desktop release
+- Production deploys are handled by `deploy-web.yml` (see [`docs/CICD.md`](CICD.md))
 
 ### CI/CD (`.github/workflows/`)
 - `ci.yml`: PR + manual. Backend pytest (Python 3.12), frontend `tsc --noEmit` (Node 20)
-- `predeploy.yml`: Pre-deployment validation
+- `predeploy.yml`: Full validation on `main`; triggers `deploy-web.yml` on success
+- `deploy-web.yml`: Vercel production deploy for the public download page
+- `desktop-release.yml`: Tag/manual desktop installers + GitHub Release + web deploy
+- See [`docs/CICD.md`](CICD.md) for bootstrap and release commands
 
 ## Supported Models
 

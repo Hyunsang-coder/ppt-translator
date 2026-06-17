@@ -218,27 +218,10 @@ jobs:
 
           gh release upload "$TAG" release-assets/* --clobber
 
-  notify-vercel:
-    name: Refresh Vercel Download Page
-    runs-on: ubuntu-latest
+  deploy-web:
+    name: Deploy Web Download Page
     needs: publish
-    steps:
-      - name: Trigger Vercel deploy hook
-        env:
-          VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
-        run: |
-          if [[ -z "$VERCEL_DEPLOY_HOOK_URL" ]]; then
-            echo "VERCEL_DEPLOY_HOOK_URL is not configured; skipping deploy hook."
-            exit 0
-          fi
-
-          echo "Triggering Vercel redeploy for ${{ needs.publish.outputs.tag }}..."
-          curl -fsS -X POST "$VERCEL_DEPLOY_HOOK_URL"
-          echo "Vercel redeploy requested."
-
-      - name: Trigger Deploy Web workflow
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh workflow run deploy-web.yml --ref "$GITHUB_SHA"
-          echo "Deploy Web workflow dispatched."
+    uses: ./.github/workflows/deploy-web.yml
+    secrets: inherit
+    with:
+      ref: main

@@ -1,0 +1,84 @@
+name: Deploy Vercel Production
+description: Deploy the public download page to Vercel production
+
+inputs:
+  ref:
+    description: Git ref to deploy
+    required: false
+    default: main
+  vercel-token:
+    description: Vercel API token
+    required: false
+  vercel-deploy-hook-url:
+    description: Vercel production deploy hook URL
+    required: false
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve deploy ref
+      id: meta
+      shell: bash
+      run: |
+        echo "ref=${{ inputs.ref }}" >> "$GITHUB_OUTPUT"
+
+    - name: Deploy via Vercel deploy hook
+      id: hook
+      if: inputs.vercel-deploy-hook-url != ''
+      shell: bash
+      env:
+        VERCEL_DEPLOY_HOOK_URL: ${{ inputs.vercel-deploy-hook-url }}
+      run: |
+        curl -fsS -X POST "$VERCEL_DEPLOY_HOOK_URL"
+        echo "used_hook=true" >> "$GITHUB_ENV"
+        echo "Deployed via Vercel deploy hook."
+
+    - name: Deploy via Vercel Git API
+      if: env.used_hook != 'true'
+      shell: bash
+      env:
+        VERCEL_TOKEN: ${{ inputs.vercel-token }}
+        DEPLOY_REF: ${{ steps.meta.outputs.ref }}
+        VERCEL_TEAM_SLUG: hyunsang-coders-projects
+        VERCEL_PROJECT_NAME: ppt-translator
+        GITHUB_ORG: Hyunsang-coder
+        GITHUB_REPO: ppt-translator
+      run: |
+        if [[ -z "$VERCEL_TOKEN" ]]; then
+          echo "::error title=Missing Vercel credentials::Add VERCEL_TOKEN (or VERCEL_DEPLOY_HOOK_URL) to GitHub repository secrets. One-time setup: https://vercel.com/account/tokens → GitHub repo Settings → Secrets → Actions → VERCEL_TOKEN"
+          exit 1
+        fi
+
+        payload=$(jq -n \
+          --arg ref "$DEPLOY_REF" \
+          --arg org "$GITHUB_ORG" \
+          --arg repo "$GITHUB_REPO" \
+          --arg project "$VERCEL_PROJECT_NAME" \
+          '{
+            name: $project,
+            project: $project,
+            target: "production",
+            gitSource: {
+              type: "github",
+              org: $org,
+              repo: $repo,
+              ref: $ref
+            }
+          }')
+
+        response=$(curl -fsS -X POST \
+          "https://api.vercel.com/v13/deployments?slug=${VERCEL_TEAM_SLUG}" \
+          -H "Authorization: Bearer ${VERCEL_TOKEN}" \
+          -H "Content-Type: application/json" \
+          -d "$payload")
+
+        deployment_url=$(echo "$response" | jq -r '.url // empty')
+        deployment_id=$(echo "$response" | jq -r '.id // empty')
+
+        if [[ -z "$deployment_id" ]]; then
+          echo "$response" >&2
+          echo "::error::Vercel deployment request did not return an deployment id." >&2
+          exit 1
+        fi
+
+        echo "Triggered Vercel production deployment ${deployment_id} (${deployment_url:-no url yet})."

@@ -27,21 +27,21 @@ The workflow then:
 3. Creates or updates the GitHub Release and uploads the installers as `latest`.
 4. Optionally triggers a Vercel redeploy so the public download page refreshes.
 
+See [`docs/CICD.md`](CICD.md) for one-time Vercel bootstrap and release commands.
+
 No repository secrets are required for the current unsigned release flow. GitHub's
 built-in `GITHUB_TOKEN` is used to create or update the Release.
 
-### Vercel redeploy hook
+### Vercel production deploy
 
-To refresh `https://ppt-translator.vercel.app` automatically after a successful
-release, add a Deploy Hook in Vercel and store its URL in this GitHub repository
-secret:
+Run once:
 
-- `VERCEL_DEPLOY_HOOK_URL`
+```bash
+VERCEL_TOKEN=your_token node scripts/cicd/bootstrap-vercel.mjs
+```
 
-If the secret is missing, the release still succeeds and the download links still
-point to the latest GitHub assets. The web page also fetches release metadata from
-GitHub directly, so version/date text updates even without a redeploy (within the
-page cache window).
+Or add only `VERCEL_TOKEN` to GitHub repository secrets. After that, `Deploy Web`
+runs automatically after successful `main` validation and after each desktop release.
 
 ## Unsigned Build Limits
 

@@ -45,6 +45,7 @@ TAURI_BUILD=1 cargo tauri build
 ## Reference Docs
 
 Detailed documentation in `docs/`:
+- [`docs/CICD.md`](docs/CICD.md) — CI/CD pipelines, Vercel bootstrap, desktop release commands
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — Backend/frontend structure, components, tests
 - [`docs/KEY_PATTERNS.md`](docs/KEY_PATTERNS.md) — Translation flow, job flow, text fit, thread safety, error handling
 - [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md) — Env vars, deployment, models, libraries, API usage
