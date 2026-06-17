@@ -99,16 +99,26 @@ async function main() {
     console.log(`Project rootDirectory already set to ${ROOT_DIRECTORY}.`);
   }
 
-  if (currentProductionBranch && currentProductionBranch !== PRODUCTION_BRANCH) {
-    console.warn(
-      `Warning: Vercel git production branch is "${currentProductionBranch}", expected "${PRODUCTION_BRANCH}".`,
+  if (project.link && currentProductionBranch !== PRODUCTION_BRANCH) {
+    console.log(
+      `Updating Vercel git production branch ${currentProductionBranch ?? "(none)"} -> ${PRODUCTION_BRANCH}...`,
     );
+    const teamQuery = project.accountId ?? project.teamId;
+    const branchPath = teamQuery
+      ? `/v9/projects/${project.id}/branch?teamId=${teamQuery}`
+      : `/v9/projects/${project.id}/branch`;
+    await vercel(branchPath, {
+      method: "PATCH",
+      body: JSON.stringify({
+        branch: PRODUCTION_BRANCH,
+      }),
+    });
+  } else if (!project.link) {
     console.warn(
-      "Git pushes to main may only create Preview deployments until this is changed in Vercel project settings.",
+      "Warning: no git repository is linked to this Vercel project; cannot set production branch.",
     );
-    console.warn(
-      "Deploy hooks and GitHub Actions production deploys will still target main explicitly.",
-    );
+  } else {
+    console.log(`Vercel production branch already set to ${PRODUCTION_BRANCH}.`);
   }
 
   console.log("Ensuring production deploy hook exists...");
