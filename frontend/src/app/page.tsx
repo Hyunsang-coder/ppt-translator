@@ -1,6 +1,10 @@
 import Image from "next/image";
 import { Apple, Download, Github, MonitorDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  formatReleaseDate,
+  getLatestRelease,
+} from "@/lib/github-release";
 
 const releaseBase =
   "https://github.com/Hyunsang-coder/ppt-translator/releases/latest/download";
@@ -23,7 +27,9 @@ const downloads = [
   },
 ];
 
-export default function Home() {
+export default async function Home() {
+  const latestRelease = await getLatestRelease();
+
   return (
     <main className="min-h-screen bg-background text-foreground">
       <section className="mx-auto flex min-h-screen max-w-3xl flex-col items-center justify-center px-6 py-12 text-center">
@@ -41,9 +47,35 @@ export default function Home() {
         <h1 className="text-4xl font-bold tracking-normal sm:text-5xl">
           PPT 번역캣
         </h1>
+        {latestRelease ? (
+          <p className="mt-4 rounded-full border border-border bg-muted/40 px-4 py-1.5 text-sm text-muted-foreground">
+            최신 버전{" "}
+            <span className="font-semibold text-foreground">
+              {latestRelease.tagName}
+            </span>
+            <span aria-hidden="true"> · </span>
+            <time dateTime={latestRelease.publishedAt}>
+              {formatReleaseDate(latestRelease.publishedAt)} 배포
+            </time>
+          </p>
+        ) : (
+          <p className="mt-4 text-sm text-muted-foreground">
+            최신 릴리스 정보를 불러오지 못했습니다.{" "}
+            <a
+              href="https://github.com/Hyunsang-coder/ppt-translator/releases"
+              className="underline underline-offset-4 hover:text-foreground"
+            >
+              GitHub Releases
+            </a>
+            에서 확인해 주세요.
+          </p>
+        )}
         <p className="mt-5 max-w-2xl text-base leading-7 text-muted-foreground sm:text-lg">
-          웹 번역 서비스는 종료되었습니다. 최신 버전은 macOS와 Windows용
-          데스크톱 앱으로 배포됩니다.
+          웹 번역 서비스는 종료되었습니다. 아래 버튼으로 macOS와 Windows용
+          데스크톱 앱을 받을 수 있습니다.
+          {latestRelease
+            ? " 표시된 버전과 동일한 설치 파일이 다운로드됩니다."
+            : null}
         </p>
         <div className="mt-8 grid w-full gap-3 sm:grid-cols-3">
           {downloads.map(({ label, href, icon: Icon }) => (
@@ -63,9 +95,14 @@ export default function Home() {
             </a>
           </Button>
           <Button asChild variant="outline" size="lg" className="gap-2">
-            <a href="https://github.com/Hyunsang-coder/ppt-translator/releases">
+            <a
+              href={
+                latestRelease?.htmlUrl ??
+                "https://github.com/Hyunsang-coder/ppt-translator/releases"
+              }
+            >
               <Download className="h-4 w-4" />
-              전체 릴리스
+              릴리스 노트
             </a>
           </Button>
         </div>

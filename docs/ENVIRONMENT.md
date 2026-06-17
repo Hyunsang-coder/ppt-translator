@@ -50,6 +50,8 @@ NEXT_PUBLIC_API_URL=    # Browser-only local dev fallback; Tauri uses runtime si
 ### Vercel
 - Public web deployment is a download 안내 page only
 - No API rewrites or hosted translation backend are used
+- The root page shows the latest GitHub Release tag and published date
+- Optional `VERCEL_DEPLOY_HOOK_URL` GitHub secret triggers a redeploy after desktop release
 
 ### CI/CD (`.github/workflows/`)
 - `ci.yml`: PR + manual. Backend pytest (Python 3.12), frontend `tsc --noEmit` (Node 20)

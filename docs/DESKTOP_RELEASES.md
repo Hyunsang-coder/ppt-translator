@@ -7,19 +7,41 @@ The public download page links to the latest GitHub Release assets through stabl
 - `ppt-translator-macos-x64.dmg`
 - `ppt-translator-windows-x64-setup.exe`
 
+The Vercel download page also reads GitHub's latest release metadata (tag and
+published date) so users can see which version they are downloading.
+
 ## Release Flow
 
-Create a version tag such as `v0.1.0` and push it, or run the `Desktop Release`
-workflow manually with `version=0.1.0`.
+1. Bump `version` in `src-tauri/tauri.conf.json` and `frontend/package.json`.
+2. Commit and push to `main`.
+3. Create a version tag such as `v0.1.0` and push it, or run the `Desktop Release`
+   workflow manually with `version=0.1.0`.
 
-The workflow builds these installers:
+The workflow then:
 
-- macOS Apple Silicon on `macos-15`
-- macOS Intel on `macos-15-intel`
-- Windows x64 on `windows-latest`
+1. Builds these installers:
+   - macOS Apple Silicon on `macos-15`
+   - macOS Intel on `macos-15-intel`
+   - Windows x64 on `windows-latest`
+2. Verifies the release tag matches `src-tauri/tauri.conf.json`.
+3. Creates or updates the GitHub Release and uploads the installers as `latest`.
+4. Optionally triggers a Vercel redeploy so the public download page refreshes.
 
 No repository secrets are required for the current unsigned release flow. GitHub's
 built-in `GITHUB_TOKEN` is used to create or update the Release.
+
+### Vercel redeploy hook
+
+To refresh `https://ppt-translator.vercel.app` automatically after a successful
+release, add a Deploy Hook in Vercel and store its URL in this GitHub repository
+secret:
+
+- `VERCEL_DEPLOY_HOOK_URL`
+
+If the secret is missing, the release still succeeds and the download links still
+point to the latest GitHub assets. The web page also fetches release metadata from
+GitHub directly, so version/date text updates even without a redeploy (within the
+page cache window).
 
 ## Unsigned Build Limits
 
