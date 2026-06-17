@@ -23,6 +23,11 @@
 ## Formatting Preservation
 Uniform paragraphs keep the first original run's formatting. Multi-color paragraphs use `color_distribution_chain.translate_with_color_segments()` to produce a natural full translation plus semantic `ColoredSegment` mappings in the same model call. The writer applies colors only when validated segments concatenate exactly to the translation. If mapping fails, it uses one neutral/base style for the whole paragraph instead of position-based color splitting.
 
+## Color Mapping Audit
+Use `scripts/evaluate_color_mapping.py SOURCE.pptx TARGET.pptx` to review translated decks for suspicious highlight/style carryover. The audit is heuristic: `position_like_highlight` means the highlighted source and target runs occupy similar relative positions and should be reviewed for accidental position-based mapping. `dropped_highlight` is lower risk because the target avoided a potentially wrong emphasis.
+
+Add `--json` when the findings need to be consumed by another script.
+
 ## Text Fit
 - `none`: No adjustment
 - `auto_shrink`: Reduce font size (down to `min_font_ratio`%)
