@@ -8,6 +8,8 @@ from copy import deepcopy
 from unittest.mock import MagicMock, patch
 
 from lxml import etree
+from pptx import Presentation
+from pptx.dml.color import RGBColor
 
 from src.chains.color_distribution_chain import _format_items
 from src.core.ppt_writer import _group_runs_by_format, _rpr_key, _set_run_rpr
@@ -56,6 +58,19 @@ def _make_run(
 
     run._r = r_elem
     return run
+
+
+def _actual_run_color(run) -> str | None:
+    rPr = run._r.rPr
+    if rPr is None:
+        return None
+    srgb = rPr.find(".//a:srgbClr", {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"})
+    if srgb is not None:
+        return srgb.get("val")
+    scheme = rPr.find(".//a:schemeClr", {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"})
+    if scheme is not None:
+        return f"scheme:{scheme.get('val')}"
+    return None
 
 
 class _FakeRunElement:
@@ -586,7 +601,7 @@ class ApplyTranslationsGroupTestCase(unittest.TestCase):
 
     @patch("src.core.ppt_writer._group_runs_by_format")
     def test_multicolor_fallback_no_distribution(self, mock_group) -> None:
-        """Multi-color without distribution: falls back to ratio-based."""
+        """Multi-color without distribution uses a single safe fallback style."""
         run1 = MagicMock()
         run1.text = "Important "
         run2 = MagicMock()
@@ -611,9 +626,103 @@ class ApplyTranslationsGroupTestCase(unittest.TestCase):
             color_distributions=None,
         )
 
-        # Both runs should have some text (ratio-based split)
         combined = run1.text + run2.text
         self.assertEqual(combined, "중요 공지")
+
+
+class ApplyTranslationsFallbackStyleTestCase(unittest.TestCase):
+    """Regression tests against position-based color fallback."""
+
+    def _make_paragraph_info(self, runs):
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        box = slide.shapes.add_textbox(100000, 100000, 5000000, 1000000)
+        paragraph = box.text_frame.paragraphs[0]
+        paragraph.clear()
+
+        for text, color in runs:
+            run = paragraph.add_run()
+            run.text = text
+            if color is not None:
+                run.font.color.rgb = RGBColor.from_string(color)
+
+        info = types.SimpleNamespace(
+            paragraph=paragraph,
+            original_text="".join(run.text for run in paragraph.runs),
+            is_note=False,
+            slide_index=0,
+            shape_index=0,
+            paragraph_index=0,
+        )
+        return prs, paragraph, info
+
+    def test_no_distribution_red_prefix_does_not_color_translated_prefix(self) -> None:
+        from src.core.ppt_writer import PPTWriter
+
+        prs, paragraph, info = self._make_paragraph_info([
+            ("짧은 쿨타임", "FF0000"),
+            ("으로 즉시 발동되는 공격 중심 스킬", None),
+        ])
+
+        PPTWriter().apply_translations(
+            [info],
+            ["Attack-focused skill that activates instantly with a short cooldown"],
+            prs,
+            text_fit_mode="none",
+            color_distributions=None,
+        )
+
+        non_empty = [run for run in paragraph.runs if run.text]
+        self.assertEqual(len(non_empty), 1)
+        self.assertEqual(
+            non_empty[0].text,
+            "Attack-focused skill that activates instantly with a short cooldown",
+        )
+        self.assertIsNone(_actual_run_color(non_empty[0]))
+
+    def test_no_distribution_red_suffix_does_not_color_translated_suffix(self) -> None:
+        from src.core.ppt_writer import PPTWriter
+
+        prs, paragraph, info = self._make_paragraph_info([
+            ("근처 적에게 ", None),
+            ("자동으로 크로스헤어 고정", "FF0000"),
+        ])
+
+        PPTWriter().apply_translations(
+            [info],
+            ["Automatically lock the crosshair onto nearby enemies"],
+            prs,
+            text_fit_mode="none",
+            color_distributions=None,
+        )
+
+        non_empty = [run for run in paragraph.runs if run.text]
+        self.assertEqual(len(non_empty), 1)
+        self.assertEqual(
+            non_empty[0].text,
+            "Automatically lock the crosshair onto nearby enemies",
+        )
+        self.assertIsNone(_actual_run_color(non_empty[0]))
+
+    def test_no_distribution_prefers_grayscale_base_over_accent(self) -> None:
+        from src.core.ppt_writer import PPTWriter
+
+        prs, paragraph, info = self._make_paragraph_info([
+            ("기본 문장 ", "222222"),
+            ("강조 문장", "3C76FF"),
+        ])
+
+        PPTWriter().apply_translations(
+            [info],
+            ["Base sentence with an emphasized phrase"],
+            prs,
+            text_fit_mode="none",
+            color_distributions=None,
+        )
+
+        non_empty = [run for run in paragraph.runs if run.text]
+        self.assertEqual(len(non_empty), 1)
+        self.assertEqual(_actual_run_color(non_empty[0]), "222222")
 
 
 class ApplyTranslationsColoredSegmentsTestCase(unittest.TestCase):

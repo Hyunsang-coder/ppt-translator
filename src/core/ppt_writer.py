@@ -13,8 +13,6 @@ from pptx.util import Pt
 
 from copy import deepcopy
 
-from src.utils.helpers import split_text_into_segments
-
 LOGGER = logging.getLogger(__name__)
 
 # Expansion threshold: text must grow more than this % to trigger fitting
@@ -33,6 +31,12 @@ _EXPANSION_GAP_EMU = 457200
 # Maximum width expansion as a fraction of original width (30%)
 # Prevents unrealistic expansion when text length ratio is large (e.g. KR→EN)
 _MAX_EXPANSION_RATIO = 0.30
+
+_A_NS = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
+
+_NEUTRAL_SCHEME_COLORS = frozenset({
+    "tx1", "tx2", "dk1", "dk2", "lt1", "lt2", "bg1", "bg2",
+})
 
 
 # Attributes on rPr that do NOT affect visual appearance.
@@ -84,6 +88,67 @@ def _group_runs_by_format(runs) -> list[list]:
 
     groups.append(current_group)
     return groups
+
+
+def _is_neutral_rpr(rPr) -> bool:
+    """Return True when rPr looks like a base text style rather than emphasis."""
+    if rPr is None:
+        return True
+
+    scheme = rPr.find(".//a:schemeClr", _A_NS)
+    if scheme is not None:
+        return scheme.get("val") in _NEUTRAL_SCHEME_COLORS
+
+    srgb = rPr.find(".//a:srgbClr", _A_NS)
+    if srgb is None:
+        return True
+
+    val = (srgb.get("val") or "").strip()
+    if len(val) != 6:
+        return False
+
+    try:
+        r = int(val[0:2], 16)
+        g = int(val[2:4], 16)
+        b = int(val[4:6], 16)
+    except ValueError:
+        return False
+
+    return max(r, g, b) - min(r, g, b) <= 12
+
+
+def _group_text_len(group) -> int:
+    return sum(len(run.text or "") for run in group)
+
+
+def _choose_fallback_group(groups) -> int:
+    """Pick the safest group for fallback when semantic color mapping fails."""
+    if not groups:
+        return 0
+
+    neutral_indices = [
+        idx for idx, group in enumerate(groups)
+        if group and _is_neutral_rpr(group[0]._r.rPr)
+    ]
+    candidates = neutral_indices or list(range(len(groups)))
+    return max(candidates, key=lambda idx: _group_text_len(groups[idx]))
+
+
+def _apply_fallback_format(translation: str, groups, runs) -> None:
+    """Apply all translated text to one safe style group.
+
+    This intentionally avoids distributing text by character position when
+    semantic color mapping fails; wrong highlights are worse than dropped ones.
+    """
+    if not runs:
+        return
+
+    group_idx = _choose_fallback_group(groups)
+    target_run = groups[group_idx][0] if groups and groups[group_idx] else runs[0]
+
+    for run in runs:
+        run.text = ""
+    target_run.text = translation
 
 
 def _set_run_rpr(run, src_rpr) -> None:
@@ -452,11 +517,7 @@ class PPTWriter:
                     if applied:
                         color_applied_count += 1
                     else:
-                        # Fallback to ratio-based
-                        weights = [max(len(run.text), 1) for run in runs]
-                        segments = split_text_into_segments(translation, len(runs), weights=weights)
-                        for run, segment in zip(runs, segments):
-                            run.text = segment
+                        _apply_fallback_format(translation, groups, runs)
                 elif len(dist) == len(groups):
                     # Legacy list[str] distribution (contiguous groups)
                     for group, group_text in zip(groups, dist):
@@ -465,17 +526,9 @@ class PPTWriter:
                             run.text = ""
                     color_applied_count += 1
                 else:
-                    # Mismatch in group count — fallback to ratio-based
-                    weights = [max(len(run.text), 1) for run in runs]
-                    segments = split_text_into_segments(translation, len(runs), weights=weights)
-                    for run, segment in zip(runs, segments):
-                        run.text = segment
+                    _apply_fallback_format(translation, groups, runs)
             else:
-                # Multi-color without distribution data — fallback to ratio-based
-                weights = [max(len(run.text), 1) for run in runs]
-                segments = split_text_into_segments(translation, len(runs), weights=weights)
-                for run, segment in zip(runs, segments):
-                    run.text = segment
+                _apply_fallback_format(translation, groups, runs)
 
             # Track text frames for fitting
             if text_fit_mode != _MODE_NONE:
