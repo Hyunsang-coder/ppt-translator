@@ -125,8 +125,9 @@ export function ProgressPanel({ status, progress, startTime }: ProgressPanelProp
   }, [startTime, status]);
 
   const getProgressPercentage = (): number => {
+    if (status === "completed") return 100;
     if (!progress) return 0;
-    return progress.percent ?? 0;
+    return Math.max(0, Math.min(100, progress.percent ?? 0));
   };
 
   const getStatusIcon = () => {

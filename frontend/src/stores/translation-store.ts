@@ -118,7 +118,33 @@ export const useTranslationStore = create<TranslationState>((set) => ({
 
   setJobId: (jobId) => set({ jobId }),
   setStatus: (status) => set({ status }),
-  setProgress: (progress) => set({ progress }),
+  setProgress: (progress) =>
+    set((state) => {
+      if (!progress) return { progress: null };
+
+      const previous = state.progress;
+      const incomingPercent = Math.max(0, Math.min(100, progress.percent ?? 0));
+
+      if (previous && incomingPercent < (previous.percent ?? 0)) {
+        return { progress: previous };
+      }
+
+      const next = {
+        ...progress,
+        percent: incomingPercent,
+      };
+
+      if (previous) {
+        if (next.total_batches === previous.total_batches) {
+          next.current_batch = Math.max(next.current_batch, previous.current_batch);
+        }
+        if (next.total_sentences === previous.total_sentences) {
+          next.current_sentence = Math.max(next.current_sentence, previous.current_sentence);
+        }
+      }
+
+      return { progress: next };
+    }),
   setErrorMessage: (errorMessage) => set({ errorMessage }),
   setResultFilename: (resultFilename) => set({ resultFilename }),
 

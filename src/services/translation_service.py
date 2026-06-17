@@ -219,6 +219,7 @@ class ServiceProgressTracker:
         self._current_sentence = 0
         self._start_time = time.time()
         self.total_elapsed: float = 0.0
+        self._reported_start = False
 
     def _calc_percent(self) -> int:
         """Calculate overall percent (translation phase spans 10-80%)."""
@@ -229,13 +230,15 @@ class ServiceProgressTracker:
 
     def reset(self, total_batches: int, total_sentences: int) -> None:
         """Reset tracker state for a new translation run."""
+        had_progress = self._completed_batches > 0 or self._current_sentence > 0
         self.total_batches = total_batches
         self.total_sentences = total_sentences
         self._completed_batches = 0
         self._current_sentence = 0
         self._start_time = time.time()
 
-        if self._callback:
+        if self._callback and not had_progress and not self._reported_start:
+            self._reported_start = True
             self._callback(
                 TranslationProgress(
                     status=TranslationStatus.TRANSLATING,
@@ -254,9 +257,17 @@ class ServiceProgressTracker:
         """Record completion of a batch and notify callback."""
         self._completed_batches = min(self.total_batches, self._completed_batches + 1)
 
-        # Estimate sentences completed based on batch indices
-        if batch_end_idx is not None:
-            self._current_sentence = batch_end_idx
+        if batch_start_idx is not None and batch_end_idx is not None:
+            completed_sentences = max(0, batch_end_idx - batch_start_idx + 1)
+        else:
+            remaining_batches = max(1, self.total_batches - self._completed_batches + 1)
+            remaining_sentences = max(0, self.total_sentences - self._current_sentence)
+            completed_sentences = math.ceil(remaining_sentences / remaining_batches)
+
+        self._current_sentence = min(
+            self.total_sentences,
+            self._current_sentence + completed_sentences,
+        )
 
         if self._callback:
             if self._completed_batches < self.total_batches:

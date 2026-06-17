@@ -9,6 +9,24 @@ import { createSSEClient, SSEClient } from "@/lib/sse-client";
 import { useTranslationStore } from "@/stores/translation-store";
 import type { JobProgress, SSEEvent } from "@/types/api";
 
+function shouldLogProgress(progress: JobProgress): boolean {
+  if (!progress.message) return false;
+  if (progress.status === "translating" && progress.current_batch === 0) return false;
+  return true;
+}
+
+function getProgressLogKey(progress: JobProgress): string {
+  return [
+    progress.status,
+    progress.percent,
+    progress.current_batch,
+    progress.total_batches,
+    progress.current_sentence,
+    progress.total_sentences,
+    progress.message,
+  ].join("|");
+}
+
 export function useTranslation() {
   const {
     pptFile,
@@ -36,6 +54,7 @@ export function useTranslation() {
 
   const sseClientRef = useRef<SSEClient | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const lastProgressLogKeyRef = useRef<string | null>(null);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -55,6 +74,7 @@ export function useTranslation() {
       setStatus("uploading");
       setErrorMessage(null);
       clearLogs();
+      lastProgressLogKeyRef.current = null;
       addLog("번역 작업을 시작합니다...", "info");
 
       // Create abort controller for upload cancellation
@@ -79,7 +99,9 @@ export function useTranslation() {
         onProgress: (event: SSEEvent) => {
           const data = event.data as unknown as JobProgress;
           setProgress(data);
-          if (data.message) {
+          const progressLogKey = getProgressLogKey(data);
+          if (shouldLogProgress(data) && lastProgressLogKeyRef.current !== progressLogKey) {
+            lastProgressLogKeyRef.current = progressLogKey;
             addLog(data.message, "info");
           }
         },
@@ -198,6 +220,7 @@ export function useTranslation() {
 
   const resetTranslation = useCallback(() => {
     sseClientRef.current?.close();
+    lastProgressLogKeyRef.current = null;
     reset();
   }, [reset]);
 
