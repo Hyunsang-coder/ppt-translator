@@ -4,6 +4,11 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "scripts/**"
+      - "src-tauri/**"
   workflow_dispatch:
 
 jobs:
