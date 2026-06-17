@@ -84,28 +84,61 @@ async function main() {
     throw new Error(`Could not find Vercel project ${PROJECT_NAME} in team ${TEAM_SLUG}.`);
   }
 
-  console.log(`Updating project settings (root=${ROOT_DIRECTORY}, production=${PRODUCTION_BRANCH})...`);
-  await vercel(`/v9/projects/${project.id}`, {
-    method: "PATCH",
-    body: JSON.stringify({
-      rootDirectory: ROOT_DIRECTORY,
-      productionBranch: PRODUCTION_BRANCH,
-    }),
-  });
+  const currentRoot = project.rootDirectory ?? null;
+  const currentProductionBranch = project.link?.productionBranch ?? null;
+
+  if (currentRoot !== ROOT_DIRECTORY) {
+    console.log(`Updating project rootDirectory to ${ROOT_DIRECTORY}...`);
+    await vercel(`/v9/projects/${project.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        rootDirectory: ROOT_DIRECTORY,
+      }),
+    });
+  } else {
+    console.log(`Project rootDirectory already set to ${ROOT_DIRECTORY}.`);
+  }
+
+  if (currentProductionBranch && currentProductionBranch !== PRODUCTION_BRANCH) {
+    console.warn(
+      `Warning: Vercel git production branch is "${currentProductionBranch}", expected "${PRODUCTION_BRANCH}".`,
+    );
+    console.warn(
+      "Git pushes to main may only create Preview deployments until this is changed in Vercel project settings.",
+    );
+    console.warn(
+      "Deploy hooks and GitHub Actions production deploys will still target main explicitly.",
+    );
+  }
 
   console.log("Ensuring production deploy hook exists...");
-  const hooks = await vercel(`/v1/projects/${project.id}/deploy-hooks`);
-  let hook =
-    hooks.deployHooks?.find((entry) => entry.name === DEPLOY_HOOK_NAME) ?? null;
+  const teamId = project.accountId ?? project.teamId;
+  const hooksPath = teamId
+    ? `/v1/projects/${project.id}/deploy-hooks?teamId=${teamId}`
+    : `/v1/projects/${project.id}/deploy-hooks`;
+
+  let hook = project.link?.deployHooks?.find((entry) => entry.name === DEPLOY_HOOK_NAME) ?? null;
 
   if (!hook) {
-    hook = await vercel(`/v1/projects/${project.id}/deploy-hooks`, {
+    const created = await vercel(hooksPath, {
       method: "POST",
       body: JSON.stringify({
         name: DEPLOY_HOOK_NAME,
         ref: PRODUCTION_BRANCH,
+        projectId: project.id,
       }),
     });
+
+    hook =
+      created.link?.deployHooks?.find((entry) => entry.name === DEPLOY_HOOK_NAME) ??
+      created.deployHooks?.find((entry) => entry.name === DEPLOY_HOOK_NAME) ??
+      created;
+  }
+
+  if (!hook?.url) {
+    const refreshed = await vercel(`/v9/projects/${project.id}`);
+    hook =
+      refreshed.link?.deployHooks?.find((entry) => entry.name === DEPLOY_HOOK_NAME) ?? null;
   }
 
   if (!hook?.url) {
@@ -121,6 +154,9 @@ async function main() {
   await setSecret("VERCEL_ORG_ID", orgId);
   await setSecret("VERCEL_PROJECT_ID", project.id);
   await setSecret("VERCEL_DEPLOY_HOOK_URL", hook.url);
+
+  console.log("Triggering initial Vercel production deploy...");
+  await fetch(hook.url, { method: "POST" });
 
   console.log("Triggering Deploy Web workflow...");
   await runGh(["workflow", "run", "deploy-web.yml", "--repo", GITHUB_REPO, "--ref", PRODUCTION_BRANCH]);
