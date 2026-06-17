@@ -86,6 +86,15 @@ def _group_runs_by_format(runs) -> list[list]:
     return groups
 
 
+def _set_run_rpr(run, src_rpr) -> None:
+    """Replace a run's formatting XML with a copied source rPr."""
+    existing_rpr = run._r.rPr
+    if existing_rpr is not None:
+        run._r.remove(existing_rpr)
+    if src_rpr is not None:
+        run._r.insert(0, deepcopy(src_rpr))
+
+
 def _apply_colored_segments(paragraph, colored_segments, groups, runs) -> bool:
     """Apply ColoredSegment list to a paragraph by recreating runs.
 
@@ -134,13 +143,7 @@ def _apply_colored_segments(paragraph, colored_segments, groups, runs) -> bool:
             for i, seg in enumerate(colored_segments):
                 runs[i].text = seg.text
                 # Copy formatting from the correct group
-                src_rpr = group_rprs[seg.group_index]
-                if src_rpr is not None:
-                    existing_rpr = runs[i]._r.rPr
-                    if existing_rpr is not None:
-                        runs[i]._r.replace(existing_rpr, deepcopy(src_rpr))
-                    else:
-                        runs[i]._r.insert(0, deepcopy(src_rpr))
+                _set_run_rpr(runs[i], group_rprs[seg.group_index])
         else:
             # More segments than runs — need additional runs.
             # Use available runs first, then duplicate the last run.
@@ -151,13 +154,7 @@ def _apply_colored_segments(paragraph, colored_segments, groups, runs) -> bool:
                     run = paragraph.add_run()
                     runs.append(run)
                 run.text = seg.text
-                src_rpr = group_rprs[seg.group_index]
-                if src_rpr is not None:
-                    existing_rpr = run._r.rPr
-                    if existing_rpr is not None:
-                        run._r.replace(existing_rpr, deepcopy(src_rpr))
-                    else:
-                        run._r.insert(0, deepcopy(src_rpr))
+                _set_run_rpr(run, group_rprs[seg.group_index])
 
         return True
     except Exception:
@@ -398,7 +395,7 @@ class PPTWriter:
         presentation: Presentation,
         text_fit_mode: str = "none",
         min_font_ratio: int = 80,
-        color_distributions: dict[int, list[str]] | None = None,
+        color_distributions: dict[int, list] | None = None,
     ) -> io.BytesIO:
         """Apply translated paragraphs and return the updated PPT as bytes.
 
@@ -408,8 +405,8 @@ class PPTWriter:
             presentation: Loaded presentation object to mutate in place.
             text_fit_mode: Text fitting mode ("none", "auto_shrink", "expand_box").
             min_font_ratio: Minimum font size as percentage of original (50-100).
-            color_distributions: Optional mapping from paragraph index to list of
-                text segments for each format group. Used for multi-color paragraphs.
+            color_distributions: Optional mapping from paragraph index to either
+                ColoredSegment objects or legacy text segments for multi-color paragraphs.
 
         Returns:
             BytesIO buffer containing the updated PPTX file.

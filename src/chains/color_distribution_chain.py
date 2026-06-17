@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import logging
+import json
 from typing import List
 
 from langchain_core.prompts import PromptTemplate
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from src.chains.llm_factory import Provider, create_llm
 
@@ -32,6 +33,17 @@ class ColorDistributionOutput(BaseModel):
         "Each segment has text and the group_index it belongs to. "
         "Segments are in translation word order (may differ from original)."
     )
+
+    @field_validator("distributions", mode="before")
+    @classmethod
+    def parse_stringified_distributions(cls, value):
+        """Accept providers that return the array as a JSON-encoded string."""
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError:
+                return value
+        return value
 
 
 COLOR_DISTRIBUTION_PROMPT = """원본 텍스트의 서식 구간별 텍스트와 번역 결과가 주어집니다.
@@ -106,7 +118,7 @@ def distribute_colors(
     translated_texts: list[str],
     provider: Provider = "openai",
     model_name: str | None = None,
-) -> list[list[ColoredSegment]] | None:
+) -> list[list[ColoredSegment] | None] | None:
     """Call LLM to distribute translated text across format groups.
 
     Splits items into smaller batches to improve accuracy and reduce the
@@ -119,8 +131,8 @@ def distribute_colors(
         model_name: Model to use. If None, defaults to provider's default.
 
     Returns:
-        List of distributions (one per paragraph, each a list of ColoredSegment),
-        or None on complete failure.
+        List of distributions (one per paragraph, each a list of ColoredSegment
+        or None when that paragraph's batch failed), or None on complete failure.
     """
     if not original_groups:
         return None

@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 from lxml import etree
 
 from src.chains.color_distribution_chain import _format_items
-from src.core.ppt_writer import _group_runs_by_format, _rpr_key
+from src.core.ppt_writer import _group_runs_by_format, _rpr_key, _set_run_rpr
 
 
 def _make_solid_fill(color_val: str) -> etree._Element:
@@ -58,6 +58,19 @@ def _make_run(
     return run
 
 
+class _FakeRunElement:
+    def __init__(self, rPr=None):
+        self.rPr = rPr
+
+    def remove(self, child):
+        if child is self.rPr:
+            self.rPr = None
+
+    def insert(self, index, child):
+        if index == 0:
+            self.rPr = child
+
+
 class RprKeyTestCase(unittest.TestCase):
     def test_none_rpr_returns_empty(self) -> None:
         run = _make_run("hello")
@@ -72,6 +85,27 @@ class RprKeyTestCase(unittest.TestCase):
         run1 = _make_run("a", {"color": "red"})
         run2 = _make_run("b", {"color": "blue"})
         self.assertNotEqual(_rpr_key(run1), _rpr_key(run2))
+
+
+class SetRunRprTestCase(unittest.TestCase):
+    def test_none_source_removes_existing_rpr(self) -> None:
+        run = MagicMock()
+        run._r = _FakeRunElement(etree.Element("rPr"))
+
+        _set_run_rpr(run, None)
+
+        self.assertIsNone(run._r.rPr)
+
+    def test_source_rpr_replaces_existing_rpr(self) -> None:
+        run = MagicMock()
+        run._r = _FakeRunElement(etree.Element("rPr"))
+        src = etree.Element("rPr")
+        src.set("b", "1")
+
+        _set_run_rpr(run, src)
+
+        self.assertIsNot(run._r.rPr, src)
+        self.assertEqual(run._r.rPr.get("b"), "1")
 
 
 class RprKeyNonVisualExclusionTestCase(unittest.TestCase):
@@ -352,6 +386,18 @@ class ColoredSegmentSchemaTestCase(unittest.TestCase):
         self.assertEqual(len(output.distributions), 1)
         self.assertEqual(len(output.distributions[0]), 2)
         self.assertEqual(output.distributions[0][0].group_index, 0)
+
+    def test_distribution_output_accepts_json_string(self) -> None:
+        """Some providers return nested structured fields as JSON strings."""
+        from src.chains.color_distribution_chain import ColorDistributionOutput
+
+        output = ColorDistributionOutput(
+            distributions='[[{"text": "매출이 ", "group_index": 0}, {"text": "20%", "group_index": 1}]]'
+        )
+
+        self.assertEqual(len(output.distributions), 1)
+        self.assertEqual(output.distributions[0][0].text, "매출이 ")
+        self.assertEqual(output.distributions[0][1].group_index, 1)
 
     def test_format_items_includes_group_indices(self) -> None:
         """_format_items should include group index info in output."""
