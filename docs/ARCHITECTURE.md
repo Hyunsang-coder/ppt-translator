@@ -41,7 +41,7 @@
 ## Translation Chain (`src/chains/`)
 - `llm_factory.py`: LLM factory (OpenAI/Anthropic) with `InMemoryRateLimiter`
 - `translation_chain.py`: LangChain pipeline with structured output (`TranslationOutput`), batch API, tenacity retry. Fail-fast validation on missing results
-- `color_distribution_chain.py`: LLM-based color/format distribution for multi-color paragraphs
+- `color_distribution_chain.py`: LLM-based simultaneous translation + semantic style mapping for multi-color paragraphs
 - `context_manager.py`: Global presentation context for consistency
 - `summarization_chain.py`: Context/instructions generation (GPT-5.4 Mini / Haiku 4.5)
 

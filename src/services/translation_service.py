@@ -8,7 +8,11 @@ import math
 import time
 from typing import Dict, List, Optional
 
-from src.chains.color_distribution_chain import ColoredSegment, distribute_colors
+from src.chains.color_distribution_chain import (
+    ColoredSegment,
+    distribute_colors,
+    translate_with_color_segments,
+)
 from src.chains.context_manager import ContextManager
 from src.chains.translation_chain import create_translation_chain, translate_with_progress
 from src.core.ppt_parser import PPTParser
@@ -544,6 +548,106 @@ class TranslationService:
         )
         return result if result else None
 
+    @staticmethod
+    def _translate_colored_paragraphs_with_segments(
+        paragraphs,
+        translated_texts: list[str],
+        *,
+        source_lang: str,
+        target_lang: str,
+        provider: str,
+        model_name: str | None,
+        ppt_context: str,
+        context: str | None,
+        instructions: str | None,
+        glossary_terms: str,
+        length_limit: int | None,
+    ) -> dict[int, list[ColoredSegment]] | None:
+        """Translate multi-color paragraphs and map styles in one model call.
+
+        The normal translation pass keeps the general batching path simple.
+        For multi-color paragraphs, this method replaces the plain translation
+        with a natural translation that already includes semantic style mapping.
+        """
+        candidates: list[tuple[int, list[str]]] = []
+
+        for idx, para in enumerate(paragraphs):
+            if para.is_note:
+                continue
+            runs = list(para.paragraph.runs)
+            if len(runs) <= 1:
+                continue
+            groups = _group_runs_by_format(runs)
+            if len(groups) <= 1:
+                continue
+            group_texts = [
+                "".join(run.text for run in group) for group in groups
+            ]
+            candidates.append((idx, group_texts))
+
+        if not candidates:
+            LOGGER.info("No multi-color paragraphs found; skipping color translation.")
+            return None
+
+        LOGGER.info(
+            "Found %d multi-color paragraphs for simultaneous translation/style mapping.",
+            len(candidates),
+        )
+
+        original_groups = [group_texts for _, group_texts in candidates]
+        colored_results = translate_with_color_segments(
+            original_groups,
+            source_lang=source_lang,
+            target_lang=target_lang,
+            provider=provider,
+            model_name=model_name,
+            ppt_context=ppt_context,
+            context=context,
+            instructions=instructions,
+            glossary_terms=glossary_terms,
+            length_limit=length_limit,
+        )
+
+        result: dict[int, list[ColoredSegment]] = {}
+        unresolved: list[tuple[int, list[str]]] = []
+
+        if colored_results is None:
+            unresolved = candidates
+        else:
+            for (para_idx, group_texts), item in zip(candidates, colored_results):
+                if item is None:
+                    unresolved.append((para_idx, group_texts))
+                    continue
+
+                validated = _validate_colored_segments(
+                    segments=item.segments,
+                    translation=item.translation,
+                    num_groups=len(group_texts),
+                    para_idx=para_idx,
+                )
+                if validated is None:
+                    unresolved.append((para_idx, group_texts))
+                    continue
+
+                translated_texts[para_idx] = item.translation
+                result[para_idx] = validated
+
+        # Deterministic rescue for simple numeric/symbol anchors against the
+        # existing plain translation. Avoid the old LLM post-hoc semantic pass.
+        for para_idx, group_texts in unresolved:
+            rule_result = TranslationService._try_rule_based_distribution(
+                group_texts,
+                translated_texts[para_idx],
+            )
+            if rule_result is not None:
+                result[para_idx] = rule_result
+
+        LOGGER.info(
+            "Simultaneous color translation/style mapping validated %d/%d paragraphs.",
+            len(result), len(candidates),
+        )
+        return result if result else None
+
     def translate(self, request: TranslationRequest) -> TranslationResult:
         """Translate a PowerPoint presentation.
 
@@ -773,24 +877,33 @@ class TranslationService:
                 for text in translated_texts
             ]
 
-        # Phase 9.5: Fix color distributions for multi-color paragraphs
+        # Phase 9.5: Translate and style-map multi-color paragraphs
         self._notify_progress(
             TranslationProgress(
                 status=TranslationStatus.FIXING_COLORS,
                 percent=80,
-                message="다색 문단 서식 분석 중...",
+                message="다색 문단 자연 번역 및 서식 매핑 중...",
             )
         )
-        color_distributions = self._fix_color_distributions(
-            paragraphs, translated_texts, request.provider,
+        color_distributions = self._translate_colored_paragraphs_with_segments(
+            paragraphs,
+            translated_texts,
+            source_lang=source_language,
+            target_lang=target_language,
+            provider=request.provider,
             model_name=self._color_distribution_model(request.provider, request.model),
+            ppt_context=ppt_context,
+            context=request.context,
+            instructions=request.instructions,
+            glossary_terms=glossary_terms,
+            length_limit=request.length_limit,
         )
         if color_distributions:
             self._notify_progress(
                 TranslationProgress(
                     status=TranslationStatus.FIXING_COLORS,
                     percent=90,
-                    message=f"다색 문단 {len(color_distributions)}개 서식 보정 완료",
+                    message=f"다색 문단 {len(color_distributions)}개 자연 번역 및 서식 매핑 완료",
                 )
             )
         else:
@@ -798,7 +911,7 @@ class TranslationService:
                 TranslationProgress(
                     status=TranslationStatus.FIXING_COLORS,
                     percent=90,
-                    message="다색 문단 없음 — 서식 보정 생략",
+                    message="다색 문단 없음 또는 매핑 실패 — 위치 기반 색상 적용 생략",
                 )
             )
 

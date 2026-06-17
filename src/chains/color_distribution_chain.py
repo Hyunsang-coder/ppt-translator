@@ -25,6 +25,46 @@ class ColoredSegment(BaseModel):
     group_index: int = Field(description="Index of the original format group (0-based)")
 
 
+class ColoredTranslation(BaseModel):
+    """Natural translation plus color/style mapping for one paragraph."""
+
+    translation: str = Field(description="Natural full translation for the paragraph")
+    segments: List[ColoredSegment] = Field(
+        description="Segments in translation word order. Concatenating text fields "
+        "must exactly equal translation."
+    )
+
+    @field_validator("segments", mode="before")
+    @classmethod
+    def parse_stringified_segments(cls, value):
+        """Accept providers that return nested segment arrays as JSON strings."""
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError:
+                return value
+        return value
+
+
+class ColoredTranslationOutput(BaseModel):
+    """Structured output for translating colored paragraphs."""
+
+    items: List[ColoredTranslation] = Field(
+        description="One translated item per input paragraph, in the same order."
+    )
+
+    @field_validator("items", mode="before")
+    @classmethod
+    def parse_stringified_items(cls, value):
+        """Accept providers that return the items array as a JSON-encoded string."""
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError:
+                return value
+        return value
+
+
 class ColorDistributionOutput(BaseModel):
     """Structured output: text segments for each paragraph's format groups."""
 
@@ -71,6 +111,41 @@ COLOR_DISTRIBUTION_PROMPT = """원본 텍스트의 서식 구간별 텍스트와
 - 숫자, 기호, 고유명사 등 번역 후에도 동일한 텍스트는 반드시 해당 원본 구간에 배치하세요."""
 
 
+COLORED_TRANSLATION_PROMPT = """You are a professional translator specializing in PowerPoint presentations.
+
+**Context (Full Presentation):**
+{ppt_context}
+
+**Background Information:**
+{context}
+
+**Glossary:**
+{glossary_terms}
+
+**Translation Style/Tone Guidelines:**
+{instructions}
+{length_constraint}
+**Task:**
+Translate each item naturally from {source_lang} to {target_lang}.
+Each item is split into original formatting groups. The groups are ONLY hints for
+which translated words should inherit each original style/color.
+
+Return exactly {expected_count} items in the items array.
+For each item:
+- translation: a natural full-sentence translation. Do NOT translate group-by-group.
+- segments: pieces of the translation in final reading order.
+- Concatenating every segment.text must exactly equal translation.
+- Each segment.group_index must point to the original formatting group whose meaning it carries.
+- Prefer natural phrasing over preserving source word order.
+- If one highlighted source group maps to several possible translated words, tag the smallest clear phrase.
+- If the meaning is ambiguous or diffused, assign uncertain connective/filler text to the surrounding/base group rather than forcing a highlight.
+- Numeric, symbolic, product, or proper-noun text that survives translation should keep the matching source group.
+
+Items:
+{items}
+"""
+
+
 def _format_items(
     original_groups: list[list[str]],
     translated_texts: list[str],
@@ -91,6 +166,122 @@ def _format_items(
             f'{i}. 원본 구간({len(groups)}개): [{group_display}], 번역: "{translation}"'
         )
     return "\n".join(lines)
+
+
+def _format_source_items(original_groups: list[list[str]]) -> str:
+    """Format source-only colored paragraph items for translation."""
+    lines = []
+    for i, groups in enumerate(original_groups, start=1):
+        group_display = " | ".join(f'[{j}]"{g}"' for j, g in enumerate(groups))
+        lines.append(f'{i}. 원본 구간({len(groups)}개): [{group_display}]')
+    return "\n".join(lines)
+
+
+def _build_length_constraint(length_limit: int | None) -> str:
+    if length_limit is None:
+        return ""
+    return (
+        f"\n**Length Constraint:**\n"
+        f"Keep each translation concise and do not exceed {length_limit}% "
+        f"of the source character length unless required for natural phrasing.\n"
+    )
+
+
+def _invoke_colored_translation_batch(
+    chain,
+    original_groups: list[list[str]],
+) -> list[ColoredTranslation] | None:
+    """Translate and map one batch of colored paragraphs."""
+    items_str = _format_source_items(original_groups)
+
+    try:
+        result: ColoredTranslationOutput = chain.invoke(
+            {
+                "items": items_str,
+                "expected_count": len(original_groups),
+            }
+        )
+        return result.items
+    except Exception:
+        LOGGER.exception(
+            "Colored translation chain failed for batch of %d",
+            len(original_groups),
+        )
+        return None
+
+
+def translate_with_color_segments(
+    original_groups: list[list[str]],
+    *,
+    source_lang: str,
+    target_lang: str,
+    provider: Provider = "openai",
+    model_name: str | None = None,
+    ppt_context: str = "",
+    context: str | None = None,
+    instructions: str | None = None,
+    glossary_terms: str = "None",
+    length_limit: int | None = None,
+) -> list[ColoredTranslation | None] | None:
+    """Translate colored paragraphs and return semantic style segments."""
+    if not original_groups:
+        return None
+
+    total = len(original_groups)
+    LOGGER.info(
+        "Translating %d colored paragraphs with provider=%s, model=%s (batch_size=%d)",
+        total,
+        provider,
+        model_name,
+        _BATCH_SIZE,
+    )
+
+    llm = create_llm(
+        provider=provider,
+        model_name=model_name,
+        max_tokens=4096,
+        temperature=0,
+    )
+    chain = (
+        PromptTemplate(
+            input_variables=["items", "expected_count"],
+            template=COLORED_TRANSLATION_PROMPT,
+        ).partial(
+            ppt_context=ppt_context,
+            context=context or "No additional background information provided.",
+            glossary_terms=glossary_terms,
+            instructions=instructions or "Translate naturally and professionally.",
+            length_constraint=_build_length_constraint(length_limit),
+            source_lang=source_lang,
+            target_lang=target_lang,
+        )
+        | llm.with_structured_output(ColoredTranslationOutput)
+    )
+
+    translated_items: list[ColoredTranslation | None] = [None] * total
+    any_success = False
+
+    for start in range(0, total, _BATCH_SIZE):
+        end = min(start + _BATCH_SIZE, total)
+        batch_groups = original_groups[start:end]
+        batch_result = _invoke_colored_translation_batch(chain, batch_groups)
+
+        if batch_result is not None and len(batch_result) == len(batch_groups):
+            for i, item in enumerate(batch_result):
+                translated_items[start + i] = item
+            any_success = True
+        else:
+            LOGGER.warning(
+                "Colored translation batch [%d:%d] failed or returned wrong count "
+                "(expected %d, got %s). These paragraphs will use fallback.",
+                start, end, len(batch_groups),
+                len(batch_result) if batch_result else "None",
+            )
+
+    if not any_success:
+        return None
+
+    return translated_items
 
 
 def _invoke_batch(

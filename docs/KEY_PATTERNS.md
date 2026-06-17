@@ -8,7 +8,7 @@
 4. `chunk_paragraphs()` creates batches with context/glossary
 5. `translate_with_progress()` → `_batch_translate_with_retry()` with tenacity retry
 6. `expand_translations()` maps unique results back to duplicates
-7. `_fix_color_distributions()` preserves multi-color formatting via LLM
+7. `_translate_colored_paragraphs_with_segments()` re-translates multi-color paragraphs with semantic style segments
 8. `PPTWriter.apply_translations()` writes back preserving formatting, applies text fit
 
 ## Async Job Flow (FastAPI + Next.js)
@@ -21,7 +21,7 @@
 7. Output filename generated server-side from `FilenameSettings`
 
 ## Formatting Preservation
-`PPTWriter` uses `split_text_into_segments()` with character-length weights to distribute text across original runs (bold/italic/font). For multi-color paragraphs, `color_distribution_chain` uses LLM to map translated segments to original format groups.
+Uniform paragraphs keep the first original run's formatting. Multi-color paragraphs use `color_distribution_chain.translate_with_color_segments()` to produce a natural full translation plus semantic `ColoredSegment` mappings in the same model call. The writer applies colors only when validated segments concatenate exactly to the translation. If mapping fails, it uses one neutral/base style for the whole paragraph instead of position-based color splitting.
 
 ## Text Fit
 - `none`: No adjustment

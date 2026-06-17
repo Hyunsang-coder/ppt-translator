@@ -414,6 +414,22 @@ class ColoredSegmentSchemaTestCase(unittest.TestCase):
         self.assertEqual(output.distributions[0][0].text, "매출이 ")
         self.assertEqual(output.distributions[0][1].group_index, 1)
 
+    def test_colored_translation_output_accepts_json_string(self) -> None:
+        """Colored translation items should tolerate provider stringification."""
+        from src.chains.color_distribution_chain import ColoredTranslationOutput
+
+        output = ColoredTranslationOutput(
+            items=(
+                '[{"translation": "Auto-fire function when aiming", '
+                '"segments": "[{\\"text\\": \\"Auto-fire function\\", \\"group_index\\": 1}, '
+                '{\\"text\\": \\" when aiming\\", \\"group_index\\": 0}]"}]'
+            )
+        )
+
+        self.assertEqual(output.items[0].translation, "Auto-fire function when aiming")
+        self.assertEqual(output.items[0].segments[0].text, "Auto-fire function")
+        self.assertEqual(output.items[0].segments[0].group_index, 1)
+
     def test_format_items_includes_group_indices(self) -> None:
         """_format_items should include group index info in output."""
         from src.chains.color_distribution_chain import _format_items
@@ -923,6 +939,90 @@ class RuleBasedDistributionTestCase(unittest.TestCase):
         """If anchor text is not in translation, return None."""
         result = self._try(["Cost: ", "100USD"], "비용: 100달러")
         self.assertIsNone(result)
+
+
+class TranslateColoredSegmentsBatchingTestCase(unittest.TestCase):
+    """Tests for simultaneous colored translation batching."""
+
+    @patch("src.chains.color_distribution_chain.create_llm")
+    @patch("src.chains.color_distribution_chain._invoke_colored_translation_batch")
+    def test_single_batch_success(self, mock_invoke, mock_create_llm) -> None:
+        from src.chains.color_distribution_chain import (
+            ColoredSegment,
+            ColoredTranslation,
+            translate_with_color_segments,
+        )
+
+        mock_invoke.return_value = [
+            ColoredTranslation(
+                translation="Auto-fire function when aiming",
+                segments=[
+                    ColoredSegment(text="Auto-fire function", group_index=1),
+                    ColoredSegment(text=" when aiming", group_index=0),
+                ],
+            )
+        ]
+
+        result = translate_with_color_segments(
+            [["조준 시 ", "자동발사 기능"]],
+            source_lang="한국어",
+            target_lang="영어",
+            provider="anthropic",
+            model_name="claude-haiku-4-5-20251001",
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result[0].translation, "Auto-fire function when aiming")
+        self.assertEqual(result[0].segments[0].group_index, 1)
+        mock_invoke.assert_called_once()
+        mock_create_llm.assert_called_once()
+
+
+class TranslateColoredParagraphsServiceTestCase(unittest.TestCase):
+    """Service integration for simultaneous translation/style mapping."""
+
+    @patch("src.services.translation_service.translate_with_color_segments")
+    def test_valid_colored_translation_replaces_plain_translation(self, mock_translate) -> None:
+        from src.chains.color_distribution_chain import ColoredSegment, ColoredTranslation
+        from src.services.translation_service import TranslationService
+
+        runs = [
+            _make_run("조준 시 ", rpr_children=[_make_solid_fill("111111")]),
+            _make_run("자동발사 기능", rpr_children=[_make_solid_fill("FF0000")]),
+        ]
+        paragraph = MagicMock()
+        paragraph.runs = runs
+        para_info = types.SimpleNamespace(paragraph=paragraph, is_note=False)
+        translated_texts = ["Old position-based translation"]
+
+        mock_translate.return_value = [
+            ColoredTranslation(
+                translation="Auto-fire function when aiming",
+                segments=[
+                    ColoredSegment(text="Auto-fire function", group_index=1),
+                    ColoredSegment(text=" when aiming", group_index=0),
+                ],
+            )
+        ]
+
+        result = TranslationService._translate_colored_paragraphs_with_segments(
+            [para_info],
+            translated_texts,
+            source_lang="한국어",
+            target_lang="영어",
+            provider="anthropic",
+            model_name="claude-haiku-4-5-20251001",
+            ppt_context="",
+            context=None,
+            instructions=None,
+            glossary_terms="None",
+            length_limit=None,
+        )
+
+        self.assertEqual(translated_texts[0], "Auto-fire function when aiming")
+        self.assertIsNotNone(result)
+        self.assertEqual(result[0][0].text, "Auto-fire function")
+        self.assertEqual(result[0][0].group_index, 1)
 
 
 class DistributeColorsBatchingTestCase(unittest.TestCase):
