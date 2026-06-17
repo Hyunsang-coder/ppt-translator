@@ -891,7 +891,7 @@ class TranslationService:
             source_lang=source_language,
             target_lang=target_language,
             provider=request.provider,
-            model_name=self._color_distribution_model(request.provider, request.model),
+            model_name=request.model,
             ppt_context=ppt_context,
             context=request.context,
             instructions=request.instructions,
