@@ -49,6 +49,9 @@
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": true,
+    "macOS": {
+      "entitlements": "entitlements.plist"
+    },
     "resources": {
       "resources/sidecar": "resources/sidecar"
     },

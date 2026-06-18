@@ -201,6 +201,70 @@ jobs:
           fi
           echo "Sidecar startup OK"
 
+      # Sign the PyInstaller sidecar's nested native libs with Developer ID.
+      # Tauri only signs the main .app (no --deep), so anything under
+      # bundle.resources reaches notarization with PyInstaller's ad-hoc signature
+      # and Apple rejects it ("not signed with a valid Developer ID certificate" +
+      # "no secure timestamp"). We sign every Mach-O here, innermost-first, in our
+      # own keychain; Tauri's later signing (separate keychain, no --deep) leaves
+      # these intact. macOS-only; no-ops when the signing cert is absent.
+      - name: Sign sidecar native libraries (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          [ -n "${APPLE_CERTIFICATE:-}" ] || { echo "No signing cert; skipping sidecar signing."; exit 0; }
+
+          SIDECAR_DIR="src-tauri/resources/sidecar"
+          ENTITLEMENTS="src-tauri/entitlements.plist"
+          KEYCHAIN="$RUNNER_TEMP/sidecar-signing.keychain-db"
+          KEYCHAIN_PW="$(uuidgen)"
+
+          # Create + unlock an ephemeral keychain and import the .p12.
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -k "$KEYCHAIN" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PW" "$KEYCHAIN" >/dev/null
+          # Make the identity discoverable to codesign -s.
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+          security find-identity -v -p codesigning "$KEYCHAIN"
+
+          sign() {
+            codesign --force --timestamp --options runtime \
+              --entitlements "$ENTITLEMENTS" \
+              -s "$APPLE_SIGNING_IDENTITY" --keychain "$KEYCHAIN" "$1"
+          }
+
+          # Sign every real Mach-O, innermost-first (sort -r puts deeper paths first).
+          # `find -type f` skips symlinks, so each binary is signed exactly once.
+          find "$SIDECAR_DIR" -type f \( -name '*.dylib' -o -name '*.so' \) \
+            | sort -r | while IFS= read -r lib; do
+              echo "signing: $lib"
+              sign "$lib"
+            done
+          # The PyInstaller bootloader executable, signed last.
+          sign "$SIDECAR_DIR/ppt-translator-sidecar"
+
+          # Fail closed if anything is still ad-hoc / unsigned. Sample one dylib
+          # (version-agnostic) and assert it is NOT ad-hoc, plus verify the exe.
+          SAMPLE="$(find "$SIDECAR_DIR/_internal" -name '*.dylib' -type f | head -1)"
+          codesign -dv --verbose=4 "$SAMPLE" 2>&1 | grep -E 'Authority|TeamIdentifier|flags'
+          if codesign -dv --verbose=4 "$SAMPLE" 2>&1 | grep -q 'adhoc'; then
+            echo "error: $SAMPLE is still ad-hoc signed" >&2; exit 1
+          fi
+          codesign --verify --strict --verbose=2 "$SIDECAR_DIR/ppt-translator-sidecar"
+          echo "Sidecar native libraries signed with Developer ID."
+
       # Build + sign + bundle (incl. updater artifacts) and upload everything to
       # the draft release. Signing the updater bundle requires the Tauri keypair;
       # macOS notarization requires the APPLE_* secrets (skipped if unset).
