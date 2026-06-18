@@ -71,11 +71,10 @@ export default async function Home() {
           </p>
         )}
         <p className="mt-5 max-w-2xl text-base leading-7 text-muted-foreground sm:text-lg">
-          웹 번역 서비스는 종료되었습니다. 아래 버튼으로 macOS와 Windows용
-          데스크톱 앱을 받을 수 있습니다.
-          {latestRelease
-            ? " 표시된 버전과 동일한 설치 파일이 다운로드됩니다."
-            : null}
+          슬라이드 번역 후 글꼴·색상·강조가 깨지는 문제, 용어가 슬라이드마다
+          달라지는 문제를 줄입니다. PPT 번역캣은 문맥과 용어집을 반영해
+          번역하고, 원본 서식을 최대한 유지한 채 결과 파일을 만듭니다. 아래에서
+          macOS 또는 Windows용 앱을 설치하세요.
         </p>
         <div className="mt-8 grid w-full gap-3 sm:grid-cols-3">
           {downloads.map(({ label, href, icon: Icon }) => (
