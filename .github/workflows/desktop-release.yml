@@ -245,25 +245,45 @@ jobs:
               -s "$APPLE_SIGNING_IDENTITY" --keychain "$KEYCHAIN" "$1"
           }
 
-          # Sign every real Mach-O, innermost-first (sort -r puts deeper paths first).
-          # `find -type f` skips symlinks, so each binary is signed exactly once.
-          find "$SIDECAR_DIR" -type f \( -name '*.dylib' -o -name '*.so' \) \
-            | sort -r | while IFS= read -r lib; do
-              echo "signing: $lib"
-              sign "$lib"
-            done
-          # The PyInstaller bootloader executable, signed last.
-          sign "$SIDECAR_DIR/ppt-translator-sidecar"
+          # PyInstaller bundles whatever the build Python provides: loose .dylib/.so,
+          # extension-less Mach-O executables (e.g. _internal/Python), AND a whole
+          # Python.framework on python.org builds. All embedded code must carry a
+          # Developer ID + secure timestamp or notarization rejects it. We therefore:
+          #   1. sign each .framework as a bundle (deepest first), then
+          #   2. sign every remaining Mach-O detected by content (any extension),
+          #      skipping anything already inside a signed .framework.
+          # Order is innermost-first so each seal nests correctly.
 
-          # Fail closed if anything is still ad-hoc / unsigned. Sample one dylib
-          # (version-agnostic) and assert it is NOT ad-hoc, plus verify the exe.
-          SAMPLE="$(find "$SIDECAR_DIR/_internal" -name '*.dylib' -type f | head -1)"
-          codesign -dv --verbose=4 "$SAMPLE" 2>&1 | grep -E 'Authority|TeamIdentifier|flags'
-          if codesign -dv --verbose=4 "$SAMPLE" 2>&1 | grep -q 'adhoc'; then
-            echo "error: $SAMPLE is still ad-hoc signed" >&2; exit 1
+          # 1. Frameworks (deepest path first). `-print` then reverse-sort.
+          find "$SIDECAR_DIR" -type d -name '*.framework' | sort -r | while IFS= read -r fw; do
+            echo "signing framework: $fw"
+            sign "$fw"
+          done
+
+          # 2. Every Mach-O file NOT inside a .framework, by content, deepest first.
+          find "$SIDECAR_DIR" -type f ! -path '*.framework/*' -print0 \
+            | while IFS= read -r -d '' f; do
+                # `file` is cheap; only Mach-O (exec/dylib/bundle) needs signing.
+                if file -b "$f" | grep -q 'Mach-O'; then echo "$f"; fi
+              done | sort -r | while IFS= read -r macho; do
+                echo "signing: $macho"
+                sign "$macho"
+              done
+
+          # Fail closed: assert nothing under the sidecar is still ad-hoc / unsigned.
+          bad=0
+          while IFS= read -r -d '' f; do
+            if file -b "$f" | grep -q 'Mach-O'; then
+              if ! codesign --verify --strict "$f" 2>/dev/null; then
+                echo "UNSIGNED/INVALID: $f" >&2; bad=1
+              fi
+            fi
+          done < <(find "$SIDECAR_DIR" -type f ! -path '*.framework/*' -print0)
+          if [ "$bad" != 0 ]; then
+            echo "error: some sidecar Mach-O files are not properly signed" >&2; exit 1
           fi
           codesign --verify --strict --verbose=2 "$SIDECAR_DIR/ppt-translator-sidecar"
-          echo "Sidecar native libraries signed with Developer ID."
+          echo "Sidecar native code signed with Developer ID."
 
       # Build + sign + bundle (incl. updater artifacts) and upload everything to
       # the draft release. Signing the updater bundle requires the Tauri keypair;
