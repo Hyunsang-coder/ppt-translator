@@ -115,7 +115,6 @@ jobs:
     env:
       CI: "true"
       TAURI_BUILD: "1"
-      CARGO_TARGET_DIR: target
 
     steps:
       - name: Checkout
