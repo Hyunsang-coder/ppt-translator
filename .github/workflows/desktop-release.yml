@@ -259,49 +259,51 @@ jobs:
             | sed "s#$SIDECAR_DIR/_internal/##" | sort || echo "(no Python.framework)"
           echo "::endgroup::"
 
-          # PyInstaller points the LOOSE root dylibs (_internal/lib*.dylib) at the
-          # real files under PIL/.dylibs via build-machine absolute symlinks. The
-          # codesign loop below uses `find -type f` and skips symlinks, so these
-          # roots reach Tauri unsigned; Tauri dereferences them into the .app and
-          # notarization rejects the unsigned copies. Replace ONLY these loose root
-          # dylib symlinks with real copies so the loop signs an actual file.
-          #
-          # We deliberately do NOT touch symlinks inside Python.framework or the
-          # _internal/Python loader symlink: those form a STANDARD macOS framework
-          # (Versions/Current/..., a Resources DIRECTORY symlink, etc.). Dereferencing
-          # them breaks the framework layout and `cp` can't even copy the directory
-          # symlinks. The framework is signed as a bundle further below instead.
-          find "$SIDECAR_DIR/_internal" -maxdepth 1 -type l -name '*.dylib' \
-            | while IFS= read -r link; do
-            tgt="$(readlink "$link")"
-            case "$tgt" in
-              /*) real="$tgt" ;;
-              *)  real="$(dirname "$link")/$tgt" ;;
-            esac
-            if [ ! -e "$real" ]; then
-              # Build-machine absolute path may be gone: find the real file by name.
+          # Some _internal entries are SYMLINKS that resolve to a Mach-O file:
+          #  - loose root dylibs (_internal/lib*.dylib -> PIL/.dylibs/...) via
+          #    build-machine absolute paths, and
+          #  - the Python loader symlinks (_internal/Python and
+          #    Python.framework/Python -> Versions/Current/Python -> 3.12/Python).
+          # When Tauri bundles the .app it DEREFERENCES these into plain file copies
+          # that carry no Developer ID + secure timestamp, so notarization rejects
+          # them (it rejected exactly _internal/Python and Python.framework/Python).
+          # Fix: pre-dereference every symlink whose target is a REGULAR FILE into a
+          # real copy here, so the sign loop below signs an actual file and Tauri has
+          # nothing left to dereference. We must NOT touch symlinks that point at a
+          # DIRECTORY (Python.framework/Resources, Versions/Current) — cp can't copy
+          # them and they're needed for the framework layout; leave those intact.
+          find "$SIDECAR_DIR" -type l | while IFS= read -r link; do
+            # Resolve to the real path the symlink ultimately points to.
+            real="$(readlink -f "$link" 2>/dev/null || true)"
+            if [ -z "$real" ] || [ ! -e "$real" ]; then
+              # Build-machine absolute target may be gone on CI: find by basename.
               real="$(find "$SIDECAR_DIR" -name "$(basename "$link")" -type f -print -quit)"
             fi
-            if [ -n "$real" ] && [ -e "$real" ]; then
+            if [ -d "$real" ]; then
+              echo "keep dir symlink: ${link#$SIDECAR_DIR/} -> $real"
+              continue
+            fi
+            if [ -n "$real" ] && [ -f "$real" ]; then
               echo "deref: ${link#$SIDECAR_DIR/} -> $real"
               rm -f "$link"
               cp -p "$real" "$link"
             else
-              echo "error: cannot resolve root dylib symlink: $link -> $tgt" >&2
+              echo "error: cannot resolve file symlink: $link -> $(readlink "$link")" >&2
               exit 1
             fi
           done
 
           # Sign EVERY individual Mach-O by content, deepest-path first so nested
-          # code is sealed before its container. This includes the real Mach-O
-          # INSIDE Python.framework (Versions/3.12/Python). We deliberately do NOT
-          # sign Python.framework as a bundle: PyInstaller's framework keeps loose
-          # files / symlinks in the root and codesign refuses to seal it ("unsealed
-          # contents present in the root directory of an embedded framework"). Signing
-          # the framework's real Mach-O individually still gives it a Developer ID +
-          # secure timestamp, and the framework's root symlinks (Python, Resources,
-          # Versions/Current) resolve to that signed binary — so whatever Tauri
-          # dereferences into the .app is signed. Symlinks are skipped (-type f).
+          # code is sealed before its container. After the deref above this now
+          # covers _internal/Python and Python.framework/Python (real copies) plus
+          # the framework's own Versions/3.12/Python. We deliberately do NOT sign
+          # Python.framework as a bundle: PyInstaller's framework keeps loose files /
+          # symlinks in the root and codesign refuses to seal it ("unsealed contents
+          # present in the root directory of an embedded framework"). Signing each
+          # Mach-O individually still gives every embedded binary a Developer ID +
+          # secure timestamp, which is what notarization checks. Symlinks that remain
+          # (directory symlinks like Resources / Versions/Current) are skipped via
+          # -type f and don't carry code.
           find "$SIDECAR_DIR" -type f -print0 \
             | while IFS= read -r -d '' f; do
                 if file -b "$f" | grep -q 'Mach-O'; then echo "$f"; fi
