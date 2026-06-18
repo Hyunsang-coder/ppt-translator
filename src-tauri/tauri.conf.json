@@ -32,9 +32,21 @@
       "capabilities": ["default"]
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZBRjY1QUM5MDhFMjExQTYKUldTbUVlSUl5VnIyYWorNnppZzM4czIwZ2JObExxdExyUFNJTkcwMWNTaGtMN1lFQXhHbHorYWYK",
+      "endpoints": [
+        "https://github.com/Hyunsang-coder/ppt-translator/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "resources": {
       "resources/sidecar": "resources/sidecar"
     },

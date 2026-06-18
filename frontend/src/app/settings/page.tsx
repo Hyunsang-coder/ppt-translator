@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { DesktopShell } from "@/components/desktop-shell";
 import { Button } from "@/components/ui/button";
@@ -39,6 +39,8 @@ export default function SettingsPage() {
     anthropic: false,
   });
   const [busy, setBusy] = useState(false);
+  const [version, setVersion] = useState<string>("");
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -47,8 +49,36 @@ export default function SettingsPage() {
         openai: await hasApiKey("openai"),
         anthropic: await hasApiKey("anthropic"),
       });
+      try {
+        const { getVersion } = await import("@tauri-apps/api/app");
+        setVersion(await getVersion());
+      } catch {
+        // version is best-effort
+      }
     })();
   }, []);
+
+  const handleCheckForUpdate = async () => {
+    if (checkingUpdate) return;
+    setCheckingUpdate(true);
+    try {
+      const { check } = await import("@tauri-apps/plugin-updater");
+      const update = await check();
+      if (update) {
+        window.dispatchEvent(
+          new CustomEvent("app:update-found", { detail: update }),
+        );
+      } else {
+        toast.success("최신 버전을 사용 중입니다.");
+      }
+    } catch (e) {
+      toast.error(
+        `업데이트 확인 실패: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
 
   if (!isTauri()) {
     return (
@@ -116,6 +146,27 @@ export default function SettingsPage() {
             암호화되어 저장됩니다. 저장하면 번역 엔진에 자동으로 적용됩니다.
           </p>
         </div>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">앱 업데이트</CardTitle>
+            <CardDescription>
+              현재 버전 {version || "확인 중…"}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button
+              variant="outline"
+              onClick={handleCheckForUpdate}
+              disabled={checkingUpdate}
+            >
+              <RefreshCw
+                className={checkingUpdate ? "h-4 w-4 animate-spin" : "h-4 w-4"}
+              />
+              {checkingUpdate ? "확인 중…" : "업데이트 확인"}
+            </Button>
+          </CardContent>
+        </Card>
 
         {PROVIDERS.map((p) => (
           <Card key={p.id}>

@@ -15,8 +15,79 @@ permissions:
   contents: write
 
 jobs:
+  # Create a DRAFT release up front so every matrix build can attach its
+  # installers, updater bundles, signatures and the latest.json manifest to the
+  # same release. It is published (un-drafted) only after all builds succeed.
+  create-release:
+    name: Create Draft Release
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create_release.outputs.result }}
+      tag: ${{ steps.release-meta.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve release tag
+        id: release-meta
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            TAG="v${{ inputs.version }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Verify release version matches tauri.conf.json
+        shell: bash
+        run: |
+          TAG="${{ steps.release-meta.outputs.tag }}"
+          VERSION="${TAG#v}"
+          TAURI_VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          if [[ "$VERSION" != "$TAURI_VERSION" ]]; then
+            echo "Release tag version ($VERSION) does not match src-tauri/tauri.conf.json ($TAURI_VERSION)." >&2
+            exit 1
+          fi
+
+      - name: Create draft release
+        id: create_release
+        uses: actions/github-script@v7
+        env:
+          RELEASE_TAG: ${{ steps.release-meta.outputs.tag }}
+        with:
+          script: |
+            const tag = process.env.RELEASE_TAG;
+            const notes = [
+              'Desktop installers for PPT 번역캣.',
+              '',
+              'macOS builds are notarized when signing secrets are configured;',
+              'Windows builds are not code-signed yet and can show a SmartScreen warning.',
+            ].join('\n');
+            // Reuse an existing release for this tag if present, else create one.
+            let release;
+            try {
+              release = (await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag,
+              })).data;
+            } catch (e) {
+              release = (await github.rest.repos.createRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag_name: tag,
+                name: `PPT 번역캣 ${tag}`,
+                body: notes,
+                draft: true,
+                prerelease: false,
+              })).data;
+            }
+            return release.id;
+
   build:
     name: Build ${{ matrix.label }}
+    needs: create-release
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -25,19 +96,19 @@ jobs:
           - label: macOS Apple Silicon
             runner: macos-15
             target: aarch64-apple-darwin
-            bundle: dmg
+            bundles: dmg
             asset_name: ppt-translator-macos-arm64.dmg
             asset_glob: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
           - label: macOS Intel
             runner: macos-15-intel
             target: x86_64-apple-darwin
-            bundle: dmg
+            bundles: dmg
             asset_name: ppt-translator-macos-x64.dmg
             asset_glob: src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
           - label: Windows x64
             runner: windows-latest
             target: x86_64-pc-windows-msvc
-            bundle: nsis
+            bundles: nsis
             asset_name: ppt-translator-windows-x64-setup.exe
             asset_glob: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe
 
@@ -91,9 +162,9 @@ jobs:
           rustup default stable
           rustup target add "${{ matrix.target }}"
 
-      - name: Install Tauri CLI
-        run: npm install --global @tauri-apps/cli@^2
-
+      # Build the Python sidecar and the Next.js frontend BEFORE tauri-action.
+      # tauri-action then runs `tauri build` with beforeBuildCommand no-op'd via
+      # tauri-ci.conf.json, so it just packages the already-staged artifacts.
       - name: Build sidecar and frontend
         shell: bash
         run: |
@@ -131,15 +202,35 @@ jobs:
           fi
           echo "Sidecar startup OK"
 
-      - name: Build installer
-        shell: bash
-        working-directory: src-tauri
-        run: tauri build --config ../.github/tauri-ci.conf.json --target "${{ matrix.target }}" --bundles "${{ matrix.bundle }}"
+      # Build + sign + bundle (incl. updater artifacts) and upload everything to
+      # the draft release. Signing the updater bundle requires the Tauri keypair;
+      # macOS notarization requires the APPLE_* secrets (skipped if unset).
+      - name: Build and sign installer
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: src-tauri
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          args: --config ../.github/tauri-ci.conf.json --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
 
-      - name: Collect installer
+      # tauri-action uploads the installer under its product-name filename
+      # (e.g. "PPT 번역캣_0.1.6_aarch64.dmg"). The web download page links to
+      # stable names at releases/latest/download/, so upload a renamed copy too.
+      - name: Upload stable-named installer
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.create-release.outputs.tag }}
         run: |
-          mkdir -p release-assets
           shopt -s nullglob
           matches=( ${{ matrix.asset_glob }} )
           if [[ "${#matches[@]}" -ne 1 ]]; then
@@ -147,76 +238,28 @@ jobs:
             printf '%s\n' "${matches[@]}" >&2
             exit 1
           fi
-          cp "${matches[0]}" "release-assets/${{ matrix.asset_name }}"
-
-      - name: Upload installer artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.asset_name }}
-          path: release-assets/${{ matrix.asset_name }}
-          if-no-files-found: error
+          cp "${matches[0]}" "${{ matrix.asset_name }}"
+          gh release upload "$TAG" "${{ matrix.asset_name }}" --clobber
 
   publish:
     name: Publish GitHub Release
+    needs: [create-release, build]
     runs-on: ubuntu-latest
-    needs: build
-    outputs:
-      tag: ${{ steps.release-meta.outputs.tag }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Resolve release tag
-        id: release-meta
-        shell: bash
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            TAG="v${{ inputs.version }}"
-          else
-            TAG="${GITHUB_REF_NAME}"
-          fi
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Verify release version matches tauri.conf.json
-        shell: bash
-        run: |
-          TAG="${{ steps.release-meta.outputs.tag }}"
-          VERSION="${TAG#v}"
-          TAURI_VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
-          if [[ "$VERSION" != "$TAURI_VERSION" ]]; then
-            echo "Release tag version ($VERSION) does not match src-tauri/tauri.conf.json ($TAURI_VERSION)." >&2
-            exit 1
-          fi
-
-      - name: Download installer artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: release-assets
-          merge-multiple: true
-
-      - name: Publish release
+      - name: Un-draft release
+        uses: actions/github-script@v7
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          TAG="${{ steps.release-meta.outputs.tag }}"
-
-          NOTES=$(cat <<'EOF'
-          Unsigned desktop installers for PPT 번역캣.
-
-          macOS builds are not notarized yet and can show a Gatekeeper warning.
-          Windows builds are not code-signed yet and can show a SmartScreen warning.
-          EOF
-          )
-
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" \
-              --target "$GITHUB_SHA" \
-              --title "PPT 번역캣 $TAG" \
-              --notes "$NOTES" \
-              --latest
-          fi
-
-          gh release upload "$TAG" release-assets/* --clobber
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+        with:
+          script: |
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: Number(process.env.RELEASE_ID),
+              draft: false,
+              prerelease: false,
+              make_latest: 'true',
+            });
 
   deploy-web:
     name: Deploy Web Download Page
