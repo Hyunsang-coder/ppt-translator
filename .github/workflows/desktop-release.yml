@@ -245,6 +245,36 @@ jobs:
               -s "$APPLE_SIGNING_IDENTITY" --keychain "$KEYCHAIN" "$1"
           }
 
+          # PyInstaller leaves some _internal entries (the loose root dylibs and
+          # Python.framework/Python) as SYMLINKS pointing at build-machine ABSOLUTE
+          # paths (e.g. .../PIL/.dylibs/libpng16.16.dylib). The codesign loop below
+          # uses `find -type f`, so it skips symlinks — those roots reach Tauri
+          # unsigned, Tauri dereferences them into the .app, and notarization rejects
+          # the unsigned copies ("not signed with a valid Developer ID" + "no secure
+          # timestamp"). Fix: replace every symlink with a real copy of its target so
+          # the loop signs an actual file. The literal target is dead on CI (different
+          # absolute path), so fall back to locating the real file by basename inside
+          # the sidecar tree (basenames are unique here — verified one match each).
+          find "$SIDECAR_DIR" -type l | while IFS= read -r link; do
+            tgt="$(readlink "$link")"
+            case "$tgt" in
+              /*) real="$tgt" ;;
+              *)  real="$(dirname "$link")/$tgt" ;;
+            esac
+            if [ ! -e "$real" ]; then
+              # Build-machine absolute path is gone on CI: find the real file by name.
+              real="$(find "$SIDECAR_DIR" -name "$(basename "$link")" -type f -print -quit)"
+            fi
+            if [ -n "$real" ] && [ -e "$real" ]; then
+              echo "deref: $link -> $real"
+              rm -f "$link"
+              cp -p "$real" "$link"
+            else
+              echo "error: cannot resolve symlink target: $link -> $tgt" >&2
+              exit 1
+            fi
+          done
+
           # PyInstaller bundles loose .dylib/.so, extension-less Mach-O executables
           # (e.g. _internal/Python), and a NON-standard Python.framework whose root
           # holds real files instead of symlinks — codesign refuses to seal it as a
