@@ -6,7 +6,7 @@ This file is the single source of truth for project-level agent instructions. `A
 
 ## Project Overview
 
-PPT 번역캣 — Tauri desktop app for PowerPoint translation (LangChain + OpenAI/Anthropic). The UI lives in `frontend/`, the desktop shell in `src-tauri/`, and the local Python sidecar uses `api.py` + `src/`. Preserves original formatting, glossary support, auto language detection, and real-time progress via polling.
+PPT 번역캣 — Tauri desktop app for PowerPoint translation (LangChain + OpenAI/Anthropic). The UI lives in `frontend/`, the desktop shell in `src-tauri/`, and the local Python sidecar uses `api.py` + `src/`. Preserves original formatting, glossary support, auto language detection, real-time progress via polling, and in-app auto-update from GitHub Releases.
 
 **Python >= 3.12** required.
 

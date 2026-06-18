@@ -46,6 +46,7 @@ NEXT_PUBLIC_API_URL=    # Browser-only local dev fallback; Tauri uses runtime si
 - `node desktop/build-sidecar.mjs`: Builds and stages the Python sidecar into `src-tauri/resources/sidecar/` (cross-platform; auto-creates the desktop venv on first run)
 - `TAURI_BUILD=1 cargo tauri build`: Builds the static frontend export and packages the desktop app
 - Build the sidecar on each target OS because PyInstaller output is platform-specific
+- **Auto-update**: the app self-updates from GitHub Releases (`tauri-plugin-updater`). Releases must carry signed updater bundles + `latest.json`, produced by `desktop-release.yml`. Requires the `TAURI_SIGNING_*` (updater) and `APPLE_*` (macOS notarization) secrets — see [`docs/CICD.md`](CICD.md) "Auto-update". The updater public key lives in `src-tauri/tauri.conf.json` → `plugins.updater.pubkey`
 
 ### Vercel
 - Public web deployment is a download 안내 page only
@@ -57,7 +58,7 @@ NEXT_PUBLIC_API_URL=    # Browser-only local dev fallback; Tauri uses runtime si
 - `ci.yml`: PR + manual. Backend pytest (Python 3.12), frontend `tsc --noEmit` (Node 20)
 - `predeploy.yml`: Full validation on `main`; triggers `deploy-web.yml` on success
 - `deploy-web.yml`: Vercel production deploy for the public download page
-- `desktop-release.yml`: Tag/manual desktop installers + GitHub Release + web deploy
+- `desktop-release.yml`: Tag/manual. Builds + signs desktop installers (`tauri-action`), generates the `latest.json` auto-update manifest, publishes the GitHub Release, then deploys web
 - See [`docs/CICD.md`](CICD.md) for bootstrap and release commands
 
 ## Supported Models
@@ -81,7 +82,7 @@ from it, so adding/bumping a model is a one-file change. The frontend fallback
 LangChain, langchain-anthropic, python-pptx, FastAPI, tenacity, langdetect, sse-starlette, Pillow, pandas + openpyxl
 
 ### Frontend
-Next.js 16, React 19, TypeScript 5, Tailwind CSS 4, Zustand 5, Radix UI, Lucide React, react-dropzone, next-themes, sonner, class-variance-authority + tailwind-merge + clsx
+Next.js 16, React 19, TypeScript 5, Tailwind CSS 4, Zustand 5, Radix UI, Lucide React, react-dropzone, next-themes, sonner, class-variance-authority + tailwind-merge + clsx, @tauri-apps/api + plugin-dialog/plugin-fs/plugin-updater/plugin-process
 
 ## API Usage
 ```bash

@@ -5,6 +5,7 @@
   - Stores API keys in the OS keychain
   - Spawns the bundled Python sidecar
   - Emits the sidecar port to the WebView
+  - In-app auto-update via `tauri-plugin-updater` + `tauri-plugin-process` (relaunch); see [`docs/CICD.md`](CICD.md) "Auto-update"
 - `desktop/sidecar.py`: Sidecar launcher for the local FastAPI server
 - `api.py`: FastAPI REST API app used by the sidecar and local development
   - `GET /health`: Health check
@@ -59,16 +60,17 @@ Next.js 16, React 19, TypeScript 5, Tailwind CSS 4, Zustand 5.
 
 ### Pages (`src/app/`)
 - `page.tsx`: Public Vercel download 안내 page
-- `translate/page.tsx`, `extract/page.tsx`, `settings/page.tsx`: Desktop app screens
+- `translate/page.tsx`, `extract/page.tsx`: Desktop app screens
+- `settings/page.tsx`: API key management (keychain) + "앱 업데이트" card (current version via `getVersion()`, manual update check)
 - `layout.tsx`: Root layout with ThemeProvider
 
 ### Components (`src/components/`)
 - **shared/**: `Header.tsx`, `FileUploader.tsx`
 - **translation/**: `TranslationForm.tsx`, `SettingsPanel.tsx`, `ProgressPanel.tsx`, `LogViewer.tsx`
 - **extraction/**: `ExtractionForm.tsx`, `MarkdownPreview.tsx`
-- `desktop-shell.tsx`: Desktop-only route wrapper; redirects hosted web app routes back to the public root
+- `desktop-shell.tsx`: Desktop-only route wrapper; redirects hosted web app routes back to the public root. Mounts the auto-update gate (`AutoUpdateGate`) in Tauri — shows `UpdateModal` on startup-check or manual `app:update-found` event
 - `sidecar-provider.tsx`: Tauri sidecar port bootstrap for desktop app screens
-- **ui/**: Shadcn/Radix UI components
+- **ui/**: Shadcn/Radix UI components. `update-modal.tsx`: self-contained update dialog (download progress, skip-version)
 
 ### State & Hooks
 - `stores/translation-store.ts`: Zustand store. `resetJobState()` preserves file/settings. Defaults: `textFitMode: "expand_box"`, `imageCompression: "medium"`, `lengthLimit: null`
@@ -76,6 +78,7 @@ Next.js 16, React 19, TypeScript 5, Tailwind CSS 4, Zustand 5.
 - `hooks/useTranslation.ts`: Translation workflow with `retranslate()`. Uses `getState()` to avoid stale closures
 - `hooks/useExtraction.ts`: Extraction workflow
 - `hooks/useConfig.ts`: Config fetching with graceful fallback
+- `hooks/useAutoUpdate.ts`: Tauri auto-update lifecycle — startup check (production only), download/install with progress + relaunch, skip-version via localStorage. No-op outside Tauri
 - `lib/api-base.ts`: Tauri sidecar URL resolution with local browser fallback
 - `lib/api-client.ts`: REST client
 - `lib/keychain.ts`: Tauri keychain command wrappers
