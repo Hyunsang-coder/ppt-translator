@@ -245,32 +245,23 @@ jobs:
               -s "$APPLE_SIGNING_IDENTITY" --keychain "$KEYCHAIN" "$1"
           }
 
-          # PyInstaller bundles whatever the build Python provides: loose .dylib/.so,
-          # extension-less Mach-O executables (e.g. _internal/Python), AND a whole
-          # Python.framework on python.org builds. All embedded code must carry a
-          # Developer ID + secure timestamp or notarization rejects it. We therefore:
-          #   1. sign each .framework as a bundle (deepest first), then
-          #   2. sign every remaining Mach-O detected by content (any extension),
-          #      skipping anything already inside a signed .framework.
-          # Order is innermost-first so each seal nests correctly.
-
-          # 1. Frameworks (deepest path first). `-print` then reverse-sort.
-          find "$SIDECAR_DIR" -type d -name '*.framework' | sort -r | while IFS= read -r fw; do
-            echo "signing framework: $fw"
-            sign "$fw"
-          done
-
-          # 2. Every Mach-O file NOT inside a .framework, by content, deepest first.
-          find "$SIDECAR_DIR" -type f ! -path '*.framework/*' -print0 \
+          # PyInstaller bundles loose .dylib/.so, extension-less Mach-O executables
+          # (e.g. _internal/Python), and a NON-standard Python.framework whose root
+          # holds real files instead of symlinks — codesign refuses to seal it as a
+          # bundle ("unsealed contents present in the root of an embedded framework").
+          # So we don't treat frameworks as bundles: we sign EVERY individual Mach-O
+          # file (in or out of a framework) by content, deepest-path first so nested
+          # code is sealed before its container. All embedded code must carry a
+          # Developer ID + secure timestamp or notarization rejects it.
+          find "$SIDECAR_DIR" -type f -print0 \
             | while IFS= read -r -d '' f; do
-                # `file` is cheap; only Mach-O (exec/dylib/bundle) needs signing.
                 if file -b "$f" | grep -q 'Mach-O'; then echo "$f"; fi
               done | sort -r | while IFS= read -r macho; do
                 echo "signing: $macho"
                 sign "$macho"
               done
 
-          # Fail closed: assert nothing under the sidecar is still ad-hoc / unsigned.
+          # Fail closed: every Mach-O under the sidecar must verify (none ad-hoc).
           bad=0
           while IFS= read -r -d '' f; do
             if file -b "$f" | grep -q 'Mach-O'; then
@@ -278,7 +269,7 @@ jobs:
                 echo "UNSIGNED/INVALID: $f" >&2; bad=1
               fi
             fi
-          done < <(find "$SIDECAR_DIR" -type f ! -path '*.framework/*' -print0)
+          done < <(find "$SIDECAR_DIR" -type f -print0)
           if [ "$bad" != 0 ]; then
             echo "error: some sidecar Mach-O files are not properly signed" >&2; exit 1
           fi
