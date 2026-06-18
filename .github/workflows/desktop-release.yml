@@ -245,45 +245,57 @@ jobs:
               -s "$APPLE_SIGNING_IDENTITY" --keychain "$KEYCHAIN" "$1"
           }
 
-          # PyInstaller leaves some _internal entries (the loose root dylibs and
-          # Python.framework/Python) as SYMLINKS pointing at build-machine ABSOLUTE
-          # paths (e.g. .../PIL/.dylibs/libpng16.16.dylib). The codesign loop below
-          # uses `find -type f`, so it skips symlinks — those roots reach Tauri
-          # unsigned, Tauri dereferences them into the .app, and notarization rejects
-          # the unsigned copies ("not signed with a valid Developer ID" + "no secure
-          # timestamp"). Fix: replace every symlink with a real copy of its target so
-          # the loop signs an actual file. The literal target is dead on CI (different
-          # absolute path), so fall back to locating the real file by basename inside
-          # the sidecar tree (basenames are unique here — verified one match each).
-          find "$SIDECAR_DIR" -type l | while IFS= read -r link; do
+          # --- Diagnostics: dump the sidecar's symlink + framework layout ---------
+          # Layout differs by build host (local has no Python.framework; the macOS
+          # runner produces a standard framework). Log it so failures are diagnosable
+          # from the run log without a local repro.
+          echo "::group::sidecar symlinks"
+          find "$SIDECAR_DIR" -type l -print | while IFS= read -r l; do
+            printf '%s -> %s\n' "${l#$SIDECAR_DIR/}" "$(readlink "$l")"
+          done
+          echo "::endgroup::"
+          echo "::group::Python.framework tree"
+          find "$SIDECAR_DIR/_internal/Python.framework" 2>/dev/null \
+            | sed "s#$SIDECAR_DIR/_internal/##" | sort || echo "(no Python.framework)"
+          echo "::endgroup::"
+
+          # PyInstaller points the LOOSE root dylibs (_internal/lib*.dylib) at the
+          # real files under PIL/.dylibs via build-machine absolute symlinks. The
+          # codesign loop below uses `find -type f` and skips symlinks, so these
+          # roots reach Tauri unsigned; Tauri dereferences them into the .app and
+          # notarization rejects the unsigned copies. Replace ONLY these loose root
+          # dylib symlinks with real copies so the loop signs an actual file.
+          #
+          # We deliberately do NOT touch symlinks inside Python.framework or the
+          # _internal/Python loader symlink: those form a STANDARD macOS framework
+          # (Versions/Current/..., a Resources DIRECTORY symlink, etc.). Dereferencing
+          # them breaks the framework layout and `cp` can't even copy the directory
+          # symlinks. The framework is signed as a bundle further below instead.
+          find "$SIDECAR_DIR/_internal" -maxdepth 1 -type l -name '*.dylib' \
+            | while IFS= read -r link; do
             tgt="$(readlink "$link")"
             case "$tgt" in
               /*) real="$tgt" ;;
               *)  real="$(dirname "$link")/$tgt" ;;
             esac
             if [ ! -e "$real" ]; then
-              # Build-machine absolute path is gone on CI: find the real file by name.
+              # Build-machine absolute path may be gone: find the real file by name.
               real="$(find "$SIDECAR_DIR" -name "$(basename "$link")" -type f -print -quit)"
             fi
             if [ -n "$real" ] && [ -e "$real" ]; then
-              echo "deref: $link -> $real"
+              echo "deref: ${link#$SIDECAR_DIR/} -> $real"
               rm -f "$link"
               cp -p "$real" "$link"
             else
-              echo "error: cannot resolve symlink target: $link -> $tgt" >&2
+              echo "error: cannot resolve root dylib symlink: $link -> $tgt" >&2
               exit 1
             fi
           done
 
-          # PyInstaller bundles loose .dylib/.so, extension-less Mach-O executables
-          # (e.g. _internal/Python), and a NON-standard Python.framework whose root
-          # holds real files instead of symlinks — codesign refuses to seal it as a
-          # bundle ("unsealed contents present in the root of an embedded framework").
-          # So we don't treat frameworks as bundles: we sign EVERY individual Mach-O
-          # file (in or out of a framework) by content, deepest-path first so nested
-          # code is sealed before its container. All embedded code must carry a
-          # Developer ID + secure timestamp or notarization rejects it.
-          find "$SIDECAR_DIR" -type f -print0 \
+          # Sign every individual Mach-O OUTSIDE Python.framework, by content,
+          # deepest-path first so nested code is sealed before its container.
+          # (Loose .dylib/.so + extension-less executables like the sidecar binary.)
+          find "$SIDECAR_DIR" -type f -not -path '*/Python.framework/*' -print0 \
             | while IFS= read -r -d '' f; do
                 if file -b "$f" | grep -q 'Mach-O'; then echo "$f"; fi
               done | sort -r | while IFS= read -r macho; do
@@ -291,7 +303,17 @@ jobs:
                 sign "$macho"
               done
 
+          # Sign Python.framework as a proper bundle. The runner's framework has the
+          # standard versioned layout, so codesign can seal it (unlike the malformed
+          # flat framework seen on other hosts). --force re-signs nested versions.
+          if [ -d "$SIDECAR_DIR/_internal/Python.framework" ]; then
+            echo "signing framework: Python.framework"
+            sign "$SIDECAR_DIR/_internal/Python.framework"
+          fi
+
           # Fail closed: every Mach-O under the sidecar must verify (none ad-hoc).
+          # Skip files INSIDE the framework — they're covered by the bundle seal and
+          # verifying them individually can trip --strict on framework internals.
           bad=0
           while IFS= read -r -d '' f; do
             if file -b "$f" | grep -q 'Mach-O'; then
@@ -299,9 +321,12 @@ jobs:
                 echo "UNSIGNED/INVALID: $f" >&2; bad=1
               fi
             fi
-          done < <(find "$SIDECAR_DIR" -type f -print0)
+          done < <(find "$SIDECAR_DIR" -type f -not -path '*/Python.framework/*' -print0)
           if [ "$bad" != 0 ]; then
             echo "error: some sidecar Mach-O files are not properly signed" >&2; exit 1
+          fi
+          if [ -d "$SIDECAR_DIR/_internal/Python.framework" ]; then
+            codesign --verify --strict --verbose=2 "$SIDECAR_DIR/_internal/Python.framework"
           fi
           codesign --verify --strict --verbose=2 "$SIDECAR_DIR/ppt-translator-sidecar"
           echo "Sidecar native code signed with Developer ID."
