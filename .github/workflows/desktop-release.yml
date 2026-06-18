@@ -292,10 +292,17 @@ jobs:
             fi
           done
 
-          # Sign every individual Mach-O OUTSIDE Python.framework, by content,
-          # deepest-path first so nested code is sealed before its container.
-          # (Loose .dylib/.so + extension-less executables like the sidecar binary.)
-          find "$SIDECAR_DIR" -type f -not -path '*/Python.framework/*' -print0 \
+          # Sign EVERY individual Mach-O by content, deepest-path first so nested
+          # code is sealed before its container. This includes the real Mach-O
+          # INSIDE Python.framework (Versions/3.12/Python). We deliberately do NOT
+          # sign Python.framework as a bundle: PyInstaller's framework keeps loose
+          # files / symlinks in the root and codesign refuses to seal it ("unsealed
+          # contents present in the root directory of an embedded framework"). Signing
+          # the framework's real Mach-O individually still gives it a Developer ID +
+          # secure timestamp, and the framework's root symlinks (Python, Resources,
+          # Versions/Current) resolve to that signed binary — so whatever Tauri
+          # dereferences into the .app is signed. Symlinks are skipped (-type f).
+          find "$SIDECAR_DIR" -type f -print0 \
             | while IFS= read -r -d '' f; do
                 if file -b "$f" | grep -q 'Mach-O'; then echo "$f"; fi
               done | sort -r | while IFS= read -r macho; do
@@ -303,17 +310,9 @@ jobs:
                 sign "$macho"
               done
 
-          # Sign Python.framework as a proper bundle. The runner's framework has the
-          # standard versioned layout, so codesign can seal it (unlike the malformed
-          # flat framework seen on other hosts). --force re-signs nested versions.
-          if [ -d "$SIDECAR_DIR/_internal/Python.framework" ]; then
-            echo "signing framework: Python.framework"
-            sign "$SIDECAR_DIR/_internal/Python.framework"
-          fi
-
-          # Fail closed: every Mach-O under the sidecar must verify (none ad-hoc).
-          # Skip files INSIDE the framework — they're covered by the bundle seal and
-          # verifying them individually can trip --strict on framework internals.
+          # Fail closed: every Mach-O FILE under the sidecar must verify (none ad-hoc).
+          # We verify individual Mach-O files, never Python.framework as a bundle
+          # (--strict would reject its unsealed root, which is expected here).
           bad=0
           while IFS= read -r -d '' f; do
             if file -b "$f" | grep -q 'Mach-O'; then
@@ -321,12 +320,9 @@ jobs:
                 echo "UNSIGNED/INVALID: $f" >&2; bad=1
               fi
             fi
-          done < <(find "$SIDECAR_DIR" -type f -not -path '*/Python.framework/*' -print0)
+          done < <(find "$SIDECAR_DIR" -type f -print0)
           if [ "$bad" != 0 ]; then
             echo "error: some sidecar Mach-O files are not properly signed" >&2; exit 1
-          fi
-          if [ -d "$SIDECAR_DIR/_internal/Python.framework" ]; then
-            codesign --verify --strict --verbose=2 "$SIDECAR_DIR/_internal/Python.framework"
           fi
           codesign --verify --strict --verbose=2 "$SIDECAR_DIR/ppt-translator-sidecar"
           echo "Sidecar native code signed with Developer ID."
