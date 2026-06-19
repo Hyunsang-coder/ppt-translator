@@ -97,6 +97,19 @@ a = Analysis(
 
 pyz = PYZ(a.pure)
 
+# macOS code signing is delegated to PyInstaller: when codesign_identity is set,
+# PyInstaller signs the executable AND every collected binary/framework in the
+# COLLECT step, in the correct order and with the framework file placement Apple's
+# codesign requires (per PyInstaller docs). This is what makes notarization pass —
+# hand-signing the staged tree afterwards can't seal Python.framework's root
+# binary slot. Unset (local / Windows / no secrets) → ad-hoc signing, unchanged.
+CODESIGN_IDENTITY = os.environ.get("APPLE_SIGNING_IDENTITY") or None
+ENTITLEMENTS_FILE = (
+    os.path.join(REPO_ROOT, "src-tauri", "entitlements.plist")
+    if CODESIGN_IDENTITY
+    else None
+)
+
 exe = EXE(
     pyz,
     a.scripts,
@@ -108,6 +121,8 @@ exe = EXE(
     strip=False,
     upx=False,
     console=True,
+    codesign_identity=CODESIGN_IDENTITY,
+    entitlements_file=ENTITLEMENTS_FILE,
 )
 
 coll = COLLECT(

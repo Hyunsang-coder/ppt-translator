@@ -161,11 +161,46 @@ jobs:
           rustup default stable
           rustup target add "${{ matrix.target }}"
 
+      # Import the Developer ID cert into an ephemeral keychain BEFORE building the
+      # sidecar, so PyInstaller can sign every collected binary + Python.framework
+      # itself during the build (codesign_identity in sidecar.spec reads
+      # APPLE_SIGNING_IDENTITY). PyInstaller signs in the correct order with the
+      # framework file placement Apple requires — hand-signing the staged tree
+      # afterwards cannot seal the framework's root binary slot. macOS-only;
+      # no-ops without the cert (PyInstaller then ad-hoc signs, as before).
+      - name: Set up signing keychain (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          [ -n "${APPLE_CERTIFICATE:-}" ] || { echo "No signing cert; PyInstaller will ad-hoc sign."; exit 0; }
+
+          KEYCHAIN="$RUNNER_TEMP/sidecar-signing.keychain-db"
+          KEYCHAIN_PW="$(uuidgen)"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -k "$KEYCHAIN" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PW" "$KEYCHAIN" >/dev/null
+          # Put our keychain first on the search list so codesign -s finds the cert.
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security find-identity -v -p codesigning "$KEYCHAIN"
+
       # Build the Python sidecar and the Next.js frontend BEFORE tauri-action.
       # tauri-action then runs `tauri build` with beforeBuildCommand no-op'd via
       # tauri-ci.conf.json, so it just packages the already-staged artifacts.
+      # APPLE_SIGNING_IDENTITY makes PyInstaller sign the sidecar during the build.
       - name: Build sidecar and frontend
         shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
           node ./desktop/ensure-sidecar.mjs --force
           cd frontend
@@ -201,133 +236,44 @@ jobs:
           fi
           echo "Sidecar startup OK"
 
-      # Sign the PyInstaller sidecar's nested native libs with Developer ID.
-      # Tauri only signs the main .app (no --deep), so anything under
-      # bundle.resources reaches notarization with PyInstaller's ad-hoc signature
-      # and Apple rejects it ("not signed with a valid Developer ID certificate" +
-      # "no secure timestamp"). We sign every Mach-O here, innermost-first, in our
-      # own keychain; Tauri's later signing (separate keychain, no --deep) leaves
-      # these intact. macOS-only; no-ops when the signing cert is absent.
-      - name: Sign sidecar native libraries (macOS)
+      # Verify the sidecar PyInstaller signed during the build (codesign_identity
+      # in sidecar.spec). PyInstaller signs every collected Mach-O + the
+      # Python.framework with --timestamp --options=runtime in the correct order,
+      # so we don't sign here — we only fail closed if anything came out ad-hoc.
+      # macOS-only; skipped without the signing cert (then it's ad-hoc by design).
+      - name: Verify sidecar signing (macOS)
         if: runner.os == 'macOS'
         shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
           set -euo pipefail
-          [ -n "${APPLE_CERTIFICATE:-}" ] || { echo "No signing cert; skipping sidecar signing."; exit 0; }
-
+          [ -n "${APPLE_CERTIFICATE:-}" ] || { echo "No signing cert; sidecar is ad-hoc by design."; exit 0; }
           SIDECAR_DIR="src-tauri/resources/sidecar"
-          ENTITLEMENTS="src-tauri/entitlements.plist"
-          KEYCHAIN="$RUNNER_TEMP/sidecar-signing.keychain-db"
-          KEYCHAIN_PW="$(uuidgen)"
 
-          # Create + unlock an ephemeral keychain and import the .p12.
-          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
-          security create-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
-          security set-keychain-settings -lut 3600 "$KEYCHAIN"
-          security unlock-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
-          security import "$RUNNER_TEMP/cert.p12" -P "$APPLE_CERTIFICATE_PASSWORD" \
-            -k "$KEYCHAIN" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: \
-            -s -k "$KEYCHAIN_PW" "$KEYCHAIN" >/dev/null
-          # Make the identity discoverable to codesign -s.
-          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
-          rm -f "$RUNNER_TEMP/cert.p12"
-
-          security find-identity -v -p codesigning "$KEYCHAIN"
-
-          sign() {
-            codesign --force --timestamp --options runtime \
-              --entitlements "$ENTITLEMENTS" \
-              -s "$APPLE_SIGNING_IDENTITY" --keychain "$KEYCHAIN" "$1"
-          }
-
-          # --- Diagnostics: dump the sidecar's symlink + framework layout ---------
-          # Layout differs by build host (local has no Python.framework; the macOS
-          # runner produces a standard framework). Log it so failures are diagnosable
-          # from the run log without a local repro.
-          echo "::group::sidecar symlinks"
-          find "$SIDECAR_DIR" -type l -print | while IFS= read -r l; do
-            printf '%s -> %s\n' "${l#$SIDECAR_DIR/}" "$(readlink "$l")"
-          done
-          echo "::endgroup::"
           echo "::group::Python.framework tree"
           find "$SIDECAR_DIR/_internal/Python.framework" 2>/dev/null \
             | sed "s#$SIDECAR_DIR/_internal/##" | sort || echo "(no Python.framework)"
           echo "::endgroup::"
 
-          # Some _internal entries are SYMLINKS that resolve to a Mach-O file:
-          #  - loose root dylibs (_internal/lib*.dylib -> PIL/.dylibs/...) via
-          #    build-machine absolute paths, and
-          #  - the Python loader symlinks (_internal/Python and
-          #    Python.framework/Python -> Versions/Current/Python -> 3.12/Python).
-          # When Tauri bundles the .app it DEREFERENCES these into plain file copies
-          # that carry no Developer ID + secure timestamp, so notarization rejects
-          # them (it rejected exactly _internal/Python and Python.framework/Python).
-          # Fix: pre-dereference every symlink whose target is a REGULAR FILE into a
-          # real copy here, so the sign loop below signs an actual file and Tauri has
-          # nothing left to dereference. We must NOT touch symlinks that point at a
-          # DIRECTORY (Python.framework/Resources, Versions/Current) — cp can't copy
-          # them and they're needed for the framework layout; leave those intact.
-          find "$SIDECAR_DIR" -type l | while IFS= read -r link; do
-            # Resolve to the real path the symlink ultimately points to.
-            real="$(readlink -f "$link" 2>/dev/null || true)"
-            if [ -z "$real" ] || [ ! -e "$real" ]; then
-              # Build-machine absolute target may be gone on CI: find by basename.
-              real="$(find "$SIDECAR_DIR" -name "$(basename "$link")" -type f -print -quit)"
-            fi
-            if [ -d "$real" ]; then
-              echo "keep dir symlink: ${link#$SIDECAR_DIR/} -> $real"
-              continue
-            fi
-            if [ -n "$real" ] && [ -f "$real" ]; then
-              echo "deref: ${link#$SIDECAR_DIR/} -> $real"
-              rm -f "$link"
-              cp -p "$real" "$link"
-            else
-              echo "error: cannot resolve file symlink: $link -> $(readlink "$link")" >&2
-              exit 1
-            fi
-          done
-
-          # Sign EVERY individual Mach-O by content, deepest-path first so nested
-          # code is sealed before its container. After the deref above this now
-          # covers _internal/Python and Python.framework/Python (real copies) plus
-          # the framework's own Versions/3.12/Python. We deliberately do NOT sign
-          # Python.framework as a bundle: PyInstaller's framework keeps loose files /
-          # symlinks in the root and codesign refuses to seal it ("unsealed contents
-          # present in the root directory of an embedded framework"). Signing each
-          # Mach-O individually still gives every embedded binary a Developer ID +
-          # secure timestamp, which is what notarization checks. Symlinks that remain
-          # (directory symlinks like Resources / Versions/Current) are skipped via
-          # -type f and don't carry code.
-          find "$SIDECAR_DIR" -type f -print0 \
-            | while IFS= read -r -d '' f; do
-                if file -b "$f" | grep -q 'Mach-O'; then echo "$f"; fi
-              done | sort -r | while IFS= read -r macho; do
-                echo "signing: $macho"
-                sign "$macho"
-              done
-
-          # Fail closed: every Mach-O FILE under the sidecar must verify (none ad-hoc).
-          # We verify individual Mach-O files, never Python.framework as a bundle
-          # (--strict would reject its unsealed root, which is expected here).
+          # Every Mach-O file must carry a real (non ad-hoc) signature. A Developer
+          # ID signature embeds a TeamIdentifier; ad-hoc signatures do not — use
+          # that to catch anything PyInstaller missed before it reaches notarization.
           bad=0
           while IFS= read -r -d '' f; do
             if file -b "$f" | grep -q 'Mach-O'; then
               if ! codesign --verify --strict "$f" 2>/dev/null; then
-                echo "UNSIGNED/INVALID: $f" >&2; bad=1
+                echo "UNVERIFIED: $f" >&2; bad=1
+              elif ! codesign -dvv "$f" 2>&1 | grep -q 'TeamIdentifier=[A-Z0-9]'; then
+                echo "AD-HOC (no Developer ID): $f" >&2; bad=1
               fi
             fi
           done < <(find "$SIDECAR_DIR" -type f -print0)
           if [ "$bad" != 0 ]; then
-            echo "error: some sidecar Mach-O files are not properly signed" >&2; exit 1
+            echo "error: some sidecar Mach-O files are not Developer ID signed" >&2; exit 1
           fi
           codesign --verify --strict --verbose=2 "$SIDECAR_DIR/ppt-translator-sidecar"
-          echo "Sidecar native code signed with Developer ID."
+          echo "Sidecar verified: all Mach-O Developer ID signed."
 
       # Build + sign + bundle (incl. updater artifacts) and upload everything to
       # the draft release. Signing the updater bundle requires the Tauri keypair;
