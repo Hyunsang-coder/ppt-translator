@@ -323,7 +323,7 @@ jobs:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           # We generate latest.json ourselves (updater-manifest job); don't let
           # the action try (and skip) its own, which could also race our upload.
-          uploadUpdaterJson: false
+          includeUpdaterJson: false
           args: --config ../.github/tauri-ci.conf.json --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
 
       # tauri-action uploads artifacts under product-name filenames (e.g.
@@ -339,24 +339,31 @@ jobs:
           TAG: ${{ needs.create-release.outputs.tag }}
         run: |
           set -euo pipefail
-          shopt -s nullglob
 
-          one() {  # glob -> exactly one path, else fail
-            local g="$1"; local -a m=( $g )
+          # Match exactly one file under a dir by name pattern, using `find` (robust
+          # on Git bash with spaces / Korean / double extensions like .nsis.zip,
+          # where shell globbing proved flaky on Windows). Dumps the dir on failure.
+          one() {  # <dir> <name-glob> -> single path, else fail with a listing
+            local dir="$1" pat="$2"
+            local -a m=()
+            while IFS= read -r -d '' p; do m+=("$p"); done \
+              < <(find "$dir" -maxdepth 1 -type f -name "$pat" -print0 2>/dev/null)
             if [[ "${#m[@]}" -ne 1 ]]; then
-              printf 'Expected one file matching %s, found %s\n' "$g" "${#m[@]}" >&2
-              printf '%s\n' "${m[@]}" >&2; exit 1
+              printf 'Expected one file matching %s in %s, found %s\n' "$pat" "$dir" "${#m[@]}" >&2
+              echo "--- directory listing ---" >&2
+              ls -la "$dir" >&2 || true
+              exit 1
             fi
             printf '%s' "${m[0]}"
           }
 
           # Installer (dmg / setup.exe) under its stable download name.
-          installer="$(one '${{ matrix.asset_glob }}')"
+          installer="$(one "$(dirname '${{ matrix.asset_glob }}')" "$(basename '${{ matrix.asset_glob }}')")"
           cp "$installer" "${{ matrix.asset_name }}"
           gh release upload "$TAG" "${{ matrix.asset_name }}" --clobber
 
           # Updater bundle (*.app.tar.gz / *.nsis.zip) + its .sig under stable names.
-          updater="$(one '${{ matrix.updater_glob }}')"
+          updater="$(one "$(dirname '${{ matrix.updater_glob }}')" "$(basename '${{ matrix.updater_glob }}')")"
           cp "$updater" "${{ matrix.updater_name }}"
           cp "${updater}.sig" "${{ matrix.updater_name }}.sig"
           gh release upload "$TAG" "${{ matrix.updater_name }}" "${{ matrix.updater_name }}.sig" --clobber
