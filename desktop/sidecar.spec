@@ -120,6 +120,11 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
+    # Keep console=True: a windowed (console=False) build can leave sys.stdout
+    # as None on Windows, which would crash the SIDECAR_READY print() and stall
+    # the handshake. The terminal *window* is suppressed instead by the parent
+    # spawning us with CREATE_NO_WINDOW (see spawn_sidecar in src-tauri/src/lib.rs),
+    # which keeps the stdout/stderr pipes intact while showing no console.
     console=True,
     codesign_identity=CODESIGN_IDENTITY,
     entitlements_file=ENTITLEMENTS_FILE,

@@ -37,6 +37,27 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _emit_ready(port: int) -> None:
+    """Tell the Rust shell which port we bound.
+
+    Normally this goes to stdout, which Rust reads line by line. A windowed
+    Windows build (console=False) can leave ``sys.stdout`` as ``None``, so guard
+    the write — an unguarded ``print`` would raise and kill the sidecar before it
+    ever serves a request. As a fallback, write the handshake to stderr so the
+    shell can still recover it. We ship console=True precisely so this path is
+    not normally needed, but the guard keeps a misconfigured build from hanging.
+    """
+    line = f"SIDECAR_READY port={port}"
+    for stream in (sys.stdout, sys.stderr):
+        if stream is None:
+            continue
+        try:
+            print(line, file=stream, flush=True)
+            return
+        except Exception:
+            continue
+
+
 def main(argv: list[str] | None = None) -> None:
     args = _parse_args(argv if argv is not None else sys.argv[1:])
 
@@ -51,7 +72,7 @@ def main(argv: list[str] | None = None) -> None:
 
     # Hand the bound port to the Rust shell BEFORE the heavy import, so it can
     # start polling /health right away instead of blocking ~20s on import.
-    print(f"SIDECAR_READY port={actual_port}", flush=True)
+    _emit_ready(actual_port)
 
     # Now do the expensive imports.
     import uvicorn

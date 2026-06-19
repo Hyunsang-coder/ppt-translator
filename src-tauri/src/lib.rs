@@ -193,6 +193,17 @@ fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), AppError> {
         command.env("ANTHROPIC_API_KEY", k);
     }
 
+    // Suppress the console window the sidecar would otherwise flash on Windows.
+    // The sidecar is built console=True (so its sys.stdout stays valid for the
+    // SIDECAR_READY handshake); CREATE_NO_WINDOW (0x08000000) gives it no console
+    // *window* while leaving the inherited stdout/stderr pipes intact. Closing a
+    // visible console used to kill the sidecar — now there is no window to close.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
+
     let mut child = command
         .spawn()
         .map_err(|e| AppError::Sidecar(format!("failed to spawn sidecar: {e}")))?;
