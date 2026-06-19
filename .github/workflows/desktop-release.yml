@@ -94,27 +94,21 @@ jobs:
       matrix:
         include:
           # macOS builds dmg (user download) AND app (the updater-enabled target):
-          # without 'app', Tauri emits no *.app.tar.gz + .sig and tauri-action skips
-          # latest.json ("no updater-enabled targets were built"), so auto-update is
-          # dead on macOS. asset_glob still points at the dmg for the stable-name copy.
+          # the 'app' bundle yields *.app.tar.gz + .sig, which tauri-action turns
+          # into the macOS entry of latest.json. asset_glob is the dmg we re-upload
+          # under a stable name for the web download page.
           - label: macOS Apple Silicon
             runner: macos-15
             target: aarch64-apple-darwin
             bundles: dmg,app
             asset_name: ppt-translator-macos-arm64.dmg
             asset_glob: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
-            updater_key: darwin-aarch64
-            updater_name: ppt-translator-macos-arm64.app.tar.gz
-            updater_glob: src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz
           - label: Windows x64
             runner: windows-latest
             target: x86_64-pc-windows-msvc
             bundles: nsis
             asset_name: ppt-translator-windows-x64-setup.exe
             asset_glob: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe
-            updater_key: windows-x86_64
-            updater_name: ppt-translator-windows-x64-setup.nsis.zip
-            updater_glob: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.nsis.zip
 
     env:
       CI: "true"
@@ -321,103 +315,35 @@ jobs:
         with:
           projectPath: src-tauri
           releaseId: ${{ needs.create-release.outputs.release_id }}
-          # NOTE: do NOT set includeUpdaterJson:false — on Windows it also disables
-          # generation of the .nsis.zip updater bundle itself (not just latest.json),
-          # so our stable-name step finds nothing. We leave it default (true); the
-          # action still skips its own latest.json upload here ("Signature not found"),
-          # and our updater-manifest job writes the real one. No conflict observed.
+          # productName is now ASCII ("ppt-translation-cat"), so tauri-action's asset
+          # names are well-formed and it generates + uploads latest.json itself (the
+          # Korean name used to mangle to "PPT._..." and break its updater-JSON step).
           args: --config ../.github/tauri-ci.conf.json --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
 
-      # tauri-action uploads artifacts under product-name filenames (e.g.
-      # "PPT 번역캣_0.1.6_aarch64.dmg", and worse: the Korean mangles to "PPT._..."
-      # on the release). The web page and the updater both need STABLE names at
-      # releases/latest/download/, so upload renamed copies of (a) the installer
-      # for download and (b) the updater bundle + its .sig for auto-update. The
-      # latest.json job downstream reads these stable .sig files.
-      - name: Upload stable-named artifacts
+      # tauri-action uploads the installer under its product-name filename
+      # (e.g. "ppt-translation-cat_0.1.6_aarch64.dmg"). The web download page links
+      # to stable names at releases/latest/download/, so upload a renamed copy too.
+      # latest.json + updater bundles are handled by tauri-action; we only restable
+      # the user-facing installer here.
+      - name: Upload stable-named installer
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.create-release.outputs.tag }}
         run: |
-          set -euo pipefail
-
-          # Match exactly one file under a dir by name pattern, using `find` (robust
-          # on Git bash with spaces / Korean / double extensions like .nsis.zip,
-          # where shell globbing proved flaky on Windows). Dumps the dir on failure.
-          one() {  # <dir> <name-glob> -> single path, else fail with a listing
-            local dir="$1" pat="$2"
-            local -a m=()
-            while IFS= read -r -d '' p; do m+=("$p"); done \
-              < <(find "$dir" -maxdepth 1 -type f -name "$pat" -print0 2>/dev/null)
-            if [[ "${#m[@]}" -ne 1 ]]; then
-              printf 'Expected one file matching %s in %s, found %s\n' "$pat" "$dir" "${#m[@]}" >&2
-              echo "--- directory listing ---" >&2
-              ls -la "$dir" >&2 || true
-              exit 1
-            fi
-            printf '%s' "${m[0]}"
-          }
-
-          # Installer (dmg / setup.exe) under its stable download name.
-          installer="$(one "$(dirname '${{ matrix.asset_glob }}')" "$(basename '${{ matrix.asset_glob }}')")"
-          cp "$installer" "${{ matrix.asset_name }}"
+          shopt -s nullglob
+          matches=( ${{ matrix.asset_glob }} )
+          if [[ "${#matches[@]}" -ne 1 ]]; then
+            printf 'Expected one installer matching %s, found %s\n' "${{ matrix.asset_glob }}" "${#matches[@]}" >&2
+            printf '%s\n' "${matches[@]}" >&2
+            exit 1
+          fi
+          cp "${matches[0]}" "${{ matrix.asset_name }}"
           gh release upload "$TAG" "${{ matrix.asset_name }}" --clobber
-
-          # Updater bundle (*.app.tar.gz / *.nsis.zip) + its .sig under stable names.
-          updater="$(one "$(dirname '${{ matrix.updater_glob }}')" "$(basename '${{ matrix.updater_glob }}')")"
-          cp "$updater" "${{ matrix.updater_name }}"
-          cp "${updater}.sig" "${{ matrix.updater_name }}.sig"
-          gh release upload "$TAG" "${{ matrix.updater_name }}" "${{ matrix.updater_name }}.sig" --clobber
-
-  # Build latest.json ourselves from the stable-named updater bundles + their
-  # .sig files. tauri-action's own updater-JSON generator skips upload in this
-  # matrix ("Signature not found for the updater JSON") so we don't rely on it.
-  # The Tauri updater fetches releases/latest/download/latest.json and, per
-  # platform key, downloads `url` and verifies it against `signature` + pubkey.
-  updater-manifest:
-    name: Generate latest.json
-    needs: [create-release, build]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Build and upload latest.json
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.create-release.outputs.tag }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          VERSION="${TAG#v}"
-          BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
-          # platform key : stable updater asset basename
-          declare -A PLATFORMS=(
-            [darwin-aarch64]="ppt-translator-macos-arm64.app.tar.gz"
-            [windows-x86_64]="ppt-translator-windows-x64-setup.nsis.zip"
-          )
-
-          mkdir -p _upd && cd _upd
-          platforms_json=""
-          for key in "${!PLATFORMS[@]}"; do
-            asset="${PLATFORMS[$key]}"
-            # The .sig is a short base64 blob; download and inline its contents.
-            gh release download "$TAG" -p "${asset}.sig" -O "${asset}.sig" --clobber
-            sig="$(cat "${asset}.sig")"
-            entry="$(printf '"%s":{"signature":"%s","url":"%s/%s"}' \
-              "$key" "$sig" "$BASE" "$asset")"
-            platforms_json="${platforms_json:+$platforms_json,}$entry"
-          done
-
-          pubdate="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          printf '{"version":"%s","pub_date":"%s","platforms":{%s}}\n' \
-            "$VERSION" "$pubdate" "$platforms_json" > latest.json
-          echo "----- latest.json -----"; cat latest.json
-          # Validate JSON before publishing so a malformed manifest can't ship.
-          python3 -c "import json,sys; json.load(open('latest.json'))"
-          gh release upload "$TAG" latest.json --clobber
 
   publish:
     name: Publish GitHub Release
-    needs: [create-release, build, updater-manifest]
+    needs: [create-release, build]
     runs-on: ubuntu-latest
     steps:
       - name: Un-draft release
