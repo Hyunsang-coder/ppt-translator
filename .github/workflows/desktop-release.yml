@@ -93,16 +93,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # macOS builds dmg (user download) AND app (the updater-enabled target):
+          # without 'app', Tauri emits no *.app.tar.gz + .sig and tauri-action skips
+          # latest.json ("no updater-enabled targets were built"), so auto-update is
+          # dead on macOS. asset_glob still points at the dmg for the stable-name copy.
           - label: macOS Apple Silicon
             runner: macos-15
             target: aarch64-apple-darwin
-            bundles: dmg
+            bundles: dmg,app
             asset_name: ppt-translator-macos-arm64.dmg
             asset_glob: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
           - label: macOS Intel
             runner: macos-15-intel
             target: x86_64-apple-darwin
-            bundles: dmg
+            bundles: dmg,app
             asset_name: ppt-translator-macos-x64.dmg
             asset_glob: src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
           - label: Windows x64
