@@ -321,9 +321,11 @@ jobs:
         with:
           projectPath: src-tauri
           releaseId: ${{ needs.create-release.outputs.release_id }}
-          # We generate latest.json ourselves (updater-manifest job); don't let
-          # the action try (and skip) its own, which could also race our upload.
-          includeUpdaterJson: false
+          # NOTE: do NOT set includeUpdaterJson:false — on Windows it also disables
+          # generation of the .nsis.zip updater bundle itself (not just latest.json),
+          # so our stable-name step finds nothing. We leave it default (true); the
+          # action still skips its own latest.json upload here ("Signature not found"),
+          # and our updater-manifest job writes the real one. No conflict observed.
           args: --config ../.github/tauri-ci.conf.json --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
 
       # tauri-action uploads artifacts under product-name filenames (e.g.
