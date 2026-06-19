@@ -16,11 +16,6 @@ const downloads = [
     icon: Apple,
   },
   {
-    label: "macOS Intel",
-    href: `${releaseBase}/ppt-translator-macos-x64.dmg`,
-    icon: Apple,
-  },
-  {
     label: "Windows",
     href: `${releaseBase}/ppt-translator-windows-x64-setup.exe`,
     icon: MonitorDown,
