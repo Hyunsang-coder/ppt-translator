@@ -237,28 +237,52 @@ jobs:
           echo "Sidecar startup OK"
 
       # Verify the sidecar PyInstaller signed during the build (codesign_identity
-      # in sidecar.spec). PyInstaller signs every collected Mach-O + the
-      # Python.framework with --timestamp --options=runtime in the correct order,
-      # so we don't sign here — we only fail closed if anything came out ad-hoc.
+      # in sidecar.spec) and repair any Mach-O it left ad-hoc / unverified. In
+      # practice PyInstaller signs almost everything, but the framework's inner
+      # main binary (Python.framework/Versions/3.12/Python) can come out unverified;
+      # we re-sign exactly those stragglers with our Developer ID. This file is NOT
+      # at the framework-root slot, so individual signing is valid here (the root
+      # slot Python.framework/Python stays a symlink, which is correct).
       # macOS-only; skipped without the signing cert (then it's ad-hoc by design).
       - name: Verify sidecar signing (macOS)
         if: runner.os == 'macOS'
         shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
           set -euo pipefail
           [ -n "${APPLE_CERTIFICATE:-}" ] || { echo "No signing cert; sidecar is ad-hoc by design."; exit 0; }
           SIDECAR_DIR="src-tauri/resources/sidecar"
+          ENTITLEMENTS="src-tauri/entitlements.plist"
+          KEYCHAIN="$RUNNER_TEMP/sidecar-signing.keychain-db"
 
           echo "::group::Python.framework tree"
           find "$SIDECAR_DIR/_internal/Python.framework" 2>/dev/null \
             | sed "s#$SIDECAR_DIR/_internal/##" | sort || echo "(no Python.framework)"
           echo "::endgroup::"
 
-          # Every Mach-O file must carry a real (non ad-hoc) signature. A Developer
-          # ID signature embeds a TeamIdentifier; ad-hoc signatures do not — use
-          # that to catch anything PyInstaller missed before it reaches notarization.
+          resign() {
+            codesign --force --timestamp --options runtime \
+              --entitlements "$ENTITLEMENTS" \
+              -s "$APPLE_SIGNING_IDENTITY" --keychain "$KEYCHAIN" "$1"
+          }
+
+          # First pass: repair any Mach-O that isn't validly Developer ID signed.
+          # Deepest-path first so nested code is sealed before any container.
+          find "$SIDECAR_DIR" -type f -print0 \
+            | while IFS= read -r -d '' f; do
+                file -b "$f" | grep -q 'Mach-O' && echo "$f"
+              done | sort -r | while IFS= read -r macho; do
+                if ! codesign --verify --strict "$macho" 2>/dev/null \
+                   || ! codesign -dvv "$macho" 2>&1 | grep -q 'TeamIdentifier=[A-Z0-9]'; then
+                  echo "repair-sign: $macho"
+                  echo "  before:"; codesign -dvv "$macho" 2>&1 | grep -iE 'Signature|TeamId' | sed 's/^/    /' || true
+                  resign "$macho"
+                fi
+              done
+
+          # Second pass: fail closed. Every Mach-O must now verify AND carry a Dev ID.
           bad=0
           while IFS= read -r -d '' f; do
             if file -b "$f" | grep -q 'Mach-O'; then
