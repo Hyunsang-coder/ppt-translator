@@ -1004,6 +1004,8 @@ class TranslationService:
                 provider=request.provider,
                 text_fit_mode=request.text_fit_mode.value,
                 min_font_ratio=request.min_font_ratio,
+                ppt_context=ppt_context,
+                glossary_terms=glossary_terms,
             )
         except Exception:  # pylint: disable=broad-except
             LOGGER.exception("Failed to build review session; review disabled for job.")

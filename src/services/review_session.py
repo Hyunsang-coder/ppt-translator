@@ -57,6 +57,11 @@ class ReviewSession:
     provider: str = "anthropic"
     text_fit_mode: str = "none"
     min_font_ratio: int = 80
+    # Glossary + presentation context strings, in the exact format the
+    # translation chain consumed them, so re-translation of a single fragment
+    # stays consistent with the original run. Defaults match "no glossary".
+    ppt_context: str = ""
+    glossary_terms: str = "None"
     # Built lazily from paragraphs; canonical_map drives identical-fragment
     # propagation.
     _plan: Optional[RepetitionPlan] = field(default=None, repr=False)

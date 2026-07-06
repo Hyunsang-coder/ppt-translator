@@ -379,6 +379,16 @@ function FragmentCard({
   // long/편집 = 원문|번역 2단 대조. short/med = 번역 크게 + 원문 흐리게.
   const twoCol = span === "long" || editing;
 
+  // 재번역 추가 요청 입력 토글. 카드 로컬 상태 — 카드마다 독립적으로 열린다.
+  const [showInstruct, setShowInstruct] = useState(false);
+  const [instruct, setInstruct] = useState("");
+  const submitRetranslate = () => {
+    const trimmed = instruct.trim();
+    onRetranslate(trimmed || (overflow ? "더 짧게" : undefined));
+    setShowInstruct(false);
+    setInstruct("");
+  };
+
   return (
     <div
       className={`group relative glass-card rounded-lg border p-2.5 transition-colors hover:border-primary ${
@@ -409,6 +419,18 @@ function FragmentCard({
               <RefreshCw className="w-3 h-3" />
             )}
             재번역
+          </Button>
+          <Button
+            size="xs"
+            variant="ghost"
+            className="gap-1 h-6 px-1.5"
+            disabled={busy}
+            onClick={() => setShowInstruct((v) => !v)}
+            aria-label="지시 후 재번역"
+            title="추가 요청사항을 적어 재번역"
+          >
+            <Pencil className="w-3 h-3" />
+            지시 후 재번역
           </Button>
           {frag.findings.length > 0 && (
             <Button
@@ -484,6 +506,28 @@ function FragmentCard({
         <div className="mt-1 text-[10px] text-muted-foreground">
           📐 {frag.length_budget}자 · {frag.target.length}자
           {overflow && <span className="text-destructive font-semibold"> (초과)</span>}
+        </div>
+      )}
+
+      {/* 추가 요청사항을 적어 재번역 (선택) */}
+      {showInstruct && !editing && (
+        <div className="mt-2 flex gap-1.5 items-center">
+          <input
+            type="text"
+            value={instruct}
+            onChange={(e) => setInstruct(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") submitRetranslate();
+              if (e.key === "Escape") setShowInstruct(false);
+            }}
+            placeholder="예: 더 격식있게, 존댓말로 (비우면 그냥 재번역)"
+            autoFocus
+            className="flex-1 min-w-0 text-xs bg-card border rounded px-2 py-1 outline-none focus:border-primary"
+          />
+          <Button size="xs" className="gap-1 shrink-0" disabled={busy} onClick={submitRetranslate}>
+            {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+            재번역
+          </Button>
         </div>
       )}
 

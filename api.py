@@ -944,7 +944,14 @@ def _retranslate_fragment(
         instructions=combined_instructions,
         provider=provider,
     )
-    batches = chunk_paragraphs([info], batch_size=1, ppt_context="", glossary_terms="None")
+    # Reuse the original run's glossary + presentation context so the
+    # re-translation stays consistent with the rest of the deck.
+    batches = chunk_paragraphs(
+        [info],
+        batch_size=1,
+        ppt_context=session.ppt_context,
+        glossary_terms=session.glossary_terms,
+    )
 
     # No progress tracker: a single-fragment re-translation needs no progress UI,
     # and translate_with_progress skips all tracker calls when it is None.
