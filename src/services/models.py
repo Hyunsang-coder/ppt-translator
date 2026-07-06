@@ -23,13 +23,13 @@ MODEL_REGISTRY: Dict[str, list[tuple[str, str]]] = {
     ],
     "anthropic": [
         ("claude-opus-4-8", "Claude Opus 4.8"),
-        ("claude-sonnet-4-6", "Claude Sonnet 4.6"),
+        ("claude-sonnet-5", "Claude Sonnet 5"),
         ("claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
     ],
 }
 
 # Default models referenced by request schemas and endpoints.
-DEFAULT_TRANSLATION_MODEL = "claude-sonnet-4-6"
+DEFAULT_TRANSLATION_MODEL = "claude-sonnet-5"
 DEFAULT_LIGHT_MODEL = {
     "openai": "gpt-5.4-mini-2026-03-17",
     "anthropic": "claude-haiku-4-5-20251001",

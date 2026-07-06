@@ -41,7 +41,7 @@ class RecordRunTestCase(unittest.TestCase):
                 _finding("accuracy.omission", "critical", 2),
             ]
             rec.record_run(
-                job_id="job_abc", model="claude-sonnet-4-6",
+                job_id="job_abc", model="claude-sonnet-5",
                 source_lang="한국어", target_lang="영어",
                 doc_words=3200, findings=findings,
             )
@@ -65,7 +65,7 @@ class RecordFindingTestCase(unittest.TestCase):
             rec.record_findings(
                 [_finding("terminology.violation", "major", 1)],
                 job_id="job_abc", doc_ref="deck:Q3.pptx",
-                source_lang="한국어", target_lang="영어", model="claude-sonnet-4-6",
+                source_lang="한국어", target_lang="영어", model="claude-sonnet-5",
             )
             rows = [json.loads(l) for l in (Path(d) / "quality_records.jsonl").read_text().splitlines()]
             self.assertEqual(len(rows), 1)

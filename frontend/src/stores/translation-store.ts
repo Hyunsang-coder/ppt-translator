@@ -59,7 +59,7 @@ const DEFAULT_SETTINGS: TranslationSettings = {
   sourceLang: "Auto",
   targetLang: "", // 타겟 언어는 필수 선택
   provider: "anthropic",
-  model: "claude-sonnet-4-6",
+  model: "claude-sonnet-5",
   context: "",
   instructions: "",
   preprocessRepetitions: true,

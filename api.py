@@ -473,7 +473,7 @@ async def get_config() -> ConfigResponse:
         max_upload_size_mb=settings.max_upload_size_mb,
         providers=list(SUPPORTED_MODELS.keys()),
         default_provider="anthropic",
-        default_model="claude-sonnet-4-6",
+        default_model=DEFAULT_TRANSLATION_MODEL,
     )
 
 

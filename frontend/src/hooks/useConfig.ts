@@ -14,7 +14,7 @@ const FALLBACK_MODELS: ModelInfo[] = [
   { id: "gpt-5.5-2026-04-23", name: "GPT-5.5", provider: "openai" },
   { id: "gpt-5.4-mini-2026-03-17", name: "GPT-5.4 Mini", provider: "openai" },
   { id: "claude-opus-4-8", name: "Claude Opus 4.8", provider: "anthropic" },
-  { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
+  { id: "claude-sonnet-5", name: "Claude Sonnet 5", provider: "anthropic" },
   { id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5", provider: "anthropic" },
 ];
 
@@ -33,7 +33,7 @@ const FALLBACK_CONFIG: ConfigResponse = {
   max_upload_size_mb: DEFAULT_MAX_UPLOAD_SIZE_MB,
   providers: ["openai", "anthropic"],
   default_provider: "anthropic",
-  default_model: "claude-sonnet-4-6",
+  default_model: "claude-sonnet-5",
 };
 
 function normalizeConfig(config: ConfigResponse): ConfigResponse {
