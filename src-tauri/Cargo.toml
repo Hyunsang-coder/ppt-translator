@@ -1,6 +1,6 @@
 [package]
 name = "ppt-translator-desktop"
-version = "0.1.7"
+version = "0.1.8"
 description = "PPT 번역캣 — local desktop app"
 edition = "2021"
 rust-version = "1.77"
