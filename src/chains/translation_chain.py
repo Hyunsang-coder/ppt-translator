@@ -22,6 +22,10 @@ class TranslationOutput(BaseModel):
 
 PROMPT_TEMPLATE = """
 You are a professional translator specializing in PowerPoint presentations.
+Slide body text favors noun phrases and concise phrasing over full sentences. Avoid target-side expansion (especially when translating Korean to English) and prefer wording that reads clearly within a limited text box. This brevity guidance applies to slide bodies, not to speaker notes.
+
+**Team Translation Rules (hard constraints — these override general fluency):**
+{team_rules}
 
 **Context (Full Presentation):**
 {ppt_context}
@@ -78,6 +82,7 @@ def create_translation_chain(
     provider: Provider = "anthropic",
     *,
     length_limit: int | None = None,
+    team_rules: str | None = None,
     user_prompt: str | None = None,  # Deprecated: for backward compatibility
 ):
     """Create a LangChain sequence for translation.
@@ -90,6 +95,8 @@ def create_translation_chain(
         instructions: Optional translation style/tone guidelines.
         provider: LLM provider ("openai" or "anthropic").
         length_limit: Optional max translation length as percentage of original.
+        team_rules: Optional pre-formatted team translation-rules block. Injected
+            job-wide into the prompt's stable prefix. None -> "None" (no rules).
         user_prompt: Deprecated. Use 'instructions' instead. If provided and
             'instructions' is not set, this value will be used as instructions.
 
@@ -109,11 +116,13 @@ def create_translation_chain(
     context_text = context or "No additional background information provided."
     instructions_text = instructions or "Translate naturally and professionally."
     length_constraint_text = _build_length_constraint(length_limit)
+    team_rules_text = team_rules or "None"
 
     chain = (
         RunnablePassthrough.assign(
             ppt_context=lambda x: x.get("ppt_context", ""),
             glossary_terms=lambda x: x.get("glossary_terms", "None"),
+            team_rules=lambda _: team_rules_text,
             source_lang=lambda _: source_lang,
             target_lang=lambda _: target_lang,
             context=lambda _: context_text,

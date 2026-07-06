@@ -112,6 +112,10 @@ COLOR_DISTRIBUTION_PROMPT = """원본 텍스트의 서식 구간별 텍스트와
 
 
 COLORED_TRANSLATION_PROMPT = """You are a professional translator specializing in PowerPoint presentations.
+Slide body text favors noun phrases and concise phrasing over full sentences. Avoid target-side expansion (especially when translating Korean to English) and prefer wording that reads clearly within a limited text box.
+
+**Team Translation Rules (hard constraints — these override general fluency):**
+{team_rules}
 
 **Context (Full Presentation):**
 {ppt_context}
@@ -222,6 +226,7 @@ def translate_with_color_segments(
     instructions: str | None = None,
     glossary_terms: str = "None",
     length_limit: int | None = None,
+    team_rules: str = "None",
 ) -> list[ColoredTranslation | None] | None:
     """Translate colored paragraphs and return semantic style segments."""
     if not original_groups:
@@ -250,6 +255,7 @@ def translate_with_color_segments(
             ppt_context=ppt_context,
             context=context or "No additional background information provided.",
             glossary_terms=glossary_terms,
+            team_rules=team_rules,
             instructions=instructions or "Translate naturally and professionally.",
             length_constraint=_build_length_constraint(length_limit),
             source_lang=source_lang,

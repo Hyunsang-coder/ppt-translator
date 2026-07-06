@@ -36,6 +36,9 @@ class Settings:
     rate_limit_requests_per_second: float = 1.0
     rate_limit_check_interval: float = 0.1
     rate_limit_max_bucket_size: int = 10
+    # Quality-record ledger directory (WP-C2). None -> app data dir default,
+    # resolved lazily by QualityRecorder.
+    quality_dir: Optional[str] = None
 
 
 @lru_cache(maxsize=1)
@@ -200,6 +203,8 @@ def get_settings() -> Settings:
                 rate_limit_max_bucket,
             )
 
+    quality_dir = os.getenv("TRANSLATION_QUALITY_DIR") or None
+
     if not openai_api_key and not anthropic_api_key:
         LOGGER.warning("Neither OPENAI_API_KEY nor ANTHROPIC_API_KEY is set. The app will fail when translating.")
 
@@ -218,4 +223,5 @@ def get_settings() -> Settings:
         rate_limit_requests_per_second=rate_limit_rps,
         rate_limit_check_interval=rate_limit_check_interval,
         rate_limit_max_bucket_size=rate_limit_max_bucket,
+        quality_dir=quality_dir,
     )

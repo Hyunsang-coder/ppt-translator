@@ -36,8 +36,10 @@ from src.services import (
     JobType,
 )
 from src.services.models import MODEL_REGISTRY, DEFAULT_LIGHT_MODEL, DEFAULT_TRANSLATION_MODEL, TextFitMode
+from src.services.quality_records import QualityRecorder
 from src.utils.config import get_settings
 from src.utils.glossary_loader import GlossaryLoader
+from src.utils.rules_loader import RulesLoader
 from src.utils.security import sanitize_filename, validate_pptx_file
 
 logging.basicConfig(
@@ -449,6 +451,7 @@ async def _run_translation_job(
     text_fit_mode: TextFitMode = TextFitMode.NONE,
     min_font_ratio: int = 80,
     length_limit: Optional[int] = None,
+    team_rules: Optional[Dict] = None,
 ) -> None:
     """Run translation job in background, respecting concurrency semaphore."""
     job_manager = get_job_manager()
@@ -472,6 +475,7 @@ async def _run_translation_job(
                 text_fit_mode=text_fit_mode,
                 min_font_ratio=min_font_ratio,
                 length_limit=length_limit,
+                team_rules=team_rules,
             )
 
             progress_callback = _create_progress_callback(job_id)
@@ -488,6 +492,30 @@ async def _run_translation_job(
             if result.output_file is None:
                 await job_manager.fail_job(job_id, "Translation succeeded but no output file was generated")
                 return
+
+            # Quality ledger (WP-C2): one run row + one record per sweep finding.
+            # Best-effort — a ledger failure must never fail the translation.
+            try:
+                recorder = QualityRecorder(quality_dir=settings.quality_dir)
+                doc_ref = f"deck:{filename}"
+                recorder.record_run(
+                    job_id=job_id,
+                    model=model,
+                    source_lang=result.source_language_detected,
+                    target_lang=result.target_language_used,
+                    doc_words=result.total_paragraphs,
+                    findings=result.findings,
+                )
+                recorder.record_findings(
+                    result.findings,
+                    job_id=job_id,
+                    doc_ref=doc_ref,
+                    source_lang=result.source_language_detected,
+                    target_lang=result.target_language_used,
+                    model=model,
+                )
+            except Exception:  # pylint: disable=broad-except
+                LOGGER.exception("Quality ledger recording failed for job %s", job_id)
 
             # Generate output filename using settings
             download_name = generate_output_filename(
@@ -516,6 +544,7 @@ async def create_job(
     background_tasks: BackgroundTasks,
     ppt_file: UploadFile = File(..., description="PPTX or PPT file to translate"),
     glossary_file: Optional[UploadFile] = File(None, description="Optional Excel glossary file"),
+    rules_file: Optional[UploadFile] = File(None, description="Optional team translation-rules JSON"),
     source_lang: str = Form("Auto", description="Source language"),
     target_lang: str = Form("Auto", description="Target language"),
     provider: str = Form("anthropic", description="LLM provider"),
@@ -621,6 +650,22 @@ async def create_job(
                 LOGGER.exception("Failed to load glossary: %s", exc)
                 raise HTTPException(status_code=400, detail="Failed to load glossary file")
 
+        # Load team translation rules if provided (WP-C1). No file -> feature
+        # off, existing behavior unchanged. A malformed file surfaces as a 400
+        # rather than silently degrading translation quality.
+        team_rules = None
+        if rules_file and rules_file.filename:
+            try:
+                rules_content = await rules_file.read()
+                rules_buffer = io.BytesIO(rules_content)
+                team_rules = RulesLoader().load_rules(rules_buffer)
+                LOGGER.info("Loaded team translation rules from %s", rules_file.filename)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=f"Rules error: {str(exc)}")
+            except Exception as exc:
+                LOGGER.exception("Failed to load rules file: %s", exc)
+                raise HTTPException(status_code=400, detail="Failed to load rules file")
+
         # Parse filename settings
         parsed_filename_settings = FilenameSettings()
         if filename_settings:
@@ -667,6 +712,7 @@ async def create_job(
                 text_fit_mode=parsed_text_fit_mode,
                 min_font_ratio=clamped_min_font_ratio,
                 length_limit=parsed_length_limit,
+                team_rules=team_rules,
             )
         )
         job_manager.start_job(job.id, task)

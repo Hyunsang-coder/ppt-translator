@@ -1,0 +1,56 @@
+{
+  "meta": {
+    "version": "test-1.0",
+    "purpose": "Trimmed fixture for RulesLoader tests. Do not use in production."
+  },
+  "kr_target_rules": [
+    {
+      "id": "test-gun-sound",
+      "summary": "총기 사운드, not 사격음",
+      "avoid": ["사격음"],
+      "prefer": ["총기 사운드"],
+      "why": "irrelevant to injection",
+      "examples": [{"bad": "사격음 볼륨", "good": "총기 사운드 볼륨"}],
+      "severity": "red",
+      "locked_term": null,
+      "memory_ref": "feedback-gun-sound"
+    },
+    {
+      "id": "test-yellow-kr",
+      "summary": "약한 제안 규칙 (yellow)",
+      "avoid": ["나쁜표현"],
+      "prefer": ["좋은표현"],
+      "why": "irrelevant",
+      "examples": [{"bad": "나쁜표현 예시", "good": "좋은표현 예시"}],
+      "severity": "yellow",
+      "locked_term": null,
+      "memory_ref": "feedback-yellow"
+    }
+  ],
+  "en_target_rules": [
+    {
+      "id": "test-beauty-corner",
+      "summary": "맵 POI = 'Beauty Corner' (확정)",
+      "avoid": ["Beautiful Corner"],
+      "prefer": ["Beauty Corner"],
+      "why": "irrelevant",
+      "examples": [{"bad": "Beautiful Corner", "good": "Beauty Corner"}],
+      "severity": "red",
+      "locked_term": "Beauty Corner",
+      "memory_ref": "feedback-beauty"
+    }
+  ],
+  "bidirectional": [
+    {
+      "id": "test-bidi",
+      "summary": "양방향 표기 규칙",
+      "avoid": ["표기금지"],
+      "prefer": ["표기권장"],
+      "why": "irrelevant",
+      "examples": [],
+      "severity": "yellow",
+      "locked_term": null,
+      "memory_ref": "feedback-bidi"
+    }
+  ]
+}

@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +81,8 @@ class TranslationRequest:
     text_fit_mode: TextFitMode = TextFitMode.NONE
     min_font_ratio: int = 80
     length_limit: Optional[int] = None
+    # Parsed team translation-rules document (WP-C1). None -> feature off.
+    team_rules: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -96,6 +98,8 @@ class TranslationResult:
     unique_paragraphs: int = 0
     batch_count: int = 0
     elapsed_seconds: float = 0.0
+    # Consistency-sweep findings (WP-C3). List[consistency_sweep.Finding].
+    findings: List[Any] = field(default_factory=list)
 
 
 @dataclass

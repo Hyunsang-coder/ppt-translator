@@ -50,6 +50,40 @@ class HelperTestCase(unittest.TestCase):
         self.assertEqual("".join(segments), "abcdefghij")
 
 
+class TeamRulesInjectionTestCase(unittest.TestCase):
+    """WP-C1: the rules slice reaches the rendered prompt (no LLM call)."""
+
+    def _render(self, team_rules: str) -> str:
+        from langchain_core.prompts import PromptTemplate
+        from src.chains.translation_chain import PROMPT_TEMPLATE
+
+        return PromptTemplate.from_template(PROMPT_TEMPLATE).format(
+            team_rules=team_rules,
+            ppt_context="ctx",
+            context="bg",
+            glossary_terms="None",
+            instructions="inst",
+            length_constraint="",
+            source_lang="영어",
+            target_lang="한국어",
+            expected_count=1,
+            texts="1. Hello",
+        )
+
+    def test_rules_appear_in_prompt_when_connected(self) -> None:
+        rendered = self._render("- 총기 사운드, not 사격음\n  avoid: 사격음 → use: 총기 사운드")
+        self.assertIn("Team Translation Rules", rendered)
+        self.assertIn("총기 사운드", rendered)
+
+    def test_prompt_has_none_placeholder_when_not_connected(self) -> None:
+        rendered = self._render("None")
+        # The header is always present, but the slice is the "None" sentinel.
+        self.assertIn("**Team Translation Rules", rendered)
+        rules_block = rendered.split("**Team Translation Rules")[1].split("**Context")[0]
+        self.assertIn("None", rules_block)
+        self.assertNotIn("총기 사운드", rendered)
+
+
 class BatchRetryTestCase(unittest.TestCase):
     def test_retry_only_resubmits_failed_batches(self) -> None:
         # Two batches; the first attempt yields only batch 0 (batch 1 missing,

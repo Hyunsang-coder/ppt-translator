@@ -25,11 +25,14 @@ from src.services.models import (
     TranslationResult,
     TranslationStatus,
 )
+from src.services.consistency_sweep import run_sweep
+from src.services.quality_records import QualityRecorder
 from src.utils.config import Settings, get_settings
 from src.utils.glossary_loader import GlossaryLoader
 from src.utils.helpers import chunk_paragraphs
 from src.utils.language_detector import LanguageDetector
 from src.utils.repetition import build_repetition_plan, expand_translations
+from src.utils.rules_loader import RulesLoader
 
 LOGGER = logging.getLogger(__name__)
 
@@ -562,6 +565,7 @@ class TranslationService:
         instructions: str | None,
         glossary_terms: str,
         length_limit: int | None,
+        team_rules: str = "None",
     ) -> dict[int, list[ColoredSegment]] | None:
         """Translate multi-color paragraphs and map styles in one model call.
 
@@ -606,6 +610,7 @@ class TranslationService:
             instructions=instructions,
             glossary_terms=glossary_terms,
             length_limit=length_limit,
+            team_rules=team_rules,
         )
 
         result: dict[int, list[ColoredSegment]] = {}
@@ -837,6 +842,17 @@ class TranslationService:
             callback=self._progress_callback,
         )
 
+        # Format team-rules slice for the resolved target direction (WP-C1).
+        team_rules_text = RulesLoader.format_team_rules(
+            request.team_rules, target_language
+        )
+        if request.team_rules:
+            LOGGER.info(
+                "Team rules injected for target=%s (%d chars).",
+                target_language,
+                len(team_rules_text),
+            )
+
         chain = create_translation_chain(
             model_name=request.model,
             source_lang=source_language,
@@ -845,6 +861,7 @@ class TranslationService:
             instructions=request.instructions,
             provider=request.provider,
             length_limit=request.length_limit,
+            team_rules=team_rules_text,
         )
 
         LOGGER.info(
@@ -877,6 +894,24 @@ class TranslationService:
                 for text in translated_texts
             ]
 
+        # Phase 9.7: Deterministic consistency sweep (WP-C3, token-0, always on).
+        # Runs on the full aligned lists; findings flow to the result and are
+        # recorded by the caller (which owns job_id / doc_ref). Never fatal.
+        sweep_findings: list = []
+        try:
+            sweep_findings = run_sweep(
+                paragraphs,
+                translated_texts,
+                glossary=glossary,
+                locked_terms=RulesLoader.locked_terms(
+                    request.team_rules, target_language
+                ),
+                source_lang=source_language,
+                target_lang=target_language,
+            )
+        except Exception:  # pylint: disable=broad-except
+            LOGGER.exception("Consistency sweep failed; continuing without findings.")
+
         # Phase 9.5: Translate and style-map multi-color paragraphs
         self._notify_progress(
             TranslationProgress(
@@ -897,6 +932,7 @@ class TranslationService:
             instructions=request.instructions,
             glossary_terms=glossary_terms,
             length_limit=request.length_limit,
+            team_rules=team_rules_text,
         )
         if color_distributions:
             self._notify_progress(
@@ -960,4 +996,5 @@ class TranslationService:
             unique_paragraphs=len(target_paragraphs),
             batch_count=len(batches),
             elapsed_seconds=elapsed,
+            findings=sweep_findings,
         )
