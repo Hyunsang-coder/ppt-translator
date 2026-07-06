@@ -27,6 +27,7 @@ from src.services.models import (
 )
 from src.services.consistency_sweep import run_sweep
 from src.services.quality_records import QualityRecorder
+from src.services.review_session import ReviewSession
 from src.utils.config import Settings, get_settings
 from src.utils.glossary_loader import GlossaryLoader
 from src.utils.helpers import chunk_paragraphs
@@ -987,6 +988,26 @@ class TranslationService:
 
         LOGGER.info("Translation completed in %.1f seconds", elapsed)
 
+        # Build the in-memory review session (WP-C5): keep the live presentation
+        # and aligned fragment lists so the review screen can edit/re-translate
+        # without re-parsing. Rides the Job's TTL; best-effort (never fatal).
+        review_session = None
+        try:
+            review_session = ReviewSession(
+                presentation=presentation,
+                paragraphs=paragraphs,
+                translated_texts=translated_texts,
+                findings=sweep_findings,
+                source_lang=source_language,
+                target_lang=target_language,
+                model=request.model,
+                provider=request.provider,
+                text_fit_mode=request.text_fit_mode.value,
+                min_font_ratio=request.min_font_ratio,
+            )
+        except Exception:  # pylint: disable=broad-except
+            LOGGER.exception("Failed to build review session; review disabled for job.")
+
         return TranslationResult(
             success=True,
             output_file=output_buffer,
@@ -997,4 +1018,5 @@ class TranslationService:
             batch_count=len(batches),
             elapsed_seconds=elapsed,
             findings=sweep_findings,
+            review_session=review_session,
         )

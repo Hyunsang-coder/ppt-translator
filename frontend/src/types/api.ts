@@ -51,6 +51,59 @@ export interface ExtractionResponse {
   slide_count: number;
 }
 
+// --- Review / edit loop (WP-C5) ---
+
+export interface FragmentFinding {
+  type: string;
+  severity: "critical" | "major" | "minor";
+  description: string;
+  suggested_fix: string | null;
+  related_location: Record<string, unknown> | null;
+}
+
+export interface FragmentItem {
+  index: number;
+  slide: number;
+  shape: number;
+  paragraph: number;
+  slide_title: string | null;
+  is_note: boolean;
+  source: string;
+  target: string;
+  repeat_count: number;
+  length_budget: number | null;
+  findings: FragmentFinding[];
+  edited: boolean;
+}
+
+export interface FragmentsResponse {
+  job_id: string;
+  total: number;
+  fragments: FragmentItem[];
+}
+
+export interface PartialCandidate {
+  index: number;
+  slide: number;
+  is_note: boolean;
+  target: string;
+}
+
+export interface FragmentEditRequest {
+  action: "edit" | "retranslate" | "ignore";
+  target?: string;
+  instruction?: string;
+  propagate_identical?: boolean;
+  finding_type?: string;
+}
+
+export interface FragmentEditResponse {
+  index: number;
+  target: string;
+  changed_indices: number[];
+  partial_candidates: PartialCandidate[];
+}
+
 export interface SSEEvent {
   type: "progress" | "complete" | "error" | "started" | "cancelled" | "keepalive";
   data: Record<string, unknown>;

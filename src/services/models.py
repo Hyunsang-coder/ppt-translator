@@ -100,6 +100,9 @@ class TranslationResult:
     elapsed_seconds: float = 0.0
     # Consistency-sweep findings (WP-C3). List[consistency_sweep.Finding].
     findings: List[Any] = field(default_factory=list)
+    # In-memory review/edit session (WP-C5). review_session.ReviewSession | None.
+    # Holds the live presentation + fragments for post-translation editing.
+    review_session: Optional[Any] = None
 
 
 @dataclass

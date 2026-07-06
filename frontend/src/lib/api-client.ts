@@ -6,6 +6,9 @@ import type {
   ConfigResponse,
   ExtractionResponse,
   ExtractionSettings,
+  FragmentEditRequest,
+  FragmentEditResponse,
+  FragmentsResponse,
   JobCreateResponse,
   JobStatusResponse,
   LanguageInfo,
@@ -192,6 +195,33 @@ export const apiClient = {
     }
 
     return { blob, filename };
+  },
+
+  /**
+   * List reviewable fragments (source/target + detection badges) for a job.
+   */
+  async getJobFragments(jobId: string): Promise<FragmentsResponse> {
+    const response = await fetch(await apiUrl(`/api/v1/jobs/${jobId}/fragments`));
+    return handleResponse<FragmentsResponse>(response);
+  },
+
+  /**
+   * Edit, re-translate, or ignore a single fragment (WP-C5).
+   */
+  async editJobFragment(
+    jobId: string,
+    index: number,
+    body: FragmentEditRequest
+  ): Promise<FragmentEditResponse> {
+    const response = await fetch(
+      await apiUrl(`/api/v1/jobs/${jobId}/fragments/${index}`),
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }
+    );
+    return handleResponse<FragmentEditResponse>(response);
   },
 
   /**

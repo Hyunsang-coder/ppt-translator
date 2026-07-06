@@ -48,6 +48,9 @@ class Finding:
     suggested_fix: Optional[str] = None
     # Optional cross-reference to the other fragment in a divergence pair.
     related_location: Optional[Dict[str, object]] = None
+    # Index into the aligned paragraphs/translated_texts lists this finding
+    # attaches to (-1 if not applicable). Lets the review UI badge fragments.
+    fragment_index: int = -1
 
 
 @dataclass
@@ -145,6 +148,7 @@ def _check_term_violations(
                         segment={"source": frag.source, "output": frag.target},
                         ordinal=counter.next(),
                         suggested_fix=dst,
+                        fragment_index=frag.index,
                     )
                 )
 
@@ -164,6 +168,7 @@ def _check_term_violations(
                         segment={"source": frag.source, "output": frag.target},
                         ordinal=counter.next(),
                         suggested_fix=term,
+                        fragment_index=frag.index,
                     )
                 )
     return findings
@@ -220,6 +225,7 @@ def _check_phrase_divergence(
                     segment={"source": other.source, "output": other.target},
                     ordinal=counter.next(),
                     related_location=_location(anchor),
+                    fragment_index=other.index,
                 )
             )
     return findings
@@ -278,6 +284,7 @@ def _check_untranslated(
                     location=_location(frag),
                     segment={"source": frag.source, "output": frag.target},
                     ordinal=counter.next(),
+                    fragment_index=frag.index,
                 )
             )
     return findings

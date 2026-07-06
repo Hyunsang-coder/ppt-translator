@@ -65,6 +65,7 @@ class Job:
     output_filename: Optional[str] = None
     error_message: Optional[str] = None
     extraction_result: Optional[str] = None  # For extraction jobs (markdown)
+    review_session: Optional[Any] = None  # WP-C5: in-memory ReviewSession
     events: deque = field(default_factory=lambda: deque(maxlen=_MAX_EVENTS))
     _task: Optional[asyncio.Task] = field(default=None, repr=False)
     _event_queue: Optional[asyncio.Queue] = field(default=None, repr=False)
@@ -274,6 +275,8 @@ class JobManager:
             job.output_file = output_file
             job.output_filename = output_filename
             job.extraction_result = extraction_result
+            if result is not None:
+                job.review_session = result.review_session
 
         event_data: Dict[str, Any] = {"status": "completed"}
         if result:

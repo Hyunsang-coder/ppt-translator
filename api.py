@@ -183,6 +183,64 @@ class JobStatusResponse(BaseModel):
     error_message: Optional[str]
 
 
+class FragmentFinding(BaseModel):
+    """A detection badge attached to a fragment (WP-C5)."""
+
+    type: str
+    severity: str
+    description: str
+    suggested_fix: Optional[str] = None
+    related_location: Optional[Dict[str, Any]] = None
+
+
+class FragmentItem(BaseModel):
+    """One reviewable fragment (source/target + badges)."""
+
+    index: int
+    slide: int
+    shape: int
+    paragraph: int
+    slide_title: Optional[str] = None
+    is_note: bool
+    source: str
+    target: str
+    repeat_count: int
+    length_budget: Optional[int] = None
+    findings: List[FragmentFinding] = []
+    edited: bool = False
+
+
+class FragmentsResponse(BaseModel):
+    """Review-screen fragment list for a completed job."""
+
+    job_id: str
+    total: int
+    fragments: List[FragmentItem]
+
+
+class FragmentEditRequest(BaseModel):
+    """Edit or re-translate a single fragment (WP-C5)."""
+
+    action: Literal["edit", "retranslate", "ignore"] = "edit"
+    # edit: the new target text (direct inline edit).
+    target: Optional[str] = None
+    # retranslate: free-form instruction (e.g. "더 짧게", "용어 X 사용").
+    instruction: Optional[str] = None
+    # Propagate the change to fragments with an identical source.
+    propagate_identical: bool = False
+    # For ignore: the finding type being dismissed (for the rejected record).
+    finding_type: Optional[str] = None
+
+
+class FragmentEditResponse(BaseModel):
+    """Result of a fragment edit/re-translate."""
+
+    index: int
+    target: str
+    changed_indices: List[int]
+    partial_candidates: List[Dict[str, Any]] = []
+
+
 class ExtractionResponse(BaseModel):
     """Text extraction response."""
 
@@ -848,6 +906,226 @@ async def download_job_result(job_id: str) -> Response:
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
         headers=headers,
     )
+
+
+def _retranslate_fragment(
+    session,
+    index: int,
+    instruction: Optional[str],
+    model: str,
+    provider: str,
+) -> str:
+    """Re-translate one fragment with an optional instruction + length budget.
+
+    Runs a single-item translation chain. The length budget (WP-C5) is passed as
+    a character constraint so slide-box overflows can be tightened. Returns the
+    new translation, or raises on failure.
+    """
+    from src.chains.translation_chain import create_translation_chain, translate_with_progress
+    from src.utils.helpers import chunk_paragraphs
+
+    info = session.paragraphs[index]
+    budget = session.length_budget(index)
+
+    extra = []
+    if instruction:
+        extra.append(instruction.strip())
+    if budget is not None:
+        extra.append(
+            f"이 텍스트는 슬라이드 박스에 들어가야 합니다. 번역은 최대 {budget}자 이내로, "
+            f"공간 안에서 명확히 읽히도록 간결하게 작성하세요."
+        )
+    combined_instructions = "\n".join(f"- {e}" for e in extra) if extra else None
+
+    chain = create_translation_chain(
+        model_name=model,
+        source_lang=session.source_lang,
+        target_lang=session.target_lang,
+        instructions=combined_instructions,
+        provider=provider,
+    )
+    batches = chunk_paragraphs([info], batch_size=1, ppt_context="", glossary_terms="None")
+
+    class _NullTracker:
+        def update(self, *a, **k):
+            pass
+
+        def finish(self):
+            return 0.0
+
+    results = translate_with_progress(chain, batches, _NullTracker(), max_concurrency=1)
+    if not results:
+        raise RuntimeError("re-translation returned no result")
+    return results[0]
+
+
+@app.get("/api/v1/jobs/{job_id}/fragments", response_model=FragmentsResponse)
+async def get_job_fragments(job_id: str) -> FragmentsResponse:
+    """List reviewable fragments (source/target + detection badges) for a job."""
+    job_manager = get_job_manager()
+    job = job_manager.get_job(job_id)
+
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.state != JobState.COMPLETED:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job is not completed. Current state: {job.state.value}",
+        )
+    if job.review_session is None:
+        raise HTTPException(status_code=404, detail="No review session for this job")
+
+    session = job.review_session
+    items: List[FragmentItem] = []
+    for view in session.fragments():
+        items.append(
+            FragmentItem(
+                index=view.index,
+                slide=view.slide,
+                shape=view.shape,
+                paragraph=view.paragraph,
+                slide_title=view.slide_title,
+                is_note=view.is_note,
+                source=view.source,
+                target=view.target,
+                repeat_count=view.repeat_count,
+                length_budget=session.length_budget(view.index),
+                findings=[FragmentFinding(**f) for f in view.findings],
+                edited=view.edited,
+            )
+        )
+    return FragmentsResponse(job_id=job_id, total=len(items), fragments=items)
+
+
+@app.post("/api/v1/jobs/{job_id}/fragments/{index}", response_model=FragmentEditResponse)
+async def edit_job_fragment(
+    job_id: str, index: int, body: FragmentEditRequest
+) -> FragmentEditResponse:
+    """Edit, re-translate, or ignore a single fragment (WP-C5).
+
+    Mutates the in-memory review session, re-renders the output pptx so the
+    download reflects the edit, and records the action as a quality record
+    (accepted with corrected triplet for edits, rejected for ignores).
+    """
+    job_manager = get_job_manager()
+    job = job_manager.get_job(job_id)
+
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.state != JobState.COMPLETED or job.review_session is None:
+        raise HTTPException(status_code=400, detail="Job has no editable review session")
+
+    session = job.review_session
+    if not (0 <= index < len(session.paragraphs)):
+        raise HTTPException(status_code=400, detail="Fragment index out of range")
+
+    settings = get_settings()
+    recorder = QualityRecorder(quality_dir=settings.quality_dir)
+    doc_ref = f"deck:{job.output_filename or 'deck.pptx'}"
+    original_target = session.translated_texts[index]
+    source_text = session.paragraphs[index].original_text or ""
+
+    # --- ignore: dismiss a finding, record as rejected -------------------
+    if body.action == "ignore":
+        _record_edit(
+            recorder, session, index, source_text, original_target,
+            corrected=None, disposition="rejected", doc_ref=doc_ref,
+            finding_type=body.finding_type,
+        )
+        return FragmentEditResponse(
+            index=index, target=original_target, changed_indices=[]
+        )
+
+    # --- edit / retranslate: produce the new target ----------------------
+    if body.action == "retranslate":
+        loop = asyncio.get_running_loop()
+        try:
+            new_target = await loop.run_in_executor(
+                None,
+                _retranslate_fragment,
+                session, index, body.instruction,
+                session.model or DEFAULT_TRANSLATION_MODEL,
+                session.provider,
+            )
+        except Exception as exc:
+            LOGGER.exception("Fragment re-translation failed: %s", exc)
+            raise HTTPException(status_code=500, detail="재번역에 실패했습니다.")
+    else:  # edit
+        if body.target is None:
+            raise HTTPException(status_code=400, detail="edit action requires 'target'")
+        new_target = body.target
+
+    changed = session.apply_edit(
+        index, new_target, propagate_identical=body.propagate_identical
+    )
+
+    # Re-render the output pptx in place so the download reflects the edit.
+    try:
+        loop = asyncio.get_running_loop()
+        new_buffer = await loop.run_in_executor(None, session.render)
+        job.output_file = new_buffer
+    except Exception as exc:
+        LOGGER.exception("Failed to re-render pptx after edit: %s", exc)
+        raise HTTPException(status_code=500, detail="수정 반영에 실패했습니다.")
+
+    # Record the accepted edit with the corrected triplet.
+    _record_edit(
+        recorder, session, index, source_text, original_target,
+        corrected=new_target, disposition="accepted", doc_ref=doc_ref,
+        propagated=len(changed) - 1,
+    )
+
+    # Partial-match candidates: other fragments containing the edited phrase.
+    partial = session.partial_match_candidates(index, new_target)
+
+    return FragmentEditResponse(
+        index=index,
+        target=new_target,
+        changed_indices=changed,
+        partial_candidates=partial,
+    )
+
+
+def _record_edit(
+    recorder,
+    session,
+    index: int,
+    source: str,
+    original_target: str,
+    *,
+    corrected: Optional[str],
+    disposition: str,
+    doc_ref: str,
+    propagated: int = 0,
+    finding_type: Optional[str] = None,
+) -> None:
+    """Record a review-loop edit/ignore as a quality record (best-effort)."""
+    try:
+        info = session.paragraphs[index]
+        row = {
+            "id": None,  # filled by recorder
+            "source": source,
+            "output": original_target,
+            "corrected": corrected,
+        }
+        recorder.record_review_edit(
+            job_id=doc_ref,  # doc_ref carries the deck; project id set inside
+            doc_ref=doc_ref,
+            source_lang=session.source_lang,
+            target_lang=session.target_lang,
+            model=session.model,
+            location={
+                "slide": info.slide_index + 1,
+                "shape": info.shape_index,
+                "paragraph": info.paragraph_index,
+            },
+            segment=row,
+            disposition=disposition,
+            finding_type=finding_type,
+            propagated=propagated,
+        )
+    except Exception:  # pylint: disable=broad-except
+        LOGGER.exception("Failed to record review edit for fragment %d", index)
 
 
 @app.delete("/api/v1/jobs/{job_id}")

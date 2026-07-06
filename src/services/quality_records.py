@@ -161,6 +161,67 @@ class QualityRecorder:
         }
         self._append(self.records_path, row)
 
+    def record_review_edit(
+        self,
+        *,
+        job_id: str,
+        doc_ref: str,
+        source_lang: str,
+        target_lang: str,
+        model: Optional[str],
+        location: Dict[str, object],
+        segment: Dict[str, Optional[str]],
+        disposition: str,
+        finding_type: Optional[str] = None,
+        propagated: int = 0,
+    ) -> None:
+        """Record a manual review-loop edit (WP-C5) — the corrected triplet.
+
+        ``disposition="accepted"`` with a filled ``corrected`` captures the
+        source/output/corrected triplet the team's rule-promotion loop needs;
+        ``rejected`` records a dismissed finding. Origin stage is ``manual_edit``.
+        """
+        row = {
+            "id": _new_id("qr"),
+            "client": _CLIENT,
+            "project_id": job_id,
+            "created_at": _now_ms(),
+            "doc_ref": doc_ref,
+            "route_id": None,
+            "direction": direction_code(source_lang, target_lang),
+            "content_type": "presentation",
+            "location": location,
+            "segment": {
+                "source": segment.get("source"),
+                "output": segment.get("output"),
+                "corrected": segment.get("corrected"),
+                "context": None,
+            },
+            "finding": {
+                "type": finding_type or "manual.edit",
+                "severity": "minor",
+                "description": (
+                    f"검토 화면에서 수정 (전파 {propagated}건)"
+                    if disposition == "accepted"
+                    else "검토 화면에서 검출 무시(반려)"
+                ),
+                "suggested_fix": None,
+            },
+            "origin": {
+                "stage": "manual_edit",
+                "caught_by": "human",
+                "executor": "human",
+                "producer_model": model,
+                "reviewer_model": None,
+            },
+            "disposition": disposition,
+            "promotion": {
+                "status": "candidate" if disposition == "accepted" else "rejected",
+                "matched_rule": None,
+            },
+        }
+        self._append(self.records_path, row)
+
     def record_findings(
         self,
         findings: List[Finding],

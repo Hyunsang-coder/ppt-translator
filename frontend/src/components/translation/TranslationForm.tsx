@@ -7,13 +7,15 @@ import { FileUploader } from "@/components/shared/FileUploader";
 import { SettingsPanel, FilenameSettingsSection } from "./SettingsPanel";
 import { ProgressPanel } from "./ProgressPanel";
 import { LogViewer } from "./LogViewer";
+import { ReviewPanel } from "./ReviewPanel";
 import { useTranslation } from "@/hooks/useTranslation";
 import { useConfig } from "@/hooks/useConfig";
-import { Play, XCircle, Download, RefreshCw, AlertCircle } from "lucide-react";
+import { Play, XCircle, Download, RefreshCw, AlertCircle, ClipboardCheck } from "lucide-react";
 
 export function TranslationForm() {
   const [startTime, setStartTime] = useState<number | null>(null);
   const [filenameError, setFilenameError] = useState<string | null>(null);
+  const [reviewOpen, setReviewOpen] = useState(false);
   const { config, getModelsForProvider } = useConfig();
   const {
     pptFile,
@@ -23,6 +25,7 @@ export function TranslationForm() {
     progress,
     errorMessage,
     logs,
+    jobId,
     isIdle,
     isTranslating,
     isCompleted,
@@ -160,6 +163,15 @@ export function TranslationForm() {
                   </Button>
                   <Button
                     variant="outline"
+                    onClick={() => setReviewOpen(true)}
+                    disabled={!jobId}
+                    className="flex-1 gap-2"
+                  >
+                    <ClipboardCheck className="w-4 h-4" />
+                    검토 &amp; 수정
+                  </Button>
+                  <Button
+                    variant="outline"
                     onClick={handleRetranslate}
                     className="flex-1 gap-2"
                   >
@@ -230,6 +242,15 @@ export function TranslationForm() {
         {/* Logs */}
         <LogViewer logs={logs} />
       </div>
+
+      {/* Review & edit overlay (WP-C5) */}
+      {reviewOpen && jobId && (
+        <ReviewPanel
+          jobId={jobId}
+          onClose={() => setReviewOpen(false)}
+          onDownload={downloadResult}
+        />
+      )}
     </div>
   );
 }
