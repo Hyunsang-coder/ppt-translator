@@ -1006,6 +1006,7 @@ class TranslationService:
                 min_font_ratio=request.min_font_ratio,
                 ppt_context=ppt_context,
                 glossary_terms=glossary_terms,
+                color_distributions=dict(color_distributions or {}),
             )
         except Exception:  # pylint: disable=broad-except
             LOGGER.exception("Failed to build review session; review disabled for job.")

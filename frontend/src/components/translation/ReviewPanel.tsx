@@ -411,7 +411,8 @@ function FragmentCard({
             variant="ghost"
             className="gap-1 h-6 px-1.5"
             disabled={busy}
-            onClick={() => onRetranslate(overflow ? "더 짧게" : undefined)}
+            onClick={() => setShowInstruct((v) => !v)}
+            title="추가 요청사항을 적어 재번역 (비워도 됨)"
           >
             {busy ? (
               <Loader2 className="w-3 h-3 animate-spin" />
@@ -419,18 +420,6 @@ function FragmentCard({
               <RefreshCw className="w-3 h-3" />
             )}
             재번역
-          </Button>
-          <Button
-            size="xs"
-            variant="ghost"
-            className="gap-1 h-6 px-1.5"
-            disabled={busy}
-            onClick={() => setShowInstruct((v) => !v)}
-            aria-label="지시 후 재번역"
-            title="추가 요청사항을 적어 재번역"
-          >
-            <Pencil className="w-3 h-3" />
-            지시 후 재번역
           </Button>
           {frag.findings.length > 0 && (
             <Button
@@ -509,7 +498,7 @@ function FragmentCard({
         </div>
       )}
 
-      {/* 추가 요청사항을 적어 재번역 (선택) */}
+      {/* 재번역: 추가 요청사항(선택) 입력 후 실행 */}
       {showInstruct && !editing && (
         <div className="mt-2 flex gap-1.5 items-center">
           <input
@@ -518,12 +507,28 @@ function FragmentCard({
             onChange={(e) => setInstruct(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") submitRetranslate();
-              if (e.key === "Escape") setShowInstruct(false);
+              if (e.key === "Escape") {
+                setShowInstruct(false);
+                setInstruct("");
+              }
             }}
-            placeholder="예: 더 격식있게, 존댓말로 (비우면 그냥 재번역)"
+            placeholder="추가 요청사항 (선택) · 예: 더 격식있게, 존댓말로"
             autoFocus
+            disabled={busy}
             className="flex-1 min-w-0 text-xs bg-card border rounded px-2 py-1 outline-none focus:border-primary"
           />
+          <Button
+            size="xs"
+            variant="outline"
+            className="shrink-0"
+            disabled={busy}
+            onClick={() => {
+              setShowInstruct(false);
+              setInstruct("");
+            }}
+          >
+            취소
+          </Button>
           <Button size="xs" className="gap-1 shrink-0" disabled={busy} onClick={submitRetranslate}>
             {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
             재번역

@@ -914,15 +914,19 @@ def _retranslate_fragment(
     instruction: Optional[str],
     model: str,
     provider: str,
-) -> str:
+) -> tuple[str, Optional[list]]:
     """Re-translate one fragment with an optional instruction + length budget.
 
     Runs a single-item translation chain. The length budget (WP-C5) is passed as
-    a character constraint so slide-box overflows can be tightened. Returns the
-    new translation, or raises on failure.
+    a character constraint so slide-box overflows can be tightened.
+
+    Returns ``(new_target, color_segments)`` where ``color_segments`` is a
+    list[ColoredSegment] when the fragment is multi-color and was successfully
+    re-mapped, else None. Raises on failure.
     """
     from src.chains.translation_chain import create_translation_chain, translate_with_progress
     from src.utils.helpers import chunk_paragraphs
+    from src.services.translation_service import TranslationService
 
     info = session.paragraphs[index]
     budget = session.length_budget(index)
@@ -958,7 +962,35 @@ def _retranslate_fragment(
     results = translate_with_progress(chain, batches, None, max_concurrency=1)
     if not results:
         raise RuntimeError("re-translation returned no result")
-    return results[0]
+    new_target = results[0]
+
+    # Multi-color fragments: re-map the segment colors onto the new translation
+    # so highlighted words keep their color. Single-color fragments return None.
+    # The helper operates on aligned lists keyed by list-index (0 here); it may
+    # replace texts[0] with a more natural multi-color translation.
+    color_segments: Optional[list] = None
+    try:
+        texts = [new_target]
+        dist = TranslationService._translate_colored_paragraphs_with_segments(
+            [info],
+            texts,
+            source_lang=session.source_lang,
+            target_lang=session.target_lang,
+            provider=provider,
+            model_name=model,
+            ppt_context=session.ppt_context,
+            context=None,
+            instructions=combined_instructions,
+            glossary_terms=session.glossary_terms,
+            length_limit=None,
+        )
+        new_target = texts[0]
+        if dist:
+            color_segments = dist.get(0)
+    except Exception:  # pylint: disable=broad-except
+        LOGGER.exception("Color re-mapping failed on re-translate; single-color fallback.")
+
+    return new_target, color_segments
 
 
 @app.get("/api/v1/jobs/{job_id}/fragments", response_model=FragmentsResponse)
@@ -1039,10 +1071,11 @@ async def edit_job_fragment(
         )
 
     # --- edit / retranslate: produce the new target ----------------------
+    color_segments: Optional[list] = None
     if body.action == "retranslate":
         loop = asyncio.get_running_loop()
         try:
-            new_target = await loop.run_in_executor(
+            new_target, color_segments = await loop.run_in_executor(
                 None,
                 _retranslate_fragment,
                 session, index, body.instruction,
@@ -1060,6 +1093,11 @@ async def edit_job_fragment(
     changed = session.apply_edit(
         index, new_target, propagate_identical=body.propagate_identical
     )
+    # apply_edit dropped any stale color segmentation for `index`; re-seed it
+    # with the freshly re-mapped segments (retranslate only). Identical
+    # propagated fragments intentionally stay single-color — their run
+    # structure may differ from this fragment's.
+    session.set_color_distribution(index, color_segments)
 
     # Re-render the output pptx in place so the download reflects the edit.
     try:

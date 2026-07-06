@@ -62,6 +62,10 @@ class ReviewSession:
     # stays consistent with the original run. Defaults match "no glossary".
     ppt_context: str = ""
     glossary_terms: str = "None"
+    # Per-fragment color segments for multi-color paragraphs (fragment index ->
+    # list[ColoredSegment]). Seeded from the original run so multi-color
+    # fragments keep their colors on re-render; updated on re-translate.
+    color_distributions: Dict[int, list] = field(default_factory=dict)
     # Built lazily from paragraphs; canonical_map drives identical-fragment
     # propagation.
     _plan: Optional[RepetitionPlan] = field(default=None, repr=False)
@@ -165,12 +169,16 @@ class ReviewSession:
         changed = [index]
         self.translated_texts[index] = new_target
         self.edited_indices.add(index)
+        # New text no longer matches any stored color segmentation; drop it so
+        # the fragment re-renders as safe single-color. Re-translate re-seeds it.
+        self.color_distributions.pop(index, None)
 
         if propagate_identical:
             for other in self.identical_indices(index):
                 if other != index:
                     self.translated_texts[other] = new_target
                     self.edited_indices.add(other)
+                    self.color_distributions.pop(other, None)
                     changed.append(other)
 
         LOGGER.info(
@@ -179,6 +187,18 @@ class ReviewSession:
             len(changed) - 1,
         )
         return changed
+
+    def set_color_distribution(self, index: int, segments: Optional[list]) -> None:
+        """Store (or clear) multi-color segments for a fragment after re-translate.
+
+        `segments` is a list[ColoredSegment] when the fragment is multi-color and
+        was successfully mapped; None/empty clears any stale distribution so the
+        fragment renders as single-color.
+        """
+        if segments:
+            self.color_distributions[index] = segments
+        else:
+            self.color_distributions.pop(index, None)
 
     def partial_match_candidates(self, index: int, phrase: str) -> List[dict]:
         """Fragments whose target *contains* `phrase` (for partial propagation).
@@ -221,4 +241,5 @@ class ReviewSession:
             self.presentation,
             text_fit_mode=self.text_fit_mode,
             min_font_ratio=self.min_font_ratio,
+            color_distributions=self.color_distributions or None,
         )
