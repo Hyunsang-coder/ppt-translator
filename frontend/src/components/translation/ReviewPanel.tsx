@@ -90,7 +90,7 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
         cur !== null ? cur : (resp.fragments[0]?.slide ?? null)
       );
     } catch {
-      setError("조각 목록을 불러오지 못했습니다.");
+      setError("섹션 목록을 불러오지 못했습니다.");
     } finally {
       setLoading(false);
     }
@@ -223,7 +223,7 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
         <div>
           <h2 className="text-base font-bold leading-tight">번역 검토 &amp; 수정</h2>
           <p className="text-xs text-muted-foreground">
-            {fragments.length}개 조각 · 검출 {flaggedCount} · 수정됨 {editedCount}
+            {fragments.length}개 섹션 · 검출 {flaggedCount} · 수정됨 {editedCount}
           </p>
         </div>
         <div className="flex gap-2">
@@ -240,7 +240,7 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
       {loading && (
         <div className="flex items-center justify-center flex-1 text-muted-foreground gap-2">
           <Loader2 className="w-5 h-5 animate-spin" />
-          조각을 불러오는 중...
+          섹션을 불러오는 중...
         </div>
       )}
 
@@ -288,7 +288,7 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
                     </div>
                   )}
                   <div className="text-[10px] text-muted-foreground/70">
-                    조각 {g.items.length}
+                    섹션 {g.items.length}
                   </div>
                 </button>
               );
@@ -306,7 +306,7 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
                   <h3 className="text-sm font-bold truncate">{activeGroup.title}</h3>
                 )}
                 <span className="text-xs text-muted-foreground">
-                  조각 {activeGroup.items.length}개
+                  섹션 {activeGroup.items.length}개
                 </span>
               </div>
             )}
@@ -334,7 +334,7 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
 
             {activeGroup && activeGroup.items.length === 0 && (
               <div className="text-center py-16 text-muted-foreground text-sm">
-                이 슬라이드에 조각이 없습니다.
+                이 슬라이드에 섹션이 없습니다.
               </div>
             )}
           </div>
@@ -426,7 +426,7 @@ function FragmentCard({
       )}
 
       <div className="flex items-center gap-1.5 mb-1 text-[10px] font-semibold text-muted-foreground flex-wrap">
-        <span>{frag.is_note ? "발표자 노트" : `도형 ${frag.shape}`}</span>
+        <span>{frag.is_note ? "발표자 노트" : `섹션 ${frag.shape}`}</span>
         {frag.repeat_count > 1 && (
           <span className="bg-muted rounded-full px-1.5 py-0.5">×{frag.repeat_count}</span>
         )}
