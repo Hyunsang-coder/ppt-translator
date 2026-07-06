@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { FileUploader } from "@/components/shared/FileUploader";
@@ -41,6 +41,16 @@ export function TranslationForm() {
     retranslate,
     reset,
   } = useTranslation();
+
+  // 번역이 완료되면 검토 & 수정 화면으로 자동 진입한다. 사용자가 검토를
+  // 닫은 뒤 같은 job이 다시 자동으로 열리지 않도록 job당 한 번만 연다.
+  const autoOpenedJob = useRef<string | null>(null);
+  useEffect(() => {
+    if (isCompleted && jobId && autoOpenedJob.current !== jobId) {
+      autoOpenedJob.current = jobId;
+      setReviewOpen(true);
+    }
+  }, [isCompleted, jobId]);
 
   // 현재 선택한 모델의 표시 이름 가져오기
   const providerModels = getModelsForProvider(settings.provider);
@@ -153,22 +163,23 @@ export function TranslationForm() {
 
               {isCompleted && (
                 <>
+                  {/* 검토가 기본 경로. 다운로드는 검토 화면 안에서 이뤄진다. */}
                   <Button
-                    onClick={downloadResult}
-                    disabled={!canDownload}
-                    className="flex-1 btn-gradient gap-2"
-                  >
-                    <Download className="w-4 h-4" />
-                    다운로드
-                  </Button>
-                  <Button
-                    variant="outline"
                     onClick={() => setReviewOpen(true)}
                     disabled={!jobId}
-                    className="flex-1 gap-2"
+                    className="flex-1 btn-gradient gap-2"
                   >
                     <ClipboardCheck className="w-4 h-4" />
                     검토 &amp; 수정
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={downloadResult}
+                    disabled={!canDownload}
+                    className="flex-1 gap-2"
+                  >
+                    <Download className="w-4 h-4" />
+                    검토 없이 저장
                   </Button>
                   <Button
                     variant="outline"
@@ -176,7 +187,7 @@ export function TranslationForm() {
                     className="flex-1 gap-2"
                   >
                     <RefreshCw className="w-4 h-4" />
-                    재번역
+                    전체 재번역
                   </Button>
                 </>
               )}

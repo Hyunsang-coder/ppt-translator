@@ -484,3 +484,29 @@
 .btn-gradient:active:not(:disabled) {
   transform: translateY(0);
 }
+
+/* Review screen fragment grid — 반응형 2~4열(짝수), 최대 4열.
+   짧은 조각은 1칸, 중간은 2칸, 긴 문단·편집 중은 전체 폭을 차지한다. */
+.review-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  align-items: start;
+}
+@media (min-width: 900px) {
+  .review-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+/* 좁은 창(2열)에선 중간 조각도 1칸 — span 2면 전체 폭이 돼버리니까. */
+.review-span-2 {
+  grid-column: span 1;
+}
+@media (min-width: 900px) {
+  .review-span-2 {
+    grid-column: span 2;
+  }
+}
+.review-span-full {
+  grid-column: 1 / -1;
+}

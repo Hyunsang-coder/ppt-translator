@@ -946,14 +946,9 @@ def _retranslate_fragment(
     )
     batches = chunk_paragraphs([info], batch_size=1, ppt_context="", glossary_terms="None")
 
-    class _NullTracker:
-        def update(self, *a, **k):
-            pass
-
-        def finish(self):
-            return 0.0
-
-    results = translate_with_progress(chain, batches, _NullTracker(), max_concurrency=1)
+    # No progress tracker: a single-fragment re-translation needs no progress UI,
+    # and translate_with_progress skips all tracker calls when it is None.
+    results = translate_with_progress(chain, batches, None, max_concurrency=1)
     if not results:
         raise RuntimeError("re-translation returned no result")
     return results[0]
