@@ -29,6 +29,64 @@ _MIN_PHRASE_LEN = 4
 # unreliable on very short strings, so we skip them rather than false-positive.
 _MIN_UNTRANSLATED_LEN = 12
 
+# For Latin-script source (e.g. English), a fragment that survives translation
+# unchanged is only "untranslated" if it looks like real prose — multiple
+# words. A single ASCII token is almost always a proper noun / code / label
+# (PlayStation, AJ, R1, Steam) that legitimately stays as-is, so we don't flag
+# it. CJK source has no such ambiguity (any CJK left in the target is a miss).
+_MIN_LATIN_UNTRANSLATED_WORDS = 3
+
+
+def _has_cjk(text: str) -> bool:
+    """True if the text contains any CJK (Han/Hangul/Kana) character."""
+    for ch in text:
+        code = ord(ch)
+        if (
+            0xAC00 <= code <= 0xD7A3  # Hangul syllables
+            or 0x1100 <= code <= 0x11FF  # Hangul Jamo
+            or 0x3040 <= code <= 0x30FF  # Hiragana + Katakana
+            or 0x4E00 <= code <= 0x9FFF  # CJK unified ideographs
+            or 0x3400 <= code <= 0x4DBF  # CJK ext A
+        ):
+            return True
+    return False
+
+
+def _has_letters(text: str) -> bool:
+    """True if the text contains at least one alphabetic character.
+
+    A fragment of only digits/punctuation/symbols ("3", "01", "R2 →")
+    is not translatable content and must never be flagged as untranslated.
+    """
+    return any(ch.isalpha() for ch in text)
+
+
+# Common English function words. Their presence signals real prose rather than
+# a proper-noun / label list (which the untranslated check must not flag).
+_PROSE_FUNCTION_WORDS = frozenset(
+    {
+        "the", "a", "an", "is", "are", "was", "were", "be", "been", "to", "of",
+        "in", "on", "for", "and", "or", "with", "by", "from", "as", "at", "this",
+        "that", "we", "you", "it", "not", "no", "will", "has", "have", "had",
+        "but", "if", "than", "then", "into", "per", "via", "our", "their",
+    }
+)
+
+
+def _looks_like_prose(text: str, words: List[str]) -> bool:
+    """Heuristic: does this Latin-script fragment read like a real sentence?
+
+    A proper-noun/label list ("PlayStation, Xbox, PC, Steam", "Steam Next Fest")
+    has every word capitalized and no function words. Real prose has a lowercase
+    function word or ends with sentence punctuation.
+    """
+    lowered = {w.strip(".,;:!?()[]'\"").casefold() for w in words}
+    if lowered & _PROSE_FUNCTION_WORDS:
+        return True
+    if text.rstrip().endswith((".", "!", "?")) and len(words) >= 4:
+        return True
+    return False
+
 
 @dataclass
 class Finding:
@@ -246,17 +304,37 @@ def _check_untranslated(
     """
 
     findings: List[Finding] = []
-    detector = None
+    src_is_cjk = source_lang in ("한국어", "일본어", "중국어")
     for frag in fragments:
         src_norm = _normalize(frag.source)
         tgt_norm = _normalize(frag.target)
         if not src_norm or not tgt_norm:
             continue
 
+        # Gate 1: the source must contain actual translatable content. Pure
+        # numbers/symbols/codes ("3", "01", "R2") are never untranslated.
+        if not _has_letters(frag.source):
+            continue
+
         untranslated = False
         # Primary: output is byte-for-byte the source (ignoring case/space).
         if src_norm == tgt_norm:
-            untranslated = True
+            if src_is_cjk:
+                # CJK source unchanged in the target => genuinely untranslated,
+                # UNLESS the source is itself already Latin (proper noun/code
+                # embedded in a CJK deck), which has no CJK to translate.
+                untranslated = _has_cjk(frag.source)
+            else:
+                # Latin source (e.g. English): a surviving fragment is only
+                # "untranslated" if it reads like real prose, not a proper-noun
+                # list (PlayStation, Xbox, Steam Next Fest). Require multiple
+                # words AND a sentence signal: a lowercase function word or
+                # sentence-ending punctuation — proper-noun labels have neither.
+                words = [w for w in frag.source.split() if any(c.isalpha() for c in w)]
+                looks_like_prose = _looks_like_prose(frag.source, words)
+                untranslated = (
+                    len(words) >= _MIN_LATIN_UNTRANSLATED_WORDS and looks_like_prose
+                )
         elif len(tgt_norm) >= _MIN_UNTRANSLATED_LEN:
             # Secondary: langdetect says the output is still the source language.
             # Import lazily; language of source lang display-name is Korean.

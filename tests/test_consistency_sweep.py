@@ -78,6 +78,36 @@ class UntranslatedTestCase(unittest.TestCase):
         self.assertEqual(len(omissions), 1)
         self.assertEqual(omissions[0].severity, "critical")
 
+    def test_numbers_and_codes_not_flagged(self) -> None:
+        # Pure numbers/symbols/short codes are never translatable content.
+        sources = ["3", "01", "R2", "1", "→", "12.5%"]
+        paras = [_p(0, 0, i, s) for i, s in enumerate(sources)]
+        findings = run_sweep(paras, list(sources), source_lang="영어", target_lang="한국어")
+        self.assertEqual([f for f in findings if f.type == "accuracy.omission"], [])
+
+    def test_proper_noun_lists_not_flagged(self) -> None:
+        # Product names / headings left as-is (EN->KR) are legitimate, not misses.
+        sources = ["PlayStation, Xbox, PC, Steam", "Steam Next Fest",
+                   "Andrei Chan", "Executive Summary"]
+        paras = [_p(0, 0, i, s) for i, s in enumerate(sources)]
+        findings = run_sweep(paras, list(sources), source_lang="영어", target_lang="한국어")
+        self.assertEqual([f for f in findings if f.type == "accuracy.omission"], [])
+
+    def test_real_english_prose_flagged(self) -> None:
+        # Genuine English sentences left untranslated ARE misses (prose signals).
+        sources = ["The revenue increased significantly this quarter",
+                   "Please refer to the appendix for details"]
+        paras = [_p(0, 0, i, s) for i, s in enumerate(sources)]
+        findings = run_sweep(paras, list(sources), source_lang="영어", target_lang="한국어")
+        omissions = [f for f in findings if f.type == "accuracy.omission"]
+        self.assertEqual(len(omissions), 2)
+
+    def test_latin_proper_noun_in_cjk_deck_not_flagged(self) -> None:
+        # A Latin proper noun surviving in a KR->EN deck has no CJK to translate.
+        paras = [_p(0, 0, 0, "PUBG")]
+        findings = run_sweep(paras, ["PUBG"], source_lang="한국어", target_lang="영어")
+        self.assertEqual([f for f in findings if f.type == "accuracy.omission"], [])
+
 
 class CleanDeckTestCase(unittest.TestCase):
     def test_clean_deck_zero_findings(self) -> None:
