@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PPT 번역캣 · 검토·수정 화면 목업</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --ink: #1e2430; --muted: #69707d;
+    --line: #e4e7ec; --accent: #4f46e5; --accent-soft: #eef0ff;
+    --red: #dc2626; --red-soft: #fdecec;
+    --amber: #b45309; --amber-soft: #fdf3e3;
+    --green: #047857; --green-soft: #e7f5ef;
+    --blue: #1d4ed8; --blue-soft: #e8effd;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--bg); color:var(--ink); font-family:"Pretendard",-apple-system,"Apple SD Gothic Neo","Noto Sans KR","Malgun Gothic",sans-serif; font-size:14px; line-height:1.55; }
+  .app { max-width: 1060px; margin: 0 auto; padding: 28px 20px 60px; }
+
+  .mock-note { background:#fff8e6; border:1px solid #f3dfa8; color:#7c5a09; border-radius:10px; padding:10px 16px; font-size:12.5px; margin-bottom:18px; }
+  .mock-note b { font-weight:800; }
+
+  /* top bar */
+  .topbar { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px 20px; margin-bottom:14px; }
+  .topbar .row1 { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; }
+  .file { font-size:16px; font-weight:800; }
+  .file .sub { font-size:12.5px; color:var(--muted); font-weight:500; margin-left:8px; }
+  .actions-top { display:flex; gap:8px; }
+  .btn { border:1px solid var(--line); background:var(--panel); border-radius:9px; padding:7px 14px; font-size:13px; font-weight:700; cursor:pointer; }
+  .btn.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .filters { display:flex; gap:8px; margin-top:14px; flex-wrap:wrap; }
+  .chip { font-size:12.5px; font-weight:700; padding:5px 13px; border-radius:999px; border:1px solid var(--line); background:var(--panel); color:var(--muted); cursor:pointer; }
+  .chip.on { background:var(--ink); border-color:var(--ink); color:#fff; }
+  .chip .n { opacity:.75; font-weight:600; margin-left:3px; }
+
+  /* slide group */
+  .slide-head { display:flex; align-items:center; gap:10px; margin:26px 2px 10px; }
+  .slide-head .thumb { width:52px; height:32px; border-radius:6px; background:linear-gradient(135deg,#dfe3ff,#f0e8ff); border:1px solid var(--line); display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:800; color:var(--accent); }
+  .slide-head h3 { font-size:14px; font-weight:800; }
+  .slide-head .cnt { font-size:12px; color:var(--muted); }
+
+  /* fragment row */
+  .frag { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 18px; margin-bottom:10px; }
+  .frag .loc { font-size:11.5px; font-weight:700; color:var(--muted); margin-bottom:8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .badge { font-size:11px; font-weight:800; padding:2px 9px; border-radius:999px; }
+  .b-red { color:var(--red); background:var(--red-soft); }
+  .b-amber { color:var(--amber); background:var(--amber-soft); }
+  .b-blue { color:var(--blue); background:var(--blue-soft); }
+  .b-green { color:var(--green); background:var(--green-soft); }
+  .b-gray { color:var(--muted); background:var(--bg); border:1px solid var(--line); }
+  .pair { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  .pair .lbl { font-size:11px; font-weight:800; color:var(--muted); letter-spacing:.05em; margin-bottom:4px; }
+  .src { color:#3d4350; }
+  .tgt { }
+  .tgt .hl { background:var(--red-soft); border-bottom:2px solid var(--red); border-radius:2px; padding:0 1px; }
+  .tgt .hl-a { background:var(--amber-soft); border-bottom:2px solid var(--amber); border-radius:2px; padding:0 1px; }
+  .frag .why { margin-top:9px; font-size:12.5px; color:#5a6170; background:var(--bg); border-radius:8px; padding:8px 12px; }
+  .frag .why b { color:var(--ink); }
+  .rowactions { margin-top:11px; display:flex; gap:6px; }
+  .act { font-size:12px; font-weight:700; padding:5px 12px; border-radius:8px; border:1px solid var(--line); background:var(--panel); color:#454c59; cursor:pointer; }
+  .act:hover { border-color:var(--accent); color:var(--accent); }
+  .act.ghost { color:var(--muted); }
+
+  /* inline edit state */
+  .editbox { margin-top:10px; border:2px solid var(--accent); border-radius:10px; padding:12px 14px; background:#fdfdff; }
+  .editbox textarea { width:100%; border:none; outline:none; resize:vertical; font:inherit; min-height:44px; background:transparent; }
+  .editfoot { display:flex; justify-content:space-between; align-items:center; margin-top:8px; flex-wrap:wrap; gap:8px; }
+  .prop { font-size:12.5px; color:#3d4350; display:flex; align-items:center; gap:7px; }
+  .prop input { accent-color:var(--accent); width:15px; height:15px; }
+  .editfoot .bts { display:flex; gap:6px; }
+
+  /* retranslate popover state */
+  .repop { margin-top:10px; border:1px solid var(--line); border-left:3px solid var(--accent); border-radius:10px; background:#fbfbfe; padding:14px 16px; }
+  .repop h4 { font-size:13px; font-weight:800; margin-bottom:9px; }
+  .repop .opts { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+  .opt { font-size:12px; font-weight:700; padding:4px 11px; border-radius:999px; border:1px solid var(--line); background:#fff; color:var(--muted); cursor:pointer; }
+  .opt.on { border-color:var(--accent); color:var(--accent); background:var(--accent-soft); }
+  .budget { font-size:12.5px; background:var(--amber-soft); color:var(--amber); font-weight:700; border-radius:8px; padding:7px 12px; display:inline-block; margin-bottom:11px; }
+  .diff { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:11px; }
+  .diff .box { border:1px solid var(--line); border-radius:9px; padding:9px 12px; font-size:13px; background:#fff; }
+  .diff .box .t { font-size:10.5px; font-weight:800; color:var(--muted); margin-bottom:3px; letter-spacing:.05em; }
+  .diff .before { color:var(--muted); text-decoration:line-through; text-decoration-color:#c3312f66; }
+  .diff .after b { color:var(--green); }
+  .chars { font-size:11px; color:var(--muted); margin-top:4px; }
+  .chars .ok { color:var(--green); font-weight:800; }
+  .chars .over { color:var(--red); font-weight:800; }
+
+  /* partial propagation panel */
+  .partial { margin-top:10px; border:1px solid var(--line); border-left:3px solid var(--blue); border-radius:10px; background:#fbfcff; padding:13px 16px; }
+  .partial h4 { font-size:13px; font-weight:800; margin-bottom:4px; }
+  .partial p.d { font-size:12.5px; color:var(--muted); margin-bottom:10px; }
+  .cand { display:flex; gap:9px; align-items:flex-start; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:#fff; margin-bottom:6px; font-size:13px; }
+  .cand input { margin-top:3px; accent-color:var(--blue); width:15px; height:15px; }
+  .cand .where { font-size:11px; font-weight:700; color:var(--muted); }
+
+  .toast { position:sticky; bottom:14px; margin:26px auto 0; max-width:460px; background:var(--ink); color:#fff; border-radius:11px; padding:12px 18px; font-size:13px; display:flex; gap:10px; align-items:center; box-shadow:0 10px 30px rgba(20,24,33,.25); }
+  .toast .ic { font-size:16px; }
+  .toast b { color:#a5f3d0; }
+
+  footer { text-align:center; color:var(--muted); font-size:12px; margin-top:30px; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <div class="mock-note">🎨 <b>UI 목업입니다.</b> 배치·배지·액션 상태의 의도를 보여주는 참고물이며, 실제 구현은 앱의 기존 디자인 시스템을 따릅니다. 아래 조각들은 서로 다른 상호작용 상태(기본 / 인라인 수정 중 / 재번역 중 / 부분 전파 확인)를 한 화면에 펼쳐 놓은 것입니다.</div>
+
+  <!-- TOP BAR -->
+  <div class="topbar">
+    <div class="row1">
+      <div class="file">Q3_무기밸런스_공유.pptx <span class="sub">KR → EN · 128개 조각 번역 완료</span></div>
+      <div class="actions-top">
+        <button class="btn">원본 비교</button>
+        <button class="btn primary">수정 반영해 저장</button>
+      </div>
+    </div>
+    <div class="filters">
+      <span class="chip on">전체 <span class="n">128</span></span>
+      <span class="chip">⚠️ 확인 필요 <span class="n">7</span></span>
+      <span class="chip">공간 초과 <span class="n">2</span></span>
+      <span class="chip">용어집 위반 <span class="n">1</span></span>
+      <span class="chip">일관성 <span class="n">2</span></span>
+      <span class="chip">미번역 <span class="n">1</span></span>
+      <span class="chip">수정됨 <span class="n">3</span></span>
+    </div>
+  </div>
+
+  <!-- SLIDE 3 -->
+  <div class="slide-head">
+    <div class="thumb">S3</div>
+    <h3>무기 밸런스 조정 방향</h3>
+    <span class="cnt">조각 6개 · 검출 2</span>
+  </div>
+
+  <!-- state: glossary violation (기본 상태 + 제안) -->
+  <div class="frag">
+    <div class="loc">Slide 3 · TextBox 2 · <span class="badge b-red">용어집 위반</span></div>
+    <div class="pair">
+      <div><div class="lbl">원문</div><div class="src">피격 시 저지력 효과를 20% 상향</div></div>
+      <div><div class="lbl">번역</div><div class="tgt">Increased <span class="hl">stopping power</span> effect on hit by 20%</div></div>
+    </div>
+    <div class="why">📖 용어집: <b>저지력 → Aim Punch</b> (PUBG BR 확정 용어) · 제안: Increased Aim Punch effect on hit by 20%</div>
+    <div class="rowactions">
+      <button class="act">✓ 제안 적용</button>
+      <button class="act">✏️ 직접 수정</button>
+      <button class="act">🔁 재번역</button>
+      <button class="act ghost">무시</button>
+    </div>
+  </div>
+
+  <!-- state: retranslate popover OPEN (overflow) -->
+  <div class="frag">
+    <div class="loc">Slide 3 · 콜아웃 도형 · <span class="badge b-amber">공간 초과</span></div>
+    <div class="pair">
+      <div><div class="lbl">원문</div><div class="src">신규 무기는 시즌 중반 패치로 순차 지급</div></div>
+      <div><div class="lbl">번역</div><div class="tgt"><span class="hl-a">New weapons will be distributed sequentially through the mid-season patch update</span></div></div>
+    </div>
+    <div class="repop">
+      <h4>🔁 이 조각만 재번역</h4>
+      <div class="opts">
+        <span class="opt on">더 짧게</span>
+        <span class="opt">더 격식 있게</span>
+        <span class="opt">용어 지정…</span>
+        <span class="opt">직접 지시 입력…</span>
+      </div>
+      <div class="budget">📐 이 도형의 길이 예산: 약 48자 · 현재 78자 (30자 초과)</div>
+      <div class="diff">
+        <div class="box"><div class="t">현재</div><div class="before">New weapons will be distributed sequentially through the mid-season patch update</div><div class="chars"><span class="over">78자</span> / 48자</div></div>
+        <div class="box"><div class="t">재번역 결과</div><div class="after">New weapons roll out in <b>mid-season patches</b></div><div class="chars"><span class="ok">44자</span> / 48자 ✓ 예산 준수</div></div>
+      </div>
+      <div class="editfoot">
+        <span class="prop" style="color:var(--muted); font-size:12px;">적용 시 오답노트에 자동 기록됩니다</span>
+        <div class="bts"><button class="act">다시 생성</button><button class="btn primary" style="padding:6px 14px; font-size:12.5px;">적용</button></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SLIDE 7 -->
+  <div class="slide-head">
+    <div class="thumb">S7</div>
+    <h3>보급 시스템 개편</h3>
+    <span class="cnt">조각 9개 · 검출 2</span>
+  </div>
+
+  <!-- state: consistency -->
+  <div class="frag">
+    <div class="loc">Slide 7 · 표 1행 2열 · <span class="badge b-blue">일관성</span></div>
+    <div class="pair">
+      <div><div class="lbl">원문</div><div class="src">보급 상자 등장 주기 단축</div></div>
+      <div><div class="lbl">번역</div><div class="tgt">Shorter <span class="hl-a">Care Package</span> spawn interval</div></div>
+    </div>
+    <div class="why">🔍 같은 원문 "보급 상자"가 <b>Slide 12에서는 "Supply Crate"</b>로 번역됨. 하나로 통일하세요.</div>
+    <div class="rowactions">
+      <button class="act">이대로 통일 (2곳 변경)</button>
+      <button class="act">Supply Crate로 통일 (1곳 변경)</button>
+      <button class="act ghost">무시</button>
+    </div>
+  </div>
+
+  <!-- state: inline EDIT OPEN with propagation -->
+  <div class="frag">
+    <div class="loc">Slide 7 · TextBox 4 · <span class="badge b-gray">반복 ×4</span> <span class="badge b-green">수정 중</span></div>
+    <div class="pair">
+      <div><div class="lbl">원문</div><div class="src">자세한 내용은 부록 참조</div></div>
+      <div><div class="lbl">번역 (수정 전)</div><div class="tgt" style="color:var(--muted);">Refer to the appendix for detailed information</div></div>
+    </div>
+    <div class="editbox">
+      <textarea>See Appendix for details</textarea>
+      <div class="editfoot">
+        <label class="prop"><input type="checkbox" checked> 동일 문구 <b>3곳</b>(S9·S15·S22)에 함께 적용</label>
+        <div class="bts"><button class="act">취소</button><button class="btn primary" style="padding:6px 14px; font-size:12.5px;">저장</button></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SLIDE 12 -->
+  <div class="slide-head">
+    <div class="thumb">S12</div>
+    <h3>일정 및 다음 단계</h3>
+    <span class="cnt">조각 5개 · 검출 2</span>
+  </div>
+
+  <!-- state: untranslated -->
+  <div class="frag">
+    <div class="loc">Slide 12 · 각주 텍스트 · <span class="badge b-red">미번역</span></div>
+    <div class="pair">
+      <div><div class="lbl">원문</div><div class="src">사내 공유용, 외부 배포 금지</div></div>
+      <div><div class="lbl">번역</div><div class="tgt"><span class="hl">사내 공유용, 외부 배포 금지</span></div></div>
+    </div>
+    <div class="rowactions">
+      <button class="act">🔁 번역</button>
+      <button class="act ghost">원문 유지 (의도적)</button>
+    </div>
+  </div>
+
+  <!-- state: partial propagation panel OPEN -->
+  <div class="frag">
+    <div class="loc">Slide 12 · 본문 · <span class="badge b-green">수정됨</span></div>
+    <div class="pair">
+      <div><div class="lbl">원문</div><div class="src">필드 드롭 아이템 목록은 별도 시트 참조</div></div>
+      <div><div class="lbl">번역 (수정 반영)</div><div class="tgt">See the separate sheet for <b>World Spawn</b> item list</div></div>
+    </div>
+    <div class="partial">
+      <h4>🔗 수정한 표현이 포함된 다른 조각 2건</h4>
+      <p class="d">"field drop"을 "World Spawn"으로 고치셨습니다. 아래 조각들에도 같은 표현이 문장 일부로 들어 있어요. 문장 구조가 달라 자동으로 바꾸지 않으니, 적용할 것만 선택하세요.</p>
+      <label class="cand"><input type="checkbox" checked><span><span class="where">Slide 14 · 본문</span><br>Adjusted <u>field drop</u> rates for high-tier gear → World Spawn 적용</span></label>
+      <label class="cand"><input type="checkbox"><span><span class="where">Slide 18 · 발표자 노트</span><br>...compared to <u>field drop</u> distribution in the previous season...</span></label>
+      <div class="editfoot" style="margin-top:9px;">
+        <span></span>
+        <div class="bts"><button class="act">건너뛰기</button><button class="btn primary" style="padding:6px 14px; font-size:12.5px;">선택한 1건 적용</button></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- toast -->
+  <div class="toast"><span class="ic">📓</span><span>"자세한 내용은 부록 참조" 수정이 <b>4곳에 반영</b>되고 오답노트에 기록됐습니다.</span></div>
+
+  <footer>PPT 번역캣 · 검토·수정 화면 목업 (WP-C5) · 2026-07</footer>
+</div>
+</body>
+</html>
