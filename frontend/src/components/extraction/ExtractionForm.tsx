@@ -15,7 +15,9 @@ import { FileUploader } from "@/components/shared/FileUploader";
 import { MarkdownPreview } from "./MarkdownPreview";
 import { useExtraction } from "@/hooks/useExtraction";
 import { useConfig } from "@/hooks/useConfig";
+import { Separator } from "@/components/ui/separator";
 import { Play, Copy, Download, RefreshCw, XCircle } from "lucide-react";
+import { toast } from "sonner";
 
 export function ExtractionForm() {
   const { config } = useConfig();
@@ -41,7 +43,9 @@ export function ExtractionForm() {
   const handleCopy = async () => {
     const success = await copyToClipboard();
     if (success) {
-      // Could show a toast notification here
+      toast.success("클립보드에 복사했습니다.");
+    } else {
+      toast.error("복사에 실패했습니다. 다시 시도해주세요.");
     }
   };
 
@@ -51,6 +55,7 @@ export function ExtractionForm() {
       <div className="space-y-4">
         <FileUploader
           label="PPT 파일"
+          required
           description={`PowerPoint 파일 (.pptx) - 최대 ${config?.max_upload_size_mb || 1024}MB`}
           accept={{
             "application/vnd.openxmlformats-officedocument.presentationml.presentation": [
@@ -63,8 +68,10 @@ export function ExtractionForm() {
           disabled={isExtracting}
         />
 
-        {/* Extraction Settings */}
+        {/* Extraction Settings - 번역 탭과 동일하게 그룹 라벨로 묶는다 */}
+        <Separator />
         <div className="space-y-4">
+          <Label className="text-sm font-medium">추출 옵션</Label>
           <div className="grid grid-cols-2 gap-3">
             {/* Figures handling */}
             <div className="space-y-1.5">

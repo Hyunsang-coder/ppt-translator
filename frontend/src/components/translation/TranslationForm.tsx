@@ -10,7 +10,7 @@ import { LogViewer } from "./LogViewer";
 import { ReviewPanel } from "./ReviewPanel";
 import { useTranslation } from "@/hooks/useTranslation";
 import { useConfig } from "@/hooks/useConfig";
-import { Play, XCircle, Download, RefreshCw, AlertCircle, ClipboardCheck } from "lucide-react";
+import { Play, XCircle, Download, RefreshCw, AlertCircle, ClipboardCheck, CheckCircle2, Circle } from "lucide-react";
 
 export function TranslationForm() {
   const [startTime, setStartTime] = useState<number | null>(null);
@@ -63,9 +63,9 @@ export function TranslationForm() {
   const isTargetLangEmpty = !settings.targetLang || settings.targetLang === "Auto";
 
   const handleStart = async () => {
-    // 타겟 언어 미선택 시 경고
+    // 대상 언어 미선택 시 경고
     if (isTargetLangEmpty) {
-      setFilenameError("타겟 언어를 선택해주세요.");
+      setFilenameError("대상 언어를 선택해주세요.");
       return;
     }
     // 직접 입력 모드인데 파일명이 비어있으면 경고
@@ -80,7 +80,7 @@ export function TranslationForm() {
 
   const handleRetranslate = async () => {
     if (isTargetLangEmpty) {
-      setFilenameError("타겟 언어를 선택해주세요.");
+      setFilenameError("대상 언어를 선택해주세요.");
       return;
     }
     if (isCustomFilenameEmpty) {
@@ -104,6 +104,7 @@ export function TranslationForm() {
       <div className="space-y-4">
         <FileUploader
           label="PPT 파일"
+          required
           description={`PowerPoint 파일 (.pptx, .ppt) - 최대 ${config?.max_upload_size_mb || 1024}MB`}
           accept={{
             "application/vnd.openxmlformats-officedocument.presentationml.presentation": [
@@ -204,6 +205,17 @@ export function TranslationForm() {
               )}
             </div>
 
+            {/* 시작 조건 체크리스트: 버튼이 왜 비활성인지 항상 보여준다 */}
+            {isIdle && !canStart && (
+              <div className="mt-3 space-y-1.5" aria-live="polite">
+                <StartCondition met={pptFile !== null} label="PPT 파일 선택" />
+                <StartCondition met={!isTargetLangEmpty} label="대상 언어 선택" />
+                {settings.filenameSettings.mode === "custom" && (
+                  <StartCondition met={!isCustomFilenameEmpty} label="출력 파일명 입력" />
+                )}
+              </div>
+            )}
+
             {filenameError && (
               <div className="mt-3 p-3 rounded-lg border border-warning/30 bg-warning/10 animate-slide-in">
                 <p className="text-sm text-warning flex items-start gap-2">
@@ -263,5 +275,22 @@ export function TranslationForm() {
         />
       )}
     </div>
+  );
+}
+
+function StartCondition({ met, label }: { met: boolean; label: string }) {
+  return (
+    <p
+      className={`text-xs flex items-center gap-1.5 ${
+        met ? "text-success" : "text-muted-foreground"
+      }`}
+    >
+      {met ? (
+        <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" />
+      ) : (
+        <Circle className="w-3.5 h-3.5 flex-shrink-0 opacity-40" />
+      )}
+      {label}
+    </p>
   );
 }

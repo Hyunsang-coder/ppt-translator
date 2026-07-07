@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -14,7 +14,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { FileUploader } from "@/components/shared/FileUploader";
 import { useConfig } from "@/hooks/useConfig";
 import type { TranslationSettings, FilenameSettings, TextFitMode, ImageCompression, LengthLimit } from "@/types/api";
-import { FileText, Type, ImageDown } from "lucide-react";
+import { FileText, Type, ImageDown, ChevronDown, Info, Settings2 } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
 import {
   Tooltip,
@@ -41,6 +41,7 @@ export function SettingsPanel({
   disabled = false,
 }: SettingsPanelProps) {
   const { languages, getModelsForProvider, isLoading, error } = useConfig();
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const providerModels = getModelsForProvider(settings.provider);
 
@@ -83,9 +84,11 @@ export function SettingsPanel({
           </Select>
         </div>
 
-        {/* Target Language - Auto 제외 (타겟 언어는 필수 선택) */}
+        {/* Target Language - Auto 제외 (대상 언어는 필수 선택) */}
         <div className="space-y-2">
-          <Label htmlFor="target-lang">타겟 언어</Label>
+          <Label htmlFor="target-lang">
+            대상 언어 <span className="text-destructive">*</span>
+          </Label>
           <Select
             value={settings.targetLang}
             onValueChange={(value) => onSettingsChange({ targetLang: value })}
@@ -110,14 +113,14 @@ export function SettingsPanel({
       <div className="grid grid-cols-2 gap-3">
         {/* Provider */}
         <div className="space-y-2">
-          <Label htmlFor="provider">Provider</Label>
+          <Label htmlFor="provider">AI 제공자</Label>
           <Select
             value={settings.provider}
             onValueChange={(value) => onSettingsChange({ provider: value })}
             disabled={disabled || isLoading}
           >
             <SelectTrigger id="provider">
-              <SelectValue placeholder="Provider 선택" />
+              <SelectValue placeholder="제공자 선택" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="openai">OpenAI</SelectItem>
@@ -148,11 +151,32 @@ export function SettingsPanel({
         </div>
       </div>
 
+      {/* Advanced Options - 선택 설정은 아코디언으로 접어 첫 화면을 가볍게 유지 */}
+      <div className="rounded-xl border border-border">
+        <button
+          type="button"
+          onClick={() => setAdvancedOpen((open) => !open)}
+          aria-expanded={advancedOpen}
+          className="w-full flex items-center gap-2 px-4 py-3 text-sm font-medium cursor-pointer"
+        >
+          <Settings2 className="w-4 h-4 text-muted-foreground" />
+          고급 옵션
+          <span className="text-xs font-normal text-muted-foreground">
+            번역 · 스타일 · 이미지 압축 · 컨텍스트
+          </span>
+          <ChevronDown
+            className={`w-4 h-4 ml-auto text-muted-foreground transition-transform ${
+              advancedOpen ? "rotate-180" : ""
+            }`}
+          />
+        </button>
+        {advancedOpen && (
+          <TooltipProvider delayDuration={300}>
+            <div className="px-4 pb-4 space-y-4">
       {/* Translation Options */}
-      <Separator />
       <div className="space-y-3">
         <Label className="text-sm font-medium">번역 옵션</Label>
-        <div className="flex items-center gap-6">
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
           <div className="flex items-center space-x-2">
             <Checkbox
               id="preprocess"
@@ -163,8 +187,16 @@ export function SettingsPanel({
               disabled={disabled}
             />
             <Label htmlFor="preprocess" className="text-sm font-normal cursor-pointer">
-              반복 문구 전처리 (동일 텍스트 중복 번역 방지)
+              반복 문구 전처리
             </Label>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Info className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
+              </TooltipTrigger>
+              <TooltipContent>
+                동일 텍스트를 한 번만 번역해 속도를 높이고 용어 일관성을 유지합니다.
+              </TooltipContent>
+            </Tooltip>
           </div>
 
           <div className="flex items-center space-x-2">
@@ -184,11 +216,9 @@ export function SettingsPanel({
       </div>
 
       {/* Style Options */}
-      <Separator />
       <div className="space-y-3">
         <Label className="text-sm font-medium">스타일 옵션</Label>
-        <TooltipProvider delayDuration={300}>
-          <div className="flex items-center gap-6">
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
             <div className="flex items-center gap-3">
               <div className="flex items-center space-x-2">
                 <Checkbox
@@ -202,11 +232,12 @@ export function SettingsPanel({
                   }}
                   disabled={disabled}
                 />
+                <Label htmlFor="text-fit-shrink" className="text-sm font-normal cursor-pointer">
+                  폰트 자동 축소
+                </Label>
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <Label htmlFor="text-fit-shrink" className="text-sm font-normal cursor-pointer">
-                      폰트 자동 축소
-                    </Label>
+                    <Info className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
                   </TooltipTrigger>
                   <TooltipContent>
                     번역문이 길어지면 글자 크기를 줄여 텍스트 박스 안에 맞춥니다.
@@ -230,9 +261,7 @@ export function SettingsPanel({
                 </Select>
               )}
             </div>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <div className="flex items-center space-x-2">
+            <div className="flex items-center space-x-2">
                   <Checkbox
                     id="text-fit-expand"
                     checked={settings.textFitMode === "expand_box" || settings.textFitMode === "shrink_then_expand"}
@@ -247,12 +276,15 @@ export function SettingsPanel({
                   <Label htmlFor="text-fit-expand" className="text-sm font-normal cursor-pointer">
                     텍스트 박스 확장
                   </Label>
-                </div>
-              </TooltipTrigger>
-              <TooltipContent>
-                번역문이 길어지면 박스 너비를 넓혀 텍스트가 잘리지 않게 합니다.
-              </TooltipContent>
-            </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Info className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      번역문이 길어지면 박스 너비를 넓혀 텍스트가 잘리지 않게 합니다.
+                    </TooltipContent>
+                  </Tooltip>
+            </div>
             <div className="flex items-center gap-3">
               <div className="flex items-center space-x-2">
                 <Checkbox
@@ -263,11 +295,12 @@ export function SettingsPanel({
                   }}
                   disabled={disabled}
                 />
+                <Label htmlFor="length-limit" className="text-sm font-normal cursor-pointer">
+                  번역 길이 제한
+                </Label>
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <Label htmlFor="length-limit" className="text-sm font-normal cursor-pointer">
-                      번역 길이 제한
-                    </Label>
+                    <Info className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
                   </TooltipTrigger>
                   <TooltipContent>
                     번역문의 길이를 원문 대비 일정 비율 이내로 유지하도록 AI에게 지시합니다. 레이아웃 유지에 도움이 되지만 번역 품질이 다소 저하될 수 있습니다.
@@ -292,11 +325,9 @@ export function SettingsPanel({
               )}
             </div>
           </div>
-        </TooltipProvider>
       </div>
 
       {/* Image Compression */}
-      <Separator />
       <div className="space-y-3">
         <Label className="text-sm font-medium">이미지 압축</Label>
         <div className="flex items-center gap-3">
@@ -310,7 +341,7 @@ export function SettingsPanel({
               disabled={disabled}
             />
             <Label htmlFor="compress-images" className="text-sm font-normal cursor-pointer">
-              이미지 압축 (대용량 파일 최적화)
+              압축 사용 (대용량 파일 최적화)
             </Label>
           </div>
           {settings.imageCompression !== "none" && (
@@ -364,12 +395,16 @@ export function SettingsPanel({
           className="h-28 max-h-28 resize-none overflow-y-auto [field-sizing:fixed]"
         />
       </div>
+            </div>
+          </TooltipProvider>
+        )}
+      </div>
 
-
-      {/* Glossary File */}
+      {/* Glossary File - PPT 드롭존과 혼동하지 않도록 컴팩트 버튼형 */}
       <FileUploader
-        label="용어집 파일 (선택)"
-        description="Excel 파일 (.xlsx, .xls)"
+        variant="compact"
+        label="용어집 추가"
+        description="선택 · Excel (.xlsx, .xls)"
         accept={{
           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
           "application/vnd.ms-excel": [".xls"],
@@ -405,6 +440,21 @@ const FILENAME_SETTING_KEY_MAP: Record<FilenamePartKey, FilenameBooleanSettingKe
   originalName: "includeOriginalName",
   model: "includeModel",
   date: "includeDate",
+};
+
+const FILENAME_PART_LABELS: Record<FilenamePartKey, string> = {
+  language: "대상 언어",
+  originalName: "원본 파일명",
+  model: "모델명",
+  date: "날짜",
+};
+
+// 칩과 미리보기 세그먼트를 같은 색으로 매핑해 구성 요소를 시각적으로 연결한다
+const FILENAME_PART_COLORS: Record<FilenamePartKey, string> = {
+  language: "bg-blue-100 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300",
+  originalName: "bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300",
+  model: "bg-pink-100 text-pink-800 dark:bg-pink-950/60 dark:text-pink-300",
+  date: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300",
 };
 
 // Language code mapping for filenames
@@ -453,27 +503,16 @@ export function FilenameSettingsSection({
   const originalName = pptFile?.name.replace(/\.[^/.]+$/, "") || "presentation";
   const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
 
-  const generatePreview = () => {
-    if (settings.mode === "custom") {
-      const customName = settings.customName.trim() || "파일명을 입력하세요";
-      return `${customName}.pptx`;
-    }
-
-    const partValues: Record<FilenamePartKey, string> = {
-      language: targetLang ? LANGUAGE_CODE_MAP[targetLang] || targetLang : "",
-      originalName,
-      model: modelName,
-      date: today,
-    };
-    const parts = getEnabledFilenamePartOrder(settings)
-      .map((part) => partValues[part])
-      .filter((part) => part);
-
-    if (parts.length === 0) {
-      return "translated.pptx";
-    }
-    return `${parts.join("_")}.pptx`;
+  const enabledOrder = getEnabledFilenamePartOrder(settings);
+  const partValues: Record<FilenamePartKey, string> = {
+    language: targetLang ? LANGUAGE_CODE_MAP[targetLang] || targetLang : "",
+    originalName,
+    model: modelName,
+    date: today,
   };
+  const previewSegments = enabledOrder
+    .map((part) => ({ part, text: partValues[part] }))
+    .filter((segment) => segment.text);
 
   const updateSetting = <K extends keyof FilenameSettings>(
     key: K,
@@ -518,60 +557,37 @@ export function FilenameSettingsSection({
 
           {settings.mode === "auto" && (
             <div className="ml-6 space-y-2">
-              <div className="grid grid-cols-2 gap-2">
-                <div className="flex items-center space-x-2">
-                  <Checkbox
-                    id="include-language"
-                    checked={settings.includeLanguage}
-                    onCheckedChange={(checked) =>
-                      updatePartSelection("language", checked === true)
-                    }
-                    disabled={disabled}
-                  />
-                  <Label htmlFor="include-language" className="text-sm font-normal cursor-pointer">
-                    대상 언어
-                  </Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Checkbox
-                    id="include-original"
-                    checked={settings.includeOriginalName}
-                    onCheckedChange={(checked) =>
-                      updatePartSelection("originalName", checked === true)
-                    }
-                    disabled={disabled}
-                  />
-                  <Label htmlFor="include-original" className="text-sm font-normal cursor-pointer">
-                    원본 파일명
-                  </Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Checkbox
-                    id="include-model"
-                    checked={settings.includeModel}
-                    onCheckedChange={(checked) =>
-                      updatePartSelection("model", checked === true)
-                    }
-                    disabled={disabled}
-                  />
-                  <Label htmlFor="include-model" className="text-sm font-normal cursor-pointer">
-                    모델명
-                  </Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Checkbox
-                    id="include-date"
-                    checked={settings.includeDate}
-                    onCheckedChange={(checked) =>
-                      updatePartSelection("date", checked === true)
-                    }
-                    disabled={disabled}
-                  />
-                  <Label htmlFor="include-date" className="text-sm font-normal cursor-pointer">
-                    날짜
-                  </Label>
-                </div>
+              {/* 순서 번호 칩: 선택한 순서가 곧 파일명 순서임을 드러낸다 */}
+              <div className="flex flex-wrap gap-1.5">
+                {FILENAME_PART_ORDER.map((part) => {
+                  const enabled = settings[FILENAME_SETTING_KEY_MAP[part]];
+                  const orderIndex = enabledOrder.indexOf(part);
+                  return (
+                    <button
+                      key={part}
+                      type="button"
+                      disabled={disabled}
+                      aria-pressed={enabled}
+                      onClick={() => updatePartSelection(part, !enabled)}
+                      className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                        enabled
+                          ? `border-transparent font-medium ${FILENAME_PART_COLORS[part]}`
+                          : "border-border text-muted-foreground hover:border-primary/50 hover:text-foreground"
+                      }`}
+                    >
+                      {enabled && orderIndex >= 0 && (
+                        <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-foreground/10 text-[10px] font-semibold">
+                          {orderIndex + 1}
+                        </span>
+                      )}
+                      {FILENAME_PART_LABELS[part]}
+                    </button>
+                  );
+                })}
               </div>
+              <p className="text-xs text-muted-foreground">
+                선택한 순서대로 파일명이 조합됩니다.
+              </p>
             </div>
           )}
         </div>
@@ -599,10 +615,29 @@ export function FilenameSettingsSection({
         </div>
       </RadioGroup>
 
-      {/* Preview */}
+      {/* Preview - 자동 생성 모드에서는 구성 요소를 칩과 같은 색으로 표시 */}
       <div className="p-2 bg-muted rounded-md border border-border">
         <p className="text-xs text-muted-foreground">
-          미리보기: <span className="font-mono text-foreground">{generatePreview()}</span>
+          미리보기:{" "}
+          <span className="font-mono text-foreground">
+            {settings.mode === "custom" ? (
+              `${settings.customName.trim() || "파일명을 입력하세요"}.pptx`
+            ) : previewSegments.length === 0 ? (
+              "translated.pptx"
+            ) : (
+              <>
+                {previewSegments.map((segment, index) => (
+                  <span key={segment.part}>
+                    {index > 0 && "_"}
+                    <span className={`rounded px-0.5 ${FILENAME_PART_COLORS[segment.part]}`}>
+                      {segment.text}
+                    </span>
+                  </span>
+                ))}
+                .pptx
+              </>
+            )}
+          </span>
         </p>
       </div>
     </div>

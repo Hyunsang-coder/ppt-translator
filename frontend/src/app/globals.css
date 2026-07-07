@@ -459,16 +459,19 @@
   color: oklch(0.17 0.01 60) !important;
 }
 
+/* 비활성 시 그라데이션을 제거해 "클릭 불가" 상태를 명확히 전달한다 */
 .btn-gradient:disabled {
-  background: linear-gradient(135deg, var(--brand-gradient-start), var(--brand-gradient-end)) !important;
-  color: oklch(0.985 0.005 80) !important;
-  opacity: 0.5;
+  background: var(--muted) !important;
+  color: var(--muted-foreground) !important;
+  opacity: 1;
+  box-shadow: none;
 }
 
 .dark .btn-gradient:disabled {
-  background: linear-gradient(135deg, var(--brand-gradient-start), var(--brand-gradient-end)) !important;
-  color: oklch(0.17 0.01 60) !important;
-  opacity: 0.5;
+  background: var(--muted) !important;
+  color: var(--muted-foreground) !important;
+  opacity: 1;
+  box-shadow: none;
 }
 
 .btn-gradient:hover:not(:disabled) {
