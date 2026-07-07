@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Iterable, List, Literal, Optional, Sequence, Union
+from typing import Iterable, List, Literal, Optional, Sequence, Tuple, Union
 
 from pptx import Presentation
 from pptx.chart.chart import Chart
@@ -42,13 +42,23 @@ class FigureBlock:
 
 
 @dataclass(slots=True)
+class ChartBlock:
+    """Chart with extracted category/series data."""
+
+    shape_id: str
+    title: Optional[str]
+    categories: List[str]
+    series: List[Tuple[str, List[Optional[float]]]]
+
+
+@dataclass(slots=True)
 class NoteBlock:
     """Speaker note captured from the slide."""
 
     text: str
 
 
-SlideBlock = Union[TextBlock, TableBlock, FigureBlock, NoteBlock]
+SlideBlock = Union[TextBlock, TableBlock, FigureBlock, ChartBlock, NoteBlock]
 
 
 @dataclass(slots=True)
@@ -71,8 +81,29 @@ class ExtractionOptions:
     slide_range: Optional[Iterable[int]] = None
 
 
+def _shape_sort_key(shape):
+    """Sort key for visual reading order: top-to-bottom, then left-to-right.
+
+    Shapes without position information sort last, preserving relative order.
+    """
+    try:
+        top = shape.top
+    except Exception:
+        top = None
+    try:
+        left = shape.left
+    except Exception:
+        left = None
+    return (top is None, top if top is not None else 0, left is None, left if left is not None else 0)
+
+
 def _iter_shapes(shapes: SlideShapes):
-    for shape in shapes:
+    """Iterate shapes in visual reading order rather than z-order.
+
+    Group shapes are ordered by the group's own position; their children are
+    recursively sorted within the group.
+    """
+    for shape in sorted(shapes, key=_shape_sort_key):
         if isinstance(shape, GroupShape):
             for sub_shape in _iter_shapes(shape.shapes):
                 yield sub_shape
@@ -109,18 +140,29 @@ def extract_slide(prs_slide, slide_index: int, options: ExtractionOptions) -> Sl
     """Extract structured content from a single slide."""
 
     title = None
+    title_shape_id: Optional[str] = None
+    title_uses_full_shape = False
     title_shape = getattr(prs_slide.shapes, "title", None)
     if title_shape is not None and getattr(title_shape, "has_text_frame", False):
         title = (title_shape.text or "").strip() or None
+        if title is not None:
+            title_shape_id = str(title_shape.shape_id)
+            title_uses_full_shape = True
 
     if title is None:
+        # Fallback: topmost text box in visual reading order (only its first
+        # non-empty line is consumed as the title).
         for shape in _iter_shapes(prs_slide.shapes):
             if shape.shape_type == MSO_SHAPE_TYPE.TEXT_BOX and getattr(shape, "text_frame", None) is not None:
                 lines = _shape_text_lines(shape)
-                if lines:
-                    title = _sanitize_line(lines[0]) or None
-                    if title:
+                for line in lines:
+                    candidate = _sanitize_line(line)
+                    if candidate:
+                        title = candidate
+                        title_shape_id = str(shape.shape_id)
                         break
+                if title:
+                    break
 
     if title is None:
         title = f"Slide {slide_index + 1}"
@@ -129,6 +171,27 @@ def extract_slide(prs_slide, slide_index: int, options: ExtractionOptions) -> Sl
 
     for shape in _iter_shapes(prs_slide.shapes):
         try:
+            if title_shape_id is not None and str(shape.shape_id) == title_shape_id:
+                if title_uses_full_shape:
+                    continue
+                # Fallback title: drop the consumed first line, keep the rest.
+                lines = _shape_text_lines(shape)
+                levels = _shape_indent_levels(shape)
+                first_idx = next(
+                    (i for i, line in enumerate(lines) if _sanitize_line(line)), None
+                )
+                if first_idx is not None:
+                    lines = lines[first_idx + 1 :]
+                    levels = levels[first_idx + 1 :]
+                if lines and any(_sanitize_line(line) for line in lines):
+                    slide_doc.blocks.append(
+                        TextBlock(
+                            shape_id=str(shape.shape_id),
+                            lines=[_sanitize_line(line) for line in lines if line is not None],
+                            indent_levels=levels,
+                        )
+                    )
+                continue
             if shape.shape_type == MSO_SHAPE_TYPE.TABLE and getattr(shape, "table", None):
                 rows = []
                 for row in shape.table.rows:
@@ -154,13 +217,33 @@ def extract_slide(prs_slide, slide_index: int, options: ExtractionOptions) -> Sl
                     chart_title = None
                     if chart.has_title:
                         chart_title = chart.chart_title.text_frame.text
-                    slide_doc.blocks.append(
-                        FigureBlock(
-                            shape_id=str(shape.shape_id),
-                            figure_type="chart",
-                            title=chart_title,
+                    categories: List[str] = []
+                    series: List[Tuple[str, List[Optional[float]]]] = []
+                    try:
+                        plot = chart.plots[0]
+                        categories = [str(c) for c in plot.categories]
+                        for s in plot.series:
+                            series.append((str(s.name or ""), list(s.values)))
+                    except Exception:
+                        categories, series = [], []
+                    if categories and series:
+                        slide_doc.blocks.append(
+                            ChartBlock(
+                                shape_id=str(shape.shape_id),
+                                title=chart_title,
+                                categories=categories,
+                                series=series,
+                            )
                         )
-                    )
+                    else:
+                        # Fall back to the previous placeholder behaviour.
+                        slide_doc.blocks.append(
+                            FigureBlock(
+                                shape_id=str(shape.shape_id),
+                                figure_type="chart",
+                                title=chart_title,
+                            )
+                        )
                 elif options.charts == "placeholder":
                     slide_doc.blocks.append(
                         FigureBlock(
@@ -212,7 +295,16 @@ def extract_pptx_to_docs(path_or_buffer, options: ExtractionOptions) -> List[Sli
 
 
 def _md_escape(text: str) -> str:
-    return text.replace("|", "\\|")
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    return normalized.replace("|", "\\|").replace("\n", "<br>")
+
+
+def _format_chart_value(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
 
 
 def blocks_to_markdown(blocks: Sequence[SlideBlock], options: ExtractionOptions) -> str:
@@ -237,6 +329,17 @@ def blocks_to_markdown(blocks: Sequence[SlideBlock], options: ExtractionOptions)
                 lines.append("| " + " | ".join(["---"] * len(header)) + " |")
             for row in body:
                 lines.append("| " + " | ".join(_md_escape(cell) for cell in row) + " |")
+            lines.append("")
+        elif isinstance(block, ChartBlock):
+            lines.append(f"[Chart: {block.title}]" if block.title else "[Chart]")
+            header = ["구분"] + [str(c) for c in block.categories]
+            lines.append("| " + " | ".join(_md_escape(cell) for cell in header) + " |")
+            lines.append("| " + " | ".join(["---"] * len(header)) + " |")
+            width = len(block.categories)
+            for name, values in block.series:
+                cells = [_format_chart_value(v) for v in values[:width]]
+                cells += [""] * (width - len(cells))
+                lines.append("| " + " | ".join(_md_escape(cell) for cell in [name, *cells]) + " |")
             lines.append("")
         elif isinstance(block, FigureBlock):
             if block.figure_type == "image" and options.figures == "placeholder":
@@ -269,6 +372,7 @@ __all__ = [
     "TextBlock",
     "TableBlock",
     "FigureBlock",
+    "ChartBlock",
     "NoteBlock",
     "SlideBlock",
     "SlideDoc",
