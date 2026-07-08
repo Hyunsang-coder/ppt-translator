@@ -4,37 +4,15 @@
 
 import { useEffect, useState } from "react";
 import { apiClient } from "@/lib/api-client";
-import { isWaitingForSidecarBase } from "@/lib/api-base";
 import type { ConfigResponse, LanguageInfo, ModelInfo } from "@/types/api";
 
 const DEFAULT_MAX_UPLOAD_SIZE_MB = 1024;
 
-// Fallback data when backend is unavailable
-const FALLBACK_MODELS: ModelInfo[] = [
-  { id: "gpt-5.5-2026-04-23", name: "GPT-5.5", provider: "openai" },
-  { id: "gpt-5.4-mini-2026-03-17", name: "GPT-5.4 Mini", provider: "openai" },
-  { id: "claude-opus-4-8", name: "Claude Opus 4.8", provider: "anthropic" },
-  { id: "claude-sonnet-5", name: "Claude Sonnet 5", provider: "anthropic" },
-  { id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5", provider: "anthropic" },
-];
-
-const FALLBACK_LANGUAGES: LanguageInfo[] = [
-  { code: "Auto", name: "Auto (자동 감지)" },
-  { code: "한국어", name: "한국어" },
-  { code: "영어", name: "English" },
-  { code: "일본어", name: "日本語" },
-  { code: "중국어", name: "中文" },
-  { code: "스페인어", name: "Español" },
-  { code: "프랑스어", name: "Français" },
-  { code: "독일어", name: "Deutsch" },
-];
-
-const FALLBACK_CONFIG: ConfigResponse = {
-  max_upload_size_mb: DEFAULT_MAX_UPLOAD_SIZE_MB,
-  providers: ["openai", "anthropic"],
-  default_provider: "anthropic",
-  default_model: "claude-sonnet-5",
-};
+// A-2: the backend (`/api/v1/config`, `/api/v1/models`, `/api/v1/languages`) is
+// the single source of truth for the model/language lists. The desktop shell
+// (SidecarProvider) already gates the whole UI until the sidecar is reachable,
+// so by the time any config consumer mounts the fetch below will resolve — no
+// hard-coded copy of the model registry is kept here to drift out of sync.
 
 function normalizeConfig(config: ConfigResponse): ConfigResponse {
   return {
@@ -69,18 +47,6 @@ export function useConfig() {
     let mounted = true;
 
     async function fetchConfig() {
-      if (isWaitingForSidecarBase()) {
-        setState({
-          models: FALLBACK_MODELS,
-          languages: FALLBACK_LANGUAGES,
-          config: FALLBACK_CONFIG,
-          isLoading: false,
-          error: null,
-          isBackendConnected: false,
-        });
-        return;
-      }
-
       try {
         const [models, languages, config] = await Promise.all([
           apiClient.getModels(),
@@ -88,28 +54,28 @@ export function useConfig() {
           apiClient.getConfig(),
         ]);
 
-        // Check if backend returned data
         const hasBackendData = models.length > 0 && languages.length > 0 && config !== null;
 
         if (mounted) {
           setState({
-            models: hasBackendData ? models : FALLBACK_MODELS,
-            languages: hasBackendData ? languages : FALLBACK_LANGUAGES,
-            config: hasBackendData ? normalizeConfig(config) : FALLBACK_CONFIG,
+            models,
+            languages,
+            config: config ? normalizeConfig(config) : null,
             isLoading: false,
             error: null,
             isBackendConnected: hasBackendData,
           });
         }
       } catch (err) {
-        // Use fallback data on error
+        // Backend unreachable after the sidecar reported ready: surface empty
+        // lists (dropdowns render disabled) rather than a stale hard-coded copy.
         if (mounted) {
           setState({
-            models: FALLBACK_MODELS,
-            languages: FALLBACK_LANGUAGES,
-            config: FALLBACK_CONFIG,
+            models: [],
+            languages: [],
+            config: null,
             isLoading: false,
-            error: null, // Don't show error, just use fallbacks
+            error: null,
             isBackendConnected: false,
           });
         }

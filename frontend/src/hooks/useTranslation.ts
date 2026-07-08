@@ -247,6 +247,8 @@ export function useTranslation() {
       // 타겟 언어 필수 선택
       settings.targetLang !== "" &&
       settings.targetLang !== "Auto" &&
+      // A-2: 모델이 backend config에서 채워질 때까지 시작 불가 (초기값 "")
+      settings.model !== "" &&
       // 직접 입력 모드일 때 파일명 필수
       (settings.filenameSettings.mode !== "custom" ||
         settings.filenameSettings.customName.trim() !== ""),

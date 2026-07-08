@@ -59,7 +59,9 @@ const DEFAULT_SETTINGS: TranslationSettings = {
   sourceLang: "Auto",
   targetLang: "", // 타겟 언어는 필수 선택
   provider: "anthropic",
-  model: "claude-sonnet-5",
+  // A-2: no hard-coded model id here — SettingsPanel fills this from the
+  // backend's default_model (or the first advertised model) once config loads.
+  model: "",
   context: "",
   instructions: "",
   preprocessRepetitions: true,

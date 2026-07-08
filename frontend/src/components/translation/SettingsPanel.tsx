@@ -40,17 +40,21 @@ export function SettingsPanel({
   onGlossaryFileChange,
   disabled = false,
 }: SettingsPanelProps) {
-  const { languages, getModelsForProvider, isLoading, error } = useConfig();
+  const { languages, config, getModelsForProvider, isLoading, error } = useConfig();
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const providerModels = getModelsForProvider(settings.provider);
 
-  // Reset model when provider changes
+  // Pick a valid model whenever the current one isn't in the provider's list
+  // (initial empty model, or after a provider switch). A-2: the store no longer
+  // hard-codes a default model — prefer the backend's default_model, else the
+  // first model the backend advertises for this provider.
   useEffect(() => {
     if (providerModels.length > 0 && !providerModels.find((m) => m.id === settings.model)) {
-      onSettingsChange({ model: providerModels[0].id });
+      const backendDefault = providerModels.find((m) => m.id === config?.default_model);
+      onSettingsChange({ model: (backendDefault ?? providerModels[0]).id });
     }
-  }, [settings.provider, settings.model, providerModels, onSettingsChange]);
+  }, [settings.provider, settings.model, providerModels, config, onSettingsChange]);
 
   if (error) {
     return (

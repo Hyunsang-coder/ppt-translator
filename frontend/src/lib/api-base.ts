@@ -36,10 +36,6 @@ export function getApiBase(): string {
   return BUILD_TIME_BASE;
 }
 
-export function isWaitingForSidecarBase(): boolean {
-  return isTauri() && getApiBase() === "";
-}
-
 /** Cache the sidecar base URL once the port is known. */
 export function setSidecarPort(port: number): void {
   if (typeof window !== "undefined") {
