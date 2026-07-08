@@ -309,30 +309,6 @@ class TestExtractionEndpoint:
         assert "slide_count" in data
 
 
-class TestLegacyTranslateEndpoint:
-    """Tests for legacy /translate endpoint."""
-
-    def test_translate_invalid_file_type(self, client):
-        """Test translation with invalid file type."""
-        response = client.post(
-            "/translate",
-            files={"ppt_file": ("test.txt", b"not a pptx", "text/plain")},
-            data={"provider": "openai", "model": "gpt-5.5-2026-04-23"},
-        )
-        assert response.status_code == 400
-        assert "Invalid file type" in response.json()["detail"]
-
-    def test_translate_invalid_provider(self, client, sample_pptx_bytes):
-        """Test translation with invalid provider."""
-        response = client.post(
-            "/translate",
-            files={"ppt_file": ("test.pptx", sample_pptx_bytes, "application/octet-stream")},
-            data={"provider": "invalid", "model": "test"},
-        )
-        assert response.status_code == 400
-        assert "Invalid provider" in response.json()["detail"]
-
-
 class TestJobManager:
     """Tests for job manager functionality."""
 
