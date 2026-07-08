@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import functools
 import io
 import json
 import logging
@@ -891,91 +892,6 @@ async def download_job_result(job_id: str) -> Response:
     )
 
 
-def _retranslate_fragment(
-    session,
-    index: int,
-    instruction: Optional[str],
-    model: str,
-    provider: str,
-) -> tuple[str, Optional[list]]:
-    """Re-translate one fragment with an optional instruction + length budget.
-
-    Runs a single-item translation chain. The length budget (WP-C5) is passed as
-    a character constraint so slide-box overflows can be tightened.
-
-    Returns ``(new_target, color_segments)`` where ``color_segments`` is a
-    list[ColoredSegment] when the fragment is multi-color and was successfully
-    re-mapped, else None. Raises on failure.
-    """
-    from src.chains.translation_chain import create_translation_chain, translate_with_progress
-    from src.utils.helpers import chunk_paragraphs
-    from src.services.translation_service import TranslationService
-
-    info = session.paragraphs[index]
-    budget = session.length_budget(index)
-
-    extra = []
-    if instruction:
-        extra.append(instruction.strip())
-    if budget is not None:
-        extra.append(
-            f"이 텍스트는 슬라이드 박스에 들어가야 합니다. 번역은 최대 {budget}자 이내로, "
-            f"공간 안에서 명확히 읽히도록 간결하게 작성하세요."
-        )
-    combined_instructions = "\n".join(f"- {e}" for e in extra) if extra else None
-
-    chain = create_translation_chain(
-        model_name=model,
-        source_lang=session.source_lang,
-        target_lang=session.target_lang,
-        instructions=combined_instructions,
-        provider=provider,
-    )
-    # Reuse the original run's glossary + presentation context so the
-    # re-translation stays consistent with the rest of the deck.
-    batches = chunk_paragraphs(
-        [info],
-        batch_size=1,
-        ppt_context=session.ppt_context,
-        glossary_terms=session.glossary_terms,
-    )
-
-    # No progress tracker: a single-fragment re-translation needs no progress UI,
-    # and translate_with_progress skips all tracker calls when it is None.
-    results = translate_with_progress(chain, batches, None, max_concurrency=1)
-    if not results:
-        raise RuntimeError("re-translation returned no result")
-    new_target = results[0]
-
-    # Multi-color fragments: re-map the segment colors onto the new translation
-    # so highlighted words keep their color. Single-color fragments return None.
-    # The helper operates on aligned lists keyed by list-index (0 here); it may
-    # replace texts[0] with a more natural multi-color translation.
-    color_segments: Optional[list] = None
-    try:
-        texts = [new_target]
-        dist = TranslationService._translate_colored_paragraphs_with_segments(
-            [info],
-            texts,
-            source_lang=session.source_lang,
-            target_lang=session.target_lang,
-            provider=provider,
-            model_name=model,
-            ppt_context=session.ppt_context,
-            context=None,
-            instructions=combined_instructions,
-            glossary_terms=session.glossary_terms,
-            length_limit=None,
-        )
-        new_target = texts[0]
-        if dist:
-            color_segments = dist.get(0)
-    except Exception:  # pylint: disable=broad-except
-        LOGGER.exception("Color re-mapping failed on re-translate; single-color fallback.")
-
-    return new_target, color_segments
-
-
 @app.get("/api/v1/jobs/{job_id}/fragments", response_model=FragmentsResponse)
 async def get_job_fragments(job_id: str) -> FragmentsResponse:
     """List reviewable fragments (source/target + detection badges) for a job."""
@@ -1053,10 +969,11 @@ async def edit_job_fragment(
             index=index, target=original_target, changed_indices=[]
         )
 
-    # C-2: serialize edit + render per job. _retranslate_fragment and
-    # session.render both mutate the shared live Presentation / paragraph run
-    # structure; overlapping requests could corrupt the XML or interleave
-    # renders. The lock keeps one edit's mutate+render atomic.
+    # C-2: serialize edit + render per job. apply_edit and session.render both
+    # mutate the shared live Presentation / paragraph run structure, and
+    # retranslate_fragment reads those runs while re-mapping colors; overlapping
+    # requests could corrupt the XML or interleave renders. The lock keeps one
+    # edit's mutate+render atomic.
     async with job.review_lock:
         # --- edit / retranslate: produce the new target ------------------
         color_segments: Optional[list] = None
@@ -1065,10 +982,13 @@ async def edit_job_fragment(
             try:
                 new_target, color_segments = await loop.run_in_executor(
                     None,
-                    _retranslate_fragment,
-                    session, index, body.instruction,
-                    session.model or DEFAULT_TRANSLATION_MODEL,
-                    session.provider,
+                    functools.partial(
+                        session.retranslate_fragment,
+                        index,
+                        body.instruction,
+                        model=session.model or DEFAULT_TRANSLATION_MODEL,
+                        provider=session.provider,
+                    ),
                 )
             except Exception as exc:
                 LOGGER.exception("Fragment re-translation failed: %s", exc)

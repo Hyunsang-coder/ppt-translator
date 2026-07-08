@@ -192,6 +192,101 @@ class ReviewSession:
         )
         return changed
 
+    def retranslate_fragment(
+        self,
+        index: int,
+        instruction: Optional[str],
+        *,
+        model: str,
+        provider: str,
+    ) -> tuple[str, Optional[list]]:
+        """Re-translate one fragment with an optional instruction + length budget.
+
+        Runs a single-item translation chain reusing this session's glossary and
+        presentation context so the re-translation stays consistent with the rest
+        of the deck. The length budget (WP-C5) is passed as a character
+        constraint so slide-box overflows can be tightened.
+
+        Returns ``(new_target, color_segments)`` where ``color_segments`` is a
+        list[ColoredSegment] when the fragment is multi-color and was
+        successfully re-mapped, else None. Does not mutate session state — the
+        caller applies the result via :meth:`apply_edit` /
+        :meth:`set_color_distribution`. Raises on translation failure.
+        """
+        # Imported lazily: these pull in the heavy LangChain translation stack,
+        # which the review path only needs when a re-translate is requested.
+        from src.chains.translation_chain import (
+            create_translation_chain,
+            translate_with_progress,
+        )
+        from src.services.translation_service import TranslationService
+        from src.utils.helpers import chunk_paragraphs
+
+        info = self.paragraphs[index]
+        budget = self.length_budget(index)
+
+        extra = []
+        if instruction:
+            extra.append(instruction.strip())
+        if budget is not None:
+            extra.append(
+                f"이 텍스트는 슬라이드 박스에 들어가야 합니다. 번역은 최대 {budget}자 이내로, "
+                f"공간 안에서 명확히 읽히도록 간결하게 작성하세요."
+            )
+        combined_instructions = "\n".join(f"- {e}" for e in extra) if extra else None
+
+        chain = create_translation_chain(
+            model_name=model,
+            source_lang=self.source_lang,
+            target_lang=self.target_lang,
+            instructions=combined_instructions,
+            provider=provider,
+        )
+        batches = chunk_paragraphs(
+            [info],
+            batch_size=1,
+            ppt_context=self.ppt_context,
+            glossary_terms=self.glossary_terms,
+        )
+
+        # No progress tracker: a single-fragment re-translation needs no progress
+        # UI, and translate_with_progress skips all tracker calls when None.
+        results = translate_with_progress(chain, batches, None, max_concurrency=1)
+        if not results:
+            raise RuntimeError("re-translation returned no result")
+        new_target = results[0]
+
+        # Multi-color fragments: re-map the segment colors onto the new
+        # translation so highlighted words keep their color. Single-color
+        # fragments return None. The helper operates on aligned lists keyed by
+        # list-index (0 here); it may replace texts[0] with a more natural
+        # multi-color translation.
+        color_segments: Optional[list] = None
+        try:
+            texts = [new_target]
+            dist = TranslationService._translate_colored_paragraphs_with_segments(
+                [info],
+                texts,
+                source_lang=self.source_lang,
+                target_lang=self.target_lang,
+                provider=provider,
+                model_name=model,
+                ppt_context=self.ppt_context,
+                context=None,
+                instructions=combined_instructions,
+                glossary_terms=self.glossary_terms,
+                length_limit=None,
+            )
+            new_target = texts[0]
+            if dist:
+                color_segments = dist.get(0)
+        except Exception:  # pylint: disable=broad-except
+            LOGGER.exception(
+                "Color re-mapping failed on re-translate; single-color fallback."
+            )
+
+        return new_target, color_segments
+
     def set_color_distribution(self, index: int, segments: Optional[list]) -> None:
         """Store (or clear) multi-color segments for a fragment after re-translate.
 

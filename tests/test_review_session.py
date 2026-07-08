@@ -7,6 +7,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from pptx import Presentation
 from pptx.util import Inches, Pt
@@ -182,6 +183,66 @@ class LengthBudgetTestCase(unittest.TestCase):
         sess = _session("본문", 1)
         # No notes in this deck; body fragment has a budget.
         self.assertIsNotNone(sess.length_budget(0))
+
+
+class RetranslateFragmentTestCase(unittest.TestCase):
+    """A-1: retranslate logic lives on ReviewSession, chain mocked out."""
+
+    def test_returns_new_target_and_threads_instruction_and_budget(self) -> None:
+        sess = _session("반복", 1, targets=["OLD"])
+
+        captured: dict = {}
+
+        def fake_create_chain(**kwargs):
+            captured["instructions"] = kwargs.get("instructions")
+            captured["model_name"] = kwargs.get("model_name")
+            captured["provider"] = kwargs.get("provider")
+            return object()  # opaque chain handle; translate is mocked below
+
+        with mock.patch(
+            "src.chains.translation_chain.create_translation_chain",
+            side_effect=fake_create_chain,
+        ), mock.patch(
+            "src.chains.translation_chain.translate_with_progress",
+            return_value=["NEW"],
+        ):
+            new_target, color_segments = sess.retranslate_fragment(
+                0, "격식체로", model="m", provider="anthropic"
+            )
+
+        self.assertEqual(new_target, "NEW")
+        # Single-color fragment -> no color segments re-mapped.
+        self.assertIsNone(color_segments)
+        self.assertEqual(captured["model_name"], "m")
+        self.assertEqual(captured["provider"], "anthropic")
+        # Both the user instruction and the length-budget guidance are threaded in.
+        self.assertIn("격식체로", captured["instructions"])
+        self.assertIn("슬라이드 박스", captured["instructions"])
+
+    def test_does_not_mutate_session_state(self) -> None:
+        sess = _session("반복", 1, targets=["OLD"])
+        with mock.patch(
+            "src.chains.translation_chain.create_translation_chain",
+            return_value=object(),
+        ), mock.patch(
+            "src.chains.translation_chain.translate_with_progress",
+            return_value=["NEW"],
+        ):
+            sess.retranslate_fragment(0, None, model="m", provider="anthropic")
+        # The caller (api.py) applies the edit; the method itself is pure.
+        self.assertEqual(sess.translated_texts[0], "OLD")
+
+    def test_empty_result_raises(self) -> None:
+        sess = _session("반복", 1, targets=["OLD"])
+        with mock.patch(
+            "src.chains.translation_chain.create_translation_chain",
+            return_value=object(),
+        ), mock.patch(
+            "src.chains.translation_chain.translate_with_progress",
+            return_value=[],
+        ):
+            with self.assertRaises(RuntimeError):
+                sess.retranslate_fragment(0, None, model="m", provider="anthropic")
 
 
 class RecordReviewEditTestCase(unittest.TestCase):
