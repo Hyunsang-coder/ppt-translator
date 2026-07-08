@@ -6,16 +6,62 @@ import logging
 import json
 from typing import List
 
+from concurrent.futures import ThreadPoolExecutor
+from typing import Callable, Optional, TypeVar
+
 from langchain_core.prompts import PromptTemplate
 from pydantic import BaseModel, Field, field_validator
 
 from src.chains.llm_factory import Provider, create_llm
+from src.utils.config import get_settings
 
 LOGGER = logging.getLogger(__name__)
 
 # Maximum number of paragraphs per LLM call to avoid token overflow and
 # reduce blast radius when a single call fails.
 _BATCH_SIZE = 8
+
+_T = TypeVar("_T")
+
+
+def _color_concurrency() -> int:
+    """Concurrency for the colored-paragraph batch loops (P-2).
+
+    Reuses the translation concurrency budget so the color passes fan out the
+    same way the main translation does instead of running strictly serially.
+    """
+    try:
+        return max(1, int(get_settings().max_concurrency))
+    except Exception:  # pragma: no cover - defensive; settings always load
+        return 1
+
+
+def _run_batches_concurrently(
+    starts: list[int],
+    call: "Callable[[int], Optional[_T]]",
+) -> dict[int, "Optional[_T]"]:
+    """Invoke ``call(start)`` for each batch start concurrently (P-2).
+
+    Returns a mapping ``start -> result`` (result is whatever ``call`` returns,
+    including None on failure). A single batch raising never aborts the others;
+    its slot is recorded as None so the caller applies its per-batch fallback.
+    Serial when there is 0/1 batch to avoid pool overhead.
+    """
+    if len(starts) <= 1:
+        return {start: call(start) for start in starts}
+
+    workers = min(_color_concurrency(), len(starts))
+    results: dict[int, "Optional[_T]"] = {}
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        future_to_start = {executor.submit(call, start): start for start in starts}
+        for future in future_to_start:
+            start = future_to_start[future]
+            try:
+                results[start] = future.result()
+            except Exception:  # pylint: disable=broad-except
+                LOGGER.exception("Colored batch starting at %d raised.", start)
+                results[start] = None
+    return results
 
 
 class ColoredSegment(BaseModel):
@@ -265,12 +311,23 @@ def translate_with_color_segments(
     )
 
     translated_items: list[ColoredTranslation | None] = [None] * total
-    any_success = False
 
-    for start in range(0, total, _BATCH_SIZE):
+    # P-2: run the independent per-batch LLM calls concurrently instead of
+    # strictly serial. Each batch call is thread-safe (own request); results are
+    # written back by their original start offset so ordering is preserved.
+    starts = list(range(0, total, _BATCH_SIZE))
+    results_by_start = _run_batches_concurrently(
+        starts,
+        lambda start: _invoke_colored_translation_batch(
+            chain, original_groups[start : start + _BATCH_SIZE]
+        ),
+    )
+
+    any_success = False
+    for start in starts:
         end = min(start + _BATCH_SIZE, total)
         batch_groups = original_groups[start:end]
-        batch_result = _invoke_colored_translation_batch(chain, batch_groups)
+        batch_result = results_by_start.get(start)
 
         if batch_result is not None and len(batch_result) == len(batch_groups):
             for i, item in enumerate(batch_result):
@@ -358,14 +415,23 @@ def distribute_colors(
     )
 
     all_distributions: list[list[ColoredSegment] | None] = [None] * total
-    any_success = False
 
-    for start in range(0, total, _BATCH_SIZE):
+    # P-2: fan the independent per-batch calls out concurrently.
+    starts = list(range(0, total, _BATCH_SIZE))
+    results_by_start = _run_batches_concurrently(
+        starts,
+        lambda start: _invoke_batch(
+            chain,
+            original_groups[start : start + _BATCH_SIZE],
+            translated_texts[start : start + _BATCH_SIZE],
+        ),
+    )
+
+    any_success = False
+    for start in starts:
         end = min(start + _BATCH_SIZE, total)
         batch_groups = original_groups[start:end]
-        batch_texts = translated_texts[start:end]
-
-        batch_result = _invoke_batch(chain, batch_groups, batch_texts)
+        batch_result = results_by_start.get(start)
 
         if batch_result is not None and len(batch_result) == len(batch_groups):
             for i, dist in enumerate(batch_result):

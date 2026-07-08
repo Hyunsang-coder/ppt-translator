@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import threading
 import time
 import uuid
 from collections import deque
@@ -67,6 +68,14 @@ class Job:
     extraction_result: Optional[str] = None  # For extraction jobs (markdown)
     review_session: Optional[Any] = None  # WP-C5: in-memory ReviewSession
     events: deque = field(default_factory=lambda: deque(maxlen=_MAX_EVENTS))
+    # C-1: cooperative cancellation flag. run_in_executor cannot interrupt the
+    # translation worker thread, so cancellation is checked by the worker between
+    # batch waves. delete_job sets this so the worker stops calling the LLM
+    # instead of finishing (and burning tokens on) a cancelled job.
+    cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
+    # C-2: serialize review edit+render so concurrent edits never overlap while
+    # mutating the shared live Presentation.
+    review_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
     _task: Optional[asyncio.Task] = field(default=None, repr=False)
     _event_queue: Optional[asyncio.Queue] = field(default=None, repr=False)
     _loop: Optional[asyncio.AbstractEventLoop] = field(default=None, repr=False)
@@ -215,6 +224,12 @@ class JobManager:
         if job is None:
             return False
 
+        # C-1: signal the worker thread to stop at the next batch boundary BEFORE
+        # cancelling the coroutine. run_in_executor cannot interrupt the thread,
+        # so without this the translation keeps calling the LLM (burning tokens
+        # and holding a pool slot) even though the job is "cancelled".
+        job.cancel_event.set()
+
         async with job._state_lock:
             if job._task is not None and not job._task.done():
                 job._task.cancel()
@@ -234,6 +249,12 @@ class JobManager:
         """Update job progress and emit event."""
         job = self._jobs.get(job_id)
         if job is None:
+            return
+
+        # C-3: a cancelled/finished job's orphan worker thread may still emit a
+        # trailing progress update. Drop it so the front-end doesn't re-show a
+        # cancelled job as "in progress".
+        if job.state in _TERMINAL_STATES:
             return
 
         job.progress = progress

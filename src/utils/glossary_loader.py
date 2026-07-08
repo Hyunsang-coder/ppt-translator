@@ -88,17 +88,59 @@ class GlossaryLoader:
         return "\n".join(lines)
 
     @staticmethod
-    def _is_latin(term: str) -> bool:
-        """Check if a term is purely ASCII/Latin (benefits from word boundary matching)."""
-        return all(ord(ch) < 128 for ch in term if not ch.isspace())
+    def _is_word_char(ch: str) -> bool:
+        """True when a character is a regex word character (\\w)."""
+        return ch.isalnum() or ch == "_"
 
     @staticmethod
-    def _replace_term(text: str, source: str, target: str) -> str:
-        """Replace a glossary term using word boundaries for Latin terms, plain replace for CJK."""
-        if GlossaryLoader._is_latin(source) and re.match(r"^[\w-]+$", source):
-            pattern = r"\b" + re.escape(source) + r"\b"
-            return re.sub(pattern, target, text)
-        return text.replace(source, target)
+    def _term_pattern(source: str) -> str:
+        """Build a match pattern for one glossary source term.
+
+        A ``\\b`` boundary is only added on an edge whose adjacent character is a
+        word character (ASCII letter/digit/underscore). This lets multi-word
+        Latin phrases ("smart director") match while skipping boundaries for CJK
+        terms, where Python's ``\\b`` never fires and would leave the term
+        unmatched. Boundaries are anchored to the *term's* edge so a shorter term
+        cannot match inside a longer one that was already consumed by the single
+        pass.
+        """
+        escaped = re.escape(source)
+        prefix = r"\b" if source and GlossaryLoader._is_word_char(source[0]) else ""
+        suffix = r"\b" if source and GlossaryLoader._is_word_char(source[-1]) else ""
+        return f"{prefix}{escaped}{suffix}"
+
+    @staticmethod
+    def _compile_glossary(glossary: Dict[str, str]) -> "tuple[re.Pattern[str], Dict[str, str]] | None":
+        """Compile a glossary into a single alternation regex + lookup map.
+
+        Terms are ordered longest-first so an overlapping longer term ("게임팀")
+        wins over a shorter one ("게임") in the single pass, and so a shorter term
+        never pollutes a longer term's substring ("공지" inside "공지사항").
+        Returns ``None`` when no usable term exists.
+        """
+        sources = [s for s in glossary if s]
+        if not sources:
+            return None
+        sources.sort(key=len, reverse=True)
+        combined = "|".join(GlossaryLoader._term_pattern(s) for s in sources)
+        try:
+            pattern = re.compile(combined)
+        except re.error:  # pragma: no cover - defensive; escaped input is safe
+            LOGGER.exception("Failed to compile glossary pattern; skipping replacement.")
+            return None
+        return pattern, dict(glossary)
+
+    @staticmethod
+    def _apply_compiled(text: str, compiled: "tuple[re.Pattern[str], Dict[str, str]]") -> str:
+        """Apply a compiled glossary pattern to one string in a single pass.
+
+        The replacement is delivered via a callback so backslashes in target
+        text are never interpreted as regex escapes (which would raise re.error).
+        """
+        pattern, lookup = compiled
+        # ``m.group(0)`` is the matched source; map it back to its target. A
+        # ``\b``-anchored match returns the exact source text, so the lookup hits.
+        return pattern.sub(lambda m: lookup.get(m.group(0), m.group(0)), text)
 
     @staticmethod
     def apply_glossary_to_texts(texts: Iterable[str], glossary: Dict[str, str] | None) -> List[str]:
@@ -115,13 +157,11 @@ class GlossaryLoader:
         if not glossary:
             return list(texts)
 
-        transformed_texts: List[str] = []
-        for text in texts:
-            updated = text
-            for source, target in glossary.items():
-                updated = GlossaryLoader._replace_term(updated, source, target)
-            transformed_texts.append(updated)
-        return transformed_texts
+        compiled = GlossaryLoader._compile_glossary(glossary)
+        if compiled is None:
+            return list(texts)
+
+        return [GlossaryLoader._apply_compiled(text, compiled) for text in texts]
 
     @staticmethod
     def apply_glossary_to_translation(text: str, glossary: Dict[str, str] | None) -> str:
@@ -137,7 +177,7 @@ class GlossaryLoader:
 
         if not glossary or not text:
             return text
-        updated = text
-        for source, target in glossary.items():
-            updated = GlossaryLoader._replace_term(updated, source, target)
-        return updated
+        compiled = GlossaryLoader._compile_glossary(glossary)
+        if compiled is None:
+            return text
+        return GlossaryLoader._apply_compiled(text, compiled)

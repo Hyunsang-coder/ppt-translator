@@ -33,6 +33,30 @@ def create_rate_limiter() -> InMemoryRateLimiter:
         max_bucket_size=settings.rate_limit_max_bucket_size,
     )
 
+# P-3: output-token budgeting. A fixed max_tokens=4096 truncates large batches
+# (a batch of 80 paragraphs allows only ~51 output tokens each), which then
+# fails 3x on the same size via tenacity. Scale the ceiling with the batch's
+# paragraph count instead, clamped to a sane range.
+_OUTPUT_TOKENS_PER_PARAGRAPH = 120  # translated text + JSON {index,text} wrapper
+_OUTPUT_TOKENS_OVERHEAD = 256  # array framing / structured-output scaffolding
+_MIN_OUTPUT_TOKENS = 1024
+_MAX_OUTPUT_TOKENS = 8192
+
+
+def max_tokens_for_batch(paragraph_count: int) -> int:
+    """Estimate a safe response token budget for a batch of `paragraph_count`.
+
+    Keeps the JSON translation array from being truncated mid-response while
+    avoiding an unnecessarily large (and slower/pricier) ceiling for small
+    batches. Clamped to ``[_MIN_OUTPUT_TOKENS, _MAX_OUTPUT_TOKENS]``.
+    """
+    estimate = (
+        max(0, int(paragraph_count)) * _OUTPUT_TOKENS_PER_PARAGRAPH
+        + _OUTPUT_TOKENS_OVERHEAD
+    )
+    return max(_MIN_OUTPUT_TOKENS, min(_MAX_OUTPUT_TOKENS, estimate))
+
+
 def get_models_for_provider(provider: Provider) -> list[str]:
     """Return available models for the given provider.
 

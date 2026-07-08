@@ -23,7 +23,9 @@ class Settings:
     max_upload_size_mb: int = 1024
     batch_size: int = 80
     max_retries: int = 3
-    min_batch_size: int = 60
+    # P-1: keep the floor low enough that a mid-size deck can fill max_concurrency
+    # lanes (min_batch_size * max_concurrency should stay below common deck sizes).
+    min_batch_size: int = 40
     max_batch_size: int = 100
     target_batch_count: int = 5
     max_concurrency: int = 8

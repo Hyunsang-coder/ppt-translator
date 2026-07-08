@@ -24,6 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+from src.chains.translation_chain import TranslationCancelled
 from src.core.text_extractor import ExtractionOptions, docs_to_markdown, extract_pptx_to_docs
 from src.services import (
     TranslationProgress,
@@ -518,6 +519,14 @@ async def _run_translation_job(
     # Wait for a concurrency slot before actually starting work.
     # The job is in RUNNING state, but it waits here until a slot is free.
     async with job_manager.running_semaphore:
+        # C-1: pass the job's cancel flag into the request so a DELETE can stop
+        # the worker thread's LLM calls at the next batch boundary. A slot may
+        # have been cancelled while queued; bail before doing any work.
+        job = job_manager.get_job(job_id)
+        cancel_event = job.cancel_event if job is not None else None
+        if cancel_event is not None and cancel_event.is_set():
+            LOGGER.info("Translation job %s cancelled before start", job_id)
+            return
         try:
             request = TranslationRequest(
                 ppt_file=ppt_buffer,
@@ -534,6 +543,7 @@ async def _run_translation_job(
                 min_font_ratio=min_font_ratio,
                 length_limit=length_limit,
                 team_rules=team_rules,
+                cancel_event=cancel_event,
             )
 
             progress_callback = _create_progress_callback(job_id)
@@ -592,6 +602,10 @@ async def _run_translation_job(
 
         except asyncio.CancelledError:
             LOGGER.info("Translation job %s was cancelled", job_id)
+        except TranslationCancelled:
+            # C-1: cooperative cancel from the worker thread. delete_job already
+            # set the job CANCELLED; don't mark it failed.
+            LOGGER.info("Translation job %s stopped by cancellation flag", job_id)
         except Exception as exc:
             LOGGER.exception("Translation job %s failed: %s", job_id, exc)
             await job_manager.fail_job(job_id, "번역 중 오류가 발생했습니다.")
@@ -1070,43 +1084,48 @@ async def edit_job_fragment(
             index=index, target=original_target, changed_indices=[]
         )
 
-    # --- edit / retranslate: produce the new target ----------------------
-    color_segments: Optional[list] = None
-    if body.action == "retranslate":
-        loop = asyncio.get_running_loop()
+    # C-2: serialize edit + render per job. _retranslate_fragment and
+    # session.render both mutate the shared live Presentation / paragraph run
+    # structure; overlapping requests could corrupt the XML or interleave
+    # renders. The lock keeps one edit's mutate+render atomic.
+    async with job.review_lock:
+        # --- edit / retranslate: produce the new target ------------------
+        color_segments: Optional[list] = None
+        if body.action == "retranslate":
+            loop = asyncio.get_running_loop()
+            try:
+                new_target, color_segments = await loop.run_in_executor(
+                    None,
+                    _retranslate_fragment,
+                    session, index, body.instruction,
+                    session.model or DEFAULT_TRANSLATION_MODEL,
+                    session.provider,
+                )
+            except Exception as exc:
+                LOGGER.exception("Fragment re-translation failed: %s", exc)
+                raise HTTPException(status_code=500, detail="재번역에 실패했습니다.")
+        else:  # edit
+            if body.target is None:
+                raise HTTPException(status_code=400, detail="edit action requires 'target'")
+            new_target = body.target
+
+        changed = session.apply_edit(
+            index, new_target, propagate_identical=body.propagate_identical
+        )
+        # apply_edit dropped any stale color segmentation for `index`; re-seed it
+        # with the freshly re-mapped segments (retranslate only). Identical
+        # propagated fragments intentionally stay single-color — their run
+        # structure may differ from this fragment's.
+        session.set_color_distribution(index, color_segments)
+
+        # Re-render the output pptx in place so the download reflects the edit.
         try:
-            new_target, color_segments = await loop.run_in_executor(
-                None,
-                _retranslate_fragment,
-                session, index, body.instruction,
-                session.model or DEFAULT_TRANSLATION_MODEL,
-                session.provider,
-            )
+            loop = asyncio.get_running_loop()
+            new_buffer = await loop.run_in_executor(None, session.render)
+            job.output_file = new_buffer
         except Exception as exc:
-            LOGGER.exception("Fragment re-translation failed: %s", exc)
-            raise HTTPException(status_code=500, detail="재번역에 실패했습니다.")
-    else:  # edit
-        if body.target is None:
-            raise HTTPException(status_code=400, detail="edit action requires 'target'")
-        new_target = body.target
-
-    changed = session.apply_edit(
-        index, new_target, propagate_identical=body.propagate_identical
-    )
-    # apply_edit dropped any stale color segmentation for `index`; re-seed it
-    # with the freshly re-mapped segments (retranslate only). Identical
-    # propagated fragments intentionally stay single-color — their run
-    # structure may differ from this fragment's.
-    session.set_color_distribution(index, color_segments)
-
-    # Re-render the output pptx in place so the download reflects the edit.
-    try:
-        loop = asyncio.get_running_loop()
-        new_buffer = await loop.run_in_executor(None, session.render)
-        job.output_file = new_buffer
-    except Exception as exc:
-        LOGGER.exception("Failed to re-render pptx after edit: %s", exc)
-        raise HTTPException(status_code=500, detail="수정 반영에 실패했습니다.")
+            LOGGER.exception("Failed to re-render pptx after edit: %s", exc)
+            raise HTTPException(status_code=500, detail="수정 반영에 실패했습니다.")
 
     # Record the accepted edit with the corrected triplet.
     _record_edit(

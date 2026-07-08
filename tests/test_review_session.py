@@ -9,9 +9,10 @@ import unittest
 from pathlib import Path
 
 from pptx import Presentation
-from pptx.util import Inches
+from pptx.util import Inches, Pt
 
 from src.core.ppt_parser import PPTParser
+from src.core.ppt_writer import snapshot_fit_geometry
 from src.services.consistency_sweep import Finding
 from src.services.quality_records import QualityRecorder
 from src.services.review_session import ReviewSession
@@ -85,6 +86,84 @@ class EditPropagationTestCase(unittest.TestCase):
         check = Presentation(out)
         texts = [sh.text_frame.text for sl in check.slides for sh in sl.shapes if sh.has_text_frame]
         self.assertTrue(all(t == "NEW" for t in texts))
+
+
+class IdempotentRenderTestCase(unittest.TestCase):
+    """C-2: repeated render() must not cumulatively shrink fonts."""
+
+    def _fitting_deck(self) -> io.BytesIO:
+        prs = Presentation()
+        s = prs.slides.add_slide(prs.slide_layouts[6])
+        tb = s.shapes.add_textbox(Inches(1), Inches(1), Inches(3), Inches(1))
+        run = tb.text_frame.paragraphs[0].add_run()
+        run.text = "짧은"
+        run.font.size = Pt(20)
+        buf = io.BytesIO()
+        prs.save(buf)
+        buf.seek(0)
+        return buf
+
+    def _font_size_pt(self, buffer: io.BytesIO):
+        prs = Presentation(buffer)
+        for slide in prs.slides:
+            for shape in slide.shapes:
+                if not shape.has_text_frame:
+                    continue
+                for para in shape.text_frame.paragraphs:
+                    for run in para.runs:
+                        if run.font.size is not None:
+                            return run.font.size.pt
+        return None
+
+    def test_repeated_render_is_idempotent_with_snapshot(self) -> None:
+        paras, pres = PPTParser().extract_paragraphs(self._fitting_deck())
+        # A long translation forces auto_shrink to reduce the font.
+        long_target = "This is a considerably longer translated sentence" * 2
+        snapshot = snapshot_fit_geometry(pres)
+        sess = ReviewSession(
+            presentation=pres, paragraphs=paras, translated_texts=[long_target],
+            findings=[], source_lang="한국어", target_lang="영어", model="stub",
+            text_fit_mode="auto_shrink", min_font_ratio=50, fit_snapshot=snapshot,
+        )
+
+        size1 = self._font_size_pt(sess.render())
+        size2 = self._font_size_pt(sess.render())
+        size3 = self._font_size_pt(sess.render())
+
+        self.assertIsNotNone(size1)
+        # Fit shrank below the original 20pt...
+        self.assertLess(size1, 20)
+        # ...but repeated renders reproduce the same size, not 0.x^k of it.
+        self.assertAlmostEqual(size1, size2, places=3)
+        self.assertAlmostEqual(size2, size3, places=3)
+
+    def _big_font_deck(self) -> io.BytesIO:
+        prs = Presentation()
+        s = prs.slides.add_slide(prs.slide_layouts[6])
+        tb = s.shapes.add_textbox(Inches(1), Inches(1), Inches(3), Inches(1))
+        run = tb.text_frame.paragraphs[0].add_run()
+        run.text = "ab"  # 2 chars
+        run.font.size = Pt(40)
+        buf = io.BytesIO()
+        prs.save(buf)
+        buf.seek(0)
+        return buf
+
+    def test_render_without_snapshot_compounds(self) -> None:
+        # Guards the premise: without the snapshot restore, renders compound.
+        # 4-char target vs 2-char source => ratio 2 => shrink factor 0.5, and
+        # min_font_ratio=50 keeps that off the floor so a second render halves
+        # again (40 -> 20 -> 10) instead of holding steady.
+        paras, pres = PPTParser().extract_paragraphs(self._big_font_deck())
+        sess = ReviewSession(
+            presentation=pres, paragraphs=paras, translated_texts=["abcd"],
+            findings=[], source_lang="한국어", target_lang="영어", model="stub",
+            text_fit_mode="auto_shrink", min_font_ratio=50, fit_snapshot=None,
+        )
+        size1 = self._font_size_pt(sess.render())
+        size2 = self._font_size_pt(sess.render())
+        # Without restore, the second render shrinks again from the smaller base.
+        self.assertLess(size2, size1)
 
 
 class PartialMatchTestCase(unittest.TestCase):

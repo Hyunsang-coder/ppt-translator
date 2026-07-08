@@ -5,7 +5,10 @@ from __future__ import annotations
 import types
 import unittest
 
+import threading
+
 from src.chains.translation_chain import (
+    TranslationCancelled,
     TranslationOutput,
     _batch_translate_with_retry,
     _force_match_expected,
@@ -35,6 +38,36 @@ class GlossaryLoaderTestCase(unittest.TestCase):
         glossary = {"PUBG": "배틀그라운드"}
         updated = GlossaryLoader.apply_glossary_to_texts(["I love PUBG"], glossary)
         self.assertEqual(updated[0], "I love 배틀그라운드")
+
+    def test_longer_term_wins_over_shorter(self) -> None:
+        # "게임팀" must map to its own target, not be pre-empted by "게임".
+        glossary = {"게임": "game", "게임팀": "game team"}
+        updated = GlossaryLoader.apply_glossary_to_texts(["게임팀 소개"], glossary)
+        self.assertEqual(updated[0], "game team 소개")
+
+    def test_cjk_substring_not_polluted(self) -> None:
+        # "공지" must not replace inside "공지사항".
+        glossary = {"공지": "notice"}
+        updated = GlossaryLoader.apply_glossary_to_texts(["공지사항"], glossary)
+        self.assertEqual(updated[0], "공지사항")
+
+    def test_multiword_latin_phrase_replaced(self) -> None:
+        # A multi-word Latin phrase must match as a whole, not be mangled.
+        glossary = {"smart director": "스마트 디렉터"}
+        updated = GlossaryLoader.apply_glossary_to_texts(["The smart director spoke"], glossary)
+        self.assertEqual(updated[0], "The 스마트 디렉터 spoke")
+
+    def test_latin_word_boundary_respected(self) -> None:
+        # "game" must not replace inside "gameplay".
+        glossary = {"game": "게임"}
+        updated = GlossaryLoader.apply_glossary_to_texts(["gameplay is a game"], glossary)
+        self.assertEqual(updated[0], "gameplay is a 게임")
+
+    def test_backslash_in_target_does_not_raise(self) -> None:
+        # A backslash in the target must be inserted literally, not as an escape.
+        glossary = {"path": r"C:\dir"}
+        updated = GlossaryLoader.apply_glossary_to_translation("the path here", glossary)
+        self.assertEqual(updated, r"the C:\dir here")
 
 
 class HelperTestCase(unittest.TestCase):
@@ -164,6 +197,135 @@ class BatchRetryTestCase(unittest.TestCase):
         result = translate_with_progress(FakeChain(), batches, max_concurrency=1)
 
         self.assertEqual(result, ["하나만", "b"])
+
+
+class IndexedAlignmentTestCase(unittest.TestCase):
+    """L-1: a dropped middle item must not shift later translations."""
+
+    def test_missing_middle_item_pads_correct_slot(self) -> None:
+        # Model returns items 1 and 3 (item 2 dropped). Item 3's translation
+        # must stay on paragraph 3, and paragraph 2 must fall back to its
+        # source text — not receive item 3's translation.
+        batches = [
+            {
+                "paragraphs": [
+                    _fake_paragraph("a"),
+                    _fake_paragraph("b"),
+                    _fake_paragraph("c"),
+                ],
+                "start_idx": 1,
+                "end_idx": 3,
+            }
+        ]
+
+        class FakeChain:
+            def batch_as_completed(self, submitted, config=None):
+                yield (
+                    0,
+                    TranslationOutput(
+                        items=[
+                            {"index": 1, "text": "T1"},
+                            {"index": 3, "text": "T3"},
+                        ]
+                    ),
+                )
+
+            def invoke(self, batch, config=None):
+                # Retry also drops item 2.
+                return TranslationOutput(
+                    items=[
+                        {"index": 1, "text": "T1"},
+                        {"index": 3, "text": "T3"},
+                    ]
+                )
+
+        result = translate_with_progress(FakeChain(), batches, max_concurrency=1)
+        # T3 stays at index 3; index 2 padded with its own source "b".
+        self.assertEqual(result, ["T1", "b", "T3"])
+
+    def test_indexed_full_result_passes_through(self) -> None:
+        batches = [
+            {
+                "paragraphs": [_fake_paragraph("a"), _fake_paragraph("b")],
+                "start_idx": 1,
+                "end_idx": 2,
+            }
+        ]
+
+        class FakeChain:
+            def batch_as_completed(self, submitted, config=None):
+                # Deliberately out-of-order indices; must still align correctly.
+                yield (
+                    0,
+                    TranslationOutput(
+                        items=[
+                            {"index": 2, "text": "T2"},
+                            {"index": 1, "text": "T1"},
+                        ]
+                    ),
+                )
+
+        result = translate_with_progress(FakeChain(), batches, max_concurrency=1)
+        self.assertEqual(result, ["T1", "T2"])
+
+
+class CancellationTestCase(unittest.TestCase):
+    """C-1: a set cancel_event stops translation cooperatively."""
+
+    def _batches(self, n):
+        return [
+            {
+                "paragraphs": [_fake_paragraph(f"p{i}")],
+                "start_idx": i + 1,
+                "end_idx": i + 1,
+            }
+            for i in range(n)
+        ]
+
+    def test_cancelled_before_start_raises(self) -> None:
+        event = threading.Event()
+        event.set()
+
+        class FakeChain:
+            def batch_as_completed(self, submitted, config=None):
+                raise AssertionError("should not translate when pre-cancelled")
+                yield  # pragma: no cover
+
+        with self.assertRaises(TranslationCancelled):
+            translate_with_progress(
+                FakeChain(), self._batches(2), max_concurrency=1, cancel_event=event
+            )
+
+    def test_cancel_mid_batch_stops_consuming(self) -> None:
+        # The event is set after the first batch completes; the loop must raise
+        # instead of processing the remaining batches.
+        event = threading.Event()
+        consumed = []
+
+        class FakeChain:
+            def batch_as_completed(self, submitted, config=None):
+                for local_idx in range(len(submitted)):
+                    consumed.append(local_idx)
+                    event.set()  # cancel arrives after the first item
+                    yield (local_idx, TranslationOutput(items=[{"index": 1, "text": "x"}]))
+
+        with self.assertRaises(TranslationCancelled):
+            translate_with_progress(
+                FakeChain(), self._batches(3), max_concurrency=1, cancel_event=event
+            )
+        # Only the first completed batch was consumed before the cancel check.
+        self.assertEqual(consumed, [0])
+
+    def test_no_cancel_event_translates_normally(self) -> None:
+        class FakeChain:
+            def batch_as_completed(self, submitted, config=None):
+                for local_idx in range(len(submitted)):
+                    yield (local_idx, TranslationOutput(items=[{"index": 1, "text": f"t{local_idx}"}]))
+
+        result = translate_with_progress(
+            FakeChain(), self._batches(2), max_concurrency=1, cancel_event=None
+        )
+        self.assertEqual(result, ["t0", "t1"])
 
 
 class ForceMatchExpectedTestCase(unittest.TestCase):

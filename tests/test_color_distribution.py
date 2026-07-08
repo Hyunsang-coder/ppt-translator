@@ -1125,11 +1125,13 @@ class DistributeColorsBatchingTestCase(unittest.TestCase):
         groups = [["a", "b"]] * n
         texts = ["번역"] * n
 
-        # First batch succeeds, second fails
-        mock_invoke.side_effect = [
-            [seg] * _BATCH_SIZE,  # first batch succeeds
-            None,  # second batch fails
-        ]
+        # First batch (the full _BATCH_SIZE) succeeds, second (the remaining 1)
+        # fails. Keyed on batch size rather than call order because the batches
+        # now run concurrently (P-2) and may invoke the mock in any order.
+        def _by_size(chain, batch_groups, batch_texts):
+            return [seg] * _BATCH_SIZE if len(batch_groups) == _BATCH_SIZE else None
+
+        mock_invoke.side_effect = _by_size
 
         result = distribute_colors(groups, texts)
         self.assertIsNotNone(result)  # Should not be None since first batch worked
@@ -1154,6 +1156,38 @@ class DistributeColorsBatchingTestCase(unittest.TestCase):
             ["번역1", "번역2"],
         )
         self.assertIsNone(result)
+
+    @patch("src.chains.color_distribution_chain.create_llm")
+    @patch("src.chains.color_distribution_chain._invoke_batch")
+    def test_concurrent_batches_preserve_order(self, mock_invoke, mock_create_llm) -> None:
+        """P-2: concurrent batches must map results back to the right slots.
+
+        Each batch returns a segment whose text encodes its own translated
+        input, so a misordered write-back would be caught by position.
+        """
+        from src.chains.color_distribution_chain import (
+            ColoredSegment,
+            distribute_colors,
+            _BATCH_SIZE,
+        )
+
+        n = _BATCH_SIZE * 3  # three full batches
+        groups = [["a", "b"]] * n
+        texts = [f"t{i}" for i in range(n)]
+
+        def _echo(chain, batch_groups, batch_texts):
+            # One distribution per input item, tagged with its translated text.
+            return [
+                [ColoredSegment(text=t, group_index=0)] for t in batch_texts
+            ]
+
+        mock_invoke.side_effect = _echo
+
+        result = distribute_colors(groups, texts)
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), n)
+        for i in range(n):
+            self.assertEqual(result[i][0].text, f"t{i}")
 
 
 class ColorDistributionModelSelectionTestCase(unittest.TestCase):

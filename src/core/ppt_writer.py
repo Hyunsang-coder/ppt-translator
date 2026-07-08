@@ -450,6 +450,75 @@ def _shrink_runs(text_frame, factor: float) -> None:
                 run.font.size = max(rounded_pt, 1) * _EMU_PER_PT
 
 
+def snapshot_fit_geometry(presentation) -> dict:
+    """Capture pristine font sizes and shape geometry before any text fitting.
+
+    C-2: ``apply_translations`` mutates run font sizes (shrink) and shape widths
+    (expand) in place, and both are cumulative — re-rendering the same live
+    presentation for each review edit would compound the shrink/expand (fonts
+    -> 0.8^k, boxes growing every pass). Snapshotting the original geometry lets
+    :func:`restore_fit_geometry` reset it before every render so text fitting is
+    always applied to the original layout, making renders idempotent.
+
+    Keyed by structural position — ``(slide_idx, shape_idx)`` for shapes and
+    ``(slide_idx, shape_idx, para_idx, run_idx)`` for runs — because neither the
+    python-pptx wrappers nor the underlying lxml element proxies have a stable
+    ``id()`` across accesses (lxml builds a fresh proxy for the same C node each
+    time). Snapshot and restore walk the tree in the same deterministic order so
+    positions line up; a run whose position no longer exists at restore time is
+    simply skipped.
+    """
+    run_sizes: dict[tuple, object] = {}
+    shape_geometry: dict[tuple, tuple] = {}
+
+    for slide_idx, slide in enumerate(presentation.slides):
+        for shape_idx, shape in enumerate(slide.shapes):
+            left = getattr(shape, "left", None)
+            top = getattr(shape, "top", None)
+            width = getattr(shape, "width", None)
+            height = getattr(shape, "height", None)
+            if None not in (left, top, width, height):
+                shape_geometry[(slide_idx, shape_idx)] = (left, top, width, height)
+
+            if not getattr(shape, "has_text_frame", False):
+                continue
+            for para_idx, paragraph in enumerate(shape.text_frame.paragraphs):
+                for run_idx, run in enumerate(paragraph.runs):
+                    # Store the raw Length (EMU int subclass) or None when the
+                    # size is inherited. Re-assigning the same object restores it
+                    # exactly, with no float round-trip.
+                    run_sizes[(slide_idx, shape_idx, para_idx, run_idx)] = run.font.size
+
+    return {"run_sizes": run_sizes, "shape_geometry": shape_geometry}
+
+
+def restore_fit_geometry(presentation, snapshot: dict | None) -> None:
+    """Reset font sizes and shape geometry to a snapshot (C-2, idempotent render)."""
+    if not snapshot:
+        return
+
+    run_sizes = snapshot.get("run_sizes", {})
+    shape_geometry = snapshot.get("shape_geometry", {})
+
+    for slide_idx, slide in enumerate(presentation.slides):
+        for shape_idx, shape in enumerate(slide.shapes):
+            geo = shape_geometry.get((slide_idx, shape_idx))
+            if geo is not None:
+                left, top, width, height = geo
+                shape.left = left
+                shape.top = top
+                shape.width = width
+                shape.height = height
+
+            if not getattr(shape, "has_text_frame", False):
+                continue
+            for para_idx, paragraph in enumerate(shape.text_frame.paragraphs):
+                for run_idx, run in enumerate(paragraph.runs):
+                    key = (slide_idx, shape_idx, para_idx, run_idx)
+                    if key in run_sizes:
+                        run.font.size = run_sizes[key]
+
+
 class PPTWriter:
     """Apply translated strings back into PPT paragraphs."""
 

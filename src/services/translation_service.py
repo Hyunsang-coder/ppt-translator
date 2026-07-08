@@ -14,9 +14,14 @@ from src.chains.color_distribution_chain import (
     translate_with_color_segments,
 )
 from src.chains.context_manager import ContextManager
-from src.chains.translation_chain import create_translation_chain, translate_with_progress
+from src.chains.llm_factory import max_tokens_for_batch
+from src.chains.translation_chain import (
+    TranslationCancelled,
+    create_translation_chain,
+    translate_with_progress,
+)
 from src.core.ppt_parser import PPTParser
-from src.core.ppt_writer import PPTWriter, _group_runs_by_format
+from src.core.ppt_writer import PPTWriter, _group_runs_by_format, snapshot_fit_geometry
 from src.services.models import (
     DEFAULT_LIGHT_MODEL,
     ProgressCallback,
@@ -391,7 +396,15 @@ class TranslationService:
         # Keep legacy defaults stable, but allow an explicitly higher
         # target_batch_count to request smaller batches down to min_size.
         if configured_target_batches <= baseline_target_batches and batch_size < default_size:
-            batch_size = max(batch_size, min(default_size, max_size))
+            # P-1: don't raise the batch size back to default_size when doing so
+            # would starve concurrency. Raising batch_size shrinks the batch
+            # count; if that drops below `concurrency`, parallel lanes sit idle
+            # and a mid-size deck runs far slower than it should. Cap the raise
+            # so we still emit at least `concurrency` batches when the deck has
+            # enough paragraphs to fill them.
+            raised = min(default_size, max_size)
+            concurrency_cap = max(1, math.ceil(total_paragraphs / concurrency))
+            batch_size = max(batch_size, min(raised, concurrency_cap))
 
         actual_batches = max(1, math.ceil(total_paragraphs / batch_size))
         if actual_batches > 1:
@@ -667,6 +680,11 @@ class TranslationService:
 
         try:
             return self._execute_translation(request, start_time)
+        except TranslationCancelled:
+            # C-1: cooperative cancel — propagate so the caller marks the job
+            # CANCELLED rather than FAILED, and doesn't surface an error toast.
+            LOGGER.info("Translation cancelled by user request.")
+            raise
         except Exception as exc:
             LOGGER.exception("Translation failed: %s", exc)
             return TranslationResult(
@@ -863,6 +881,9 @@ class TranslationService:
             provider=request.provider,
             length_limit=request.length_limit,
             team_rules=team_rules_text,
+            # P-3: size the response budget to the batch so an 80-paragraph JSON
+            # array isn't truncated (which would fail-and-retry at the same size).
+            max_tokens=max_tokens_for_batch(batch_size),
         )
 
         LOGGER.info(
@@ -876,6 +897,7 @@ class TranslationService:
             batches,
             progress_tracker,
             max_concurrency=safe_concurrency,
+            cancel_event=request.cancel_event,
         )
 
         # Phase 8: Expand repetitions
@@ -912,6 +934,10 @@ class TranslationService:
             )
         except Exception:  # pylint: disable=broad-except
             LOGGER.exception("Consistency sweep failed; continuing without findings.")
+
+        # C-1: skip the second expensive LLM stage if cancelled mid-run.
+        if request.cancel_event is not None and request.cancel_event.is_set():
+            raise TranslationCancelled("Translation cancelled before color pass")
 
         # Phase 9.5: Translate and style-map multi-color paragraphs
         self._notify_progress(
@@ -961,6 +987,16 @@ class TranslationService:
             )
         )
 
+        # C-2: snapshot pristine geometry before the (cumulative) text-fit pass
+        # so the review session can restore it before each re-render. Only needed
+        # when a fitting mode is active.
+        fit_snapshot = None
+        if request.text_fit_mode.value != "none":
+            try:
+                fit_snapshot = snapshot_fit_geometry(presentation)
+            except Exception:  # pylint: disable=broad-except
+                LOGGER.exception("Failed to snapshot fit geometry; re-render idempotency disabled.")
+
         writer = PPTWriter()
         output_buffer = writer.apply_translations(
             paragraphs,
@@ -1007,6 +1043,7 @@ class TranslationService:
                 ppt_context=ppt_context,
                 glossary_terms=glossary_terms,
                 color_distributions=dict(color_distributions or {}),
+                fit_snapshot=fit_snapshot,
             )
         except Exception:  # pylint: disable=broad-except
             LOGGER.exception("Failed to build review session; review disabled for job.")

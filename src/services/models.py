@@ -83,6 +83,9 @@ class TranslationRequest:
     length_limit: Optional[int] = None
     # Parsed team translation-rules document (WP-C1). None -> feature off.
     team_rules: Optional[Dict[str, Any]] = None
+    # C-1: cooperative cancellation flag. When set mid-run, the translation
+    # loop stops at the next batch boundary and raises. None -> not cancellable.
+    cancel_event: Optional[Any] = None  # threading.Event
 
 
 @dataclass

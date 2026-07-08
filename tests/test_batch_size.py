@@ -15,7 +15,7 @@ def _make_service(**overrides) -> TranslationService:
         anthropic_api_key="test",
         max_concurrency=8,
         batch_size=80,
-        min_batch_size=60,
+        min_batch_size=40,
         max_batch_size=100,
         target_batch_count=5,
         wave_multiplier=1.2,
@@ -80,6 +80,21 @@ class TestDetermineBatchSize:
         service = _make_service()
         result = service._determine_batch_size(10000)
         assert 60 <= result <= 100  # within configured bounds
+
+    def test_midsize_deck_fills_concurrency(self):
+        """P-1: a mid-size deck must produce enough batches to fill all lanes.
+
+        With defaults (min_batch_size=40, max_concurrency=8) a 300-paragraph
+        deck should yield >= 8 batches so the concurrency budget is not wasted.
+        Previously the legacy correction snapped batch size back to 80, giving
+        only 4 batches for 8 lanes.
+        """
+        service = _make_service(min_batch_size=40)
+        batch_size = service._determine_batch_size(300)
+        import math
+
+        num_batches = math.ceil(300 / batch_size)
+        assert num_batches >= 8, f"{num_batches} batches for 8 lanes (size={batch_size})"
 
     def test_high_target_batch_count_can_request_smaller_batches(self):
         """A high target_batch_count should be honored down to min_batch_size."""

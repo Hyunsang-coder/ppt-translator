@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from src.core.ppt_parser import ParagraphInfo
-from src.core.ppt_writer import PPTWriter
+from src.core.ppt_writer import PPTWriter, restore_fit_geometry
 from src.services.consistency_sweep import Finding
 from src.utils.repetition import RepetitionPlan, build_repetition_plan
 
@@ -66,6 +66,10 @@ class ReviewSession:
     # list[ColoredSegment]). Seeded from the original run so multi-color
     # fragments keep their colors on re-render; updated on re-translate.
     color_distributions: Dict[int, list] = field(default_factory=dict)
+    # C-2: pristine font sizes + shape geometry captured before the first
+    # text-fit pass. Restored before every render() so repeated re-renders don't
+    # cumulatively shrink fonts / grow boxes. None -> no restore (text_fit off).
+    fit_snapshot: Optional[dict] = field(default=None, repr=False)
     # Built lazily from paragraphs; canonical_map drives identical-fragment
     # propagation.
     _plan: Optional[RepetitionPlan] = field(default=None, repr=False)
@@ -233,7 +237,13 @@ class ReviewSession:
         Reuses the batch writer over the full aligned lists. Formatting is
         preserved by the writer's run-grouping. Text-fit uses the session's
         configured mode.
+
+        C-2: font sizes and shape geometry are reset to the pre-fit snapshot
+        first, so re-rendering after an edit doesn't compound the shrink/expand
+        from previous renders (fonts would otherwise drift toward 0 and boxes
+        keep growing across edits).
         """
+        restore_fit_geometry(self.presentation, self.fit_snapshot)
         writer = PPTWriter()
         return writer.apply_translations(
             self.paragraphs,

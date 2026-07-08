@@ -8,17 +8,84 @@ from typing import Any, Dict, List
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import RunnablePassthrough, RunnableConfig
 from pydantic import BaseModel, Field
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import (
+    retry,
+    retry_if_not_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from src.chains.llm_factory import Provider, create_llm
 
 LOGGER = logging.getLogger(__name__)
 
 
-class TranslationOutput(BaseModel):
-    """Structured output model for translation results."""
+class TranslationCancelled(Exception):
+    """Raised when a cooperative cancel flag is set mid-translation (C-1)."""
 
-    translations: List[str] = Field(description="List of translated texts")
+
+def _is_cancelled(cancel_event) -> bool:
+    """True when a cancellation flag is present and set."""
+    return cancel_event is not None and cancel_event.is_set()
+
+
+class IndexedTranslation(BaseModel):
+    """One translated text tagged with its 1-based input index."""
+
+    index: int = Field(description="The 1-based number of the source text this translates")
+    text: str = Field(description="The translated text for that numbered source")
+
+
+class TranslationOutput(BaseModel):
+    """Structured output model for translation results.
+
+    ``items`` carries each translation tagged with the 1-based index of the
+    source line it corresponds to (L-1). Reconstructing by index means a
+    dropped middle item leaves a gap in the right slot instead of shifting
+    every later translation onto the wrong paragraph. ``translations`` is kept
+    as a compatibility accessor for callers/tests that build outputs directly.
+    """
+
+    items: List[IndexedTranslation] = Field(
+        default_factory=list,
+        description="One entry per source text, each tagging its 1-based index.",
+    )
+
+    def __init__(self, **data: Any) -> None:
+        # Back-compat: allow TranslationOutput(translations=[...]) construction.
+        # Positional-index items are synthesised from the plain list so existing
+        # tests and any direct callers keep working.
+        if "items" not in data and "translations" in data:
+            plain = data.pop("translations")
+            data["items"] = [
+                {"index": i, "text": t} for i, t in enumerate(plain, start=1)
+            ]
+        super().__init__(**data)
+
+    @property
+    def translations(self) -> List[str]:
+        """Return translated texts ordered by their reported index.
+
+        Gaps (missing indices) collapse — callers compare the resulting length
+        against the expected count and fall back to safe padding when they
+        differ, so a dropped item never silently shifts the alignment.
+        """
+        return [it.text for it in sorted(self.items, key=lambda it: it.index)]
+
+    def aligned(self, expected_count: int) -> List[str] | None:
+        """Return a list of length ``expected_count`` aligned by 1-based index.
+
+        Each item is placed at its reported slot; missing slots are ``None``.
+        Returns ``None`` when any index is out of range or duplicated, signalling
+        the caller to treat the batch as a mismatch and retry.
+        """
+        slots: List[str | None] = [None] * expected_count
+        for it in self.items:
+            pos = it.index - 1
+            if pos < 0 or pos >= expected_count or slots[pos] is not None:
+                return None
+            slots[pos] = it.text
+        return slots
 
 PROMPT_TEMPLATE = """
 You are a professional translator specializing in PowerPoint presentations.
@@ -44,7 +111,10 @@ Translate the following texts from {source_lang} to {target_lang}.
 Maintain consistency with the context, background information, and glossary.
 Follow the translation style/tone guidelines if provided.
 If a sentence or phrase appears more than once in the source, translate it identically every time unless the glossary overrides it.
-Return exactly {expected_count} translated texts in the translations array.
+Return exactly {expected_count} items in the items array — one per numbered source
+text. For each item, set "index" to the source text's number (the digit before the
+"." on its line) and "text" to its translation. Do not skip, merge, or renumber
+items; every source number from 1 to {expected_count} must appear exactly once.
 
 **Texts to translate:**
 {texts}
@@ -83,6 +153,7 @@ def create_translation_chain(
     *,
     length_limit: int | None = None,
     team_rules: str | None = None,
+    max_tokens: int | None = None,
     user_prompt: str | None = None,  # Deprecated: for backward compatibility
 ):
     """Create a LangChain sequence for translation.
@@ -97,6 +168,9 @@ def create_translation_chain(
         length_limit: Optional max translation length as percentage of original.
         team_rules: Optional pre-formatted team translation-rules block. Injected
             job-wide into the prompt's stable prefix. None -> "None" (no rules).
+        max_tokens: Optional response token ceiling. None -> provider default.
+            Sized to the batch's output budget (P-3) to avoid truncating large
+            batches.
         user_prompt: Deprecated. Use 'instructions' instead. If provided and
             'instructions' is not set, this value will be used as instructions.
 
@@ -104,7 +178,10 @@ def create_translation_chain(
         Configured LangChain runnable sequence with structured output.
     """
 
-    llm = create_llm(provider=provider, model_name=model_name)
+    llm_kwargs: dict = {"provider": provider, "model_name": model_name}
+    if max_tokens is not None:
+        llm_kwargs["max_tokens"] = max_tokens
+    llm = create_llm(**llm_kwargs)
     # Wrap LLM with structured output for type-safe parsing
     structured_llm = llm.with_structured_output(TranslationOutput)
 
@@ -142,6 +219,7 @@ def translate_with_progress(
     batches: List[Dict[str, object]],
     progress_tracker: Any = None,
     max_concurrency: int = 1,
+    cancel_event: Any = None,
 ) -> List[str]:
     """Translate batches using LangChain batch API with progress updates.
 
@@ -150,13 +228,22 @@ def translate_with_progress(
         batches: Prepared batch payloads from :func:`chunk_paragraphs`.
         progress_tracker: Optional tracker used to update the UI.
         max_concurrency: Number of batches allowed to run in parallel (>=1).
+        cancel_event: Optional ``threading.Event`` checked between batch waves;
+            when set, translation stops and raises :class:`TranslationCancelled`
+            (C-1) so a cancelled job stops calling the LLM.
 
     Returns:
         Flattened list of translated texts.
+
+    Raises:
+        TranslationCancelled: If ``cancel_event`` is set before/during the run.
     """
 
     total_batches = len(batches)
     total_sentences = sum(len(batch.get("paragraphs", [])) for batch in batches)
+
+    if _is_cancelled(cancel_event):
+        raise TranslationCancelled("Translation cancelled before start")
 
     if progress_tracker is not None:
         progress_tracker.reset(
@@ -177,14 +264,13 @@ def translate_with_progress(
     config = RunnableConfig(max_concurrency=max(1, int(max_concurrency)))
     accumulator: List[TranslationOutput | None] = [None] * len(batches)
     ordered_results: List[TranslationOutput | None] = _batch_translate_with_retry(
-        chain, batches, config, progress_tracker, total_batches, accumulator
+        chain, batches, config, progress_tracker, total_batches, accumulator,
+        cancel_event,
     )
 
     # Assemble translations in input order
     translations: List[str] = []
     for index, (batch, result) in enumerate(zip(batches, ordered_results), start=1):
-        expected_count = len(batch.get("paragraphs", []))
-
         if result is None:
             # Should not happen after _batch_translate_with_retry validates,
             # but guard against it to avoid silent data loss.
@@ -193,48 +279,90 @@ def translate_with_progress(
                 "after all retry attempts"
             )
 
-        parts = result.translations
-
-        if len(parts) != expected_count:
-            LOGGER.warning(
-                "Batch %d: translation count %d differs from expected %d.",
-                index,
-                len(parts),
-                expected_count,
-            )
-            retry_result = _retry_count_mismatch_batch(
-                chain=chain,
-                batch=batch,
-                config=config,
-                batch_index=index,
-                expected_count=expected_count,
-            )
-            if retry_result is not None and len(retry_result.translations) == expected_count:
-                parts = retry_result.translations
-            else:
-                if retry_result is not None:
-                    LOGGER.error(
-                        "Batch %d: retry still returned %d translations; "
-                        "falling back to safe padding/trimming.",
-                        index,
-                        len(retry_result.translations),
-                    )
-                else:
-                    LOGGER.error(
-                        "Batch %d: retry failed; falling back to safe padding/trimming.",
-                        index,
-                    )
-                originals = [p.original_text for p in batch.get("paragraphs", [])]
-                parts = _force_match_expected(parts, expected_count, originals)
-
-        translations.extend(parts)
+        translations.extend(
+            _resolve_batch_parts(chain, batch, result, config, index)
+        )
 
     return translations
+
+
+def _resolve_batch_parts(
+    chain,
+    batch: Dict[str, object],
+    result: "TranslationOutput",
+    config: RunnableConfig,
+    batch_index: int,
+) -> List[str]:
+    """Return one batch's translations aligned to its paragraphs (length-exact).
+
+    Alignment is by the model's reported 1-based index (L-1): a dropped middle
+    item leaves a gap in the correct slot instead of shifting every later
+    translation onto the wrong paragraph. Clean results pass through; otherwise
+    the batch is retried once, then any remaining gaps are padded with the
+    source text so a paragraph is never erased or misaligned.
+    """
+    expected_count = len(batch.get("paragraphs", []))
+    slots = result.aligned(expected_count)
+    if slots is not None and all(s is not None for s in slots):
+        return [s for s in slots if s is not None]
+
+    if slots is not None:
+        LOGGER.warning(
+            "Batch %d: %d of %d indexed translations missing; retrying.",
+            batch_index,
+            sum(1 for s in slots if s is None),
+            expected_count,
+        )
+    else:
+        LOGGER.warning(
+            "Batch %d: translation indices out of range/duplicated "
+            "(expected %d); retrying.",
+            batch_index,
+            expected_count,
+        )
+
+    retry_result = _retry_count_mismatch_batch(
+        chain=chain,
+        batch=batch,
+        config=config,
+        batch_index=batch_index,
+        expected_count=expected_count,
+    )
+    retry_slots = (
+        retry_result.aligned(expected_count) if retry_result is not None else None
+    )
+    if retry_slots is not None and all(s is not None for s in retry_slots):
+        return [s for s in retry_slots if s is not None]
+
+    # Still incomplete after the retry. Keep the first attempt's indexed slots
+    # (its translations are as trustworthy as the retry's partial set) and pad
+    # the remaining gaps with the source text — never empty, never shifted.
+    originals = [p.original_text for p in batch.get("paragraphs", [])]
+    if slots is not None:
+        LOGGER.error(
+            "Batch %d: still incomplete after retry; padding %d gap(s) with original text.",
+            batch_index,
+            sum(1 for s in slots if s is None),
+        )
+        return [
+            s if s is not None else (originals[i] if i < len(originals) else "")
+            for i, s in enumerate(slots)
+        ]
+
+    # No usable indexed slots from either attempt (all indices malformed).
+    # Fall back to positional padding/trimming against the plain list.
+    LOGGER.error(
+        "Batch %d: no usable indexed result; falling back to positional padding.",
+        batch_index,
+    )
+    return _force_match_expected(result.translations, expected_count, originals)
 
 
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=10),
+    # C-1: a cancellation must abort immediately, not be retried 3x by tenacity.
+    retry=retry_if_not_exception_type(TranslationCancelled),
 )
 def _batch_translate_with_retry(
     chain,
@@ -243,6 +371,7 @@ def _batch_translate_with_retry(
     progress_tracker: Any = None,
     total_batches: int = 0,
     ordered_results: List[TranslationOutput | None] | None = None,
+    cancel_event: Any = None,
 ) -> List[TranslationOutput | None]:
     """Execute batch translation with retry logic and real-time progress.
 
@@ -295,9 +424,19 @@ def _batch_translate_with_retry(
         len(batches) - len(pending_batches),
     )
 
+    # C-1: bail before submitting a fresh wave when cancellation was requested.
+    if _is_cancelled(cancel_event):
+        raise TranslationCancelled("Translation cancelled before batch submission")
+
     for local_idx, result in chain.batch_as_completed(pending_batches, config=config):
         completed_idx = pending[local_idx]
         ordered_results[completed_idx] = result
+
+        # C-1: stop consuming further completed batches once cancelled. In-flight
+        # requests already submitted to the pool cannot be recalled, but we stop
+        # processing/paying for the rest and abort the run.
+        if _is_cancelled(cancel_event):
+            raise TranslationCancelled("Translation cancelled mid-batch")
 
         if progress_tracker is not None:
             batch = batches[completed_idx]
