@@ -8,11 +8,15 @@ import type {
   ExtractionSettings,
   FragmentEditRequest,
   FragmentEditResponse,
+  FragmentProposalRequest,
+  FragmentProposalResponse,
+  ApplyProposalResponse,
   FragmentsResponse,
   JobCreateResponse,
   JobStatusResponse,
   LanguageInfo,
   ModelInfo,
+  ReviewMutationResponse,
   TranslationSettings,
 } from "@/types/api";
 import { ensureApiBase } from "@/lib/api-base";
@@ -222,6 +226,73 @@ export const apiClient = {
       }
     );
     return handleResponse<FragmentEditResponse>(response);
+  },
+
+  async proposeJobFragment(
+    jobId: string,
+    index: number,
+    body: FragmentProposalRequest
+  ): Promise<FragmentProposalResponse> {
+    const response = await fetch(
+      await apiUrl(`/api/v1/jobs/${jobId}/fragments/${index}/proposals`),
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }
+    );
+    return handleResponse<FragmentProposalResponse>(response);
+  },
+
+  async applyJobFragmentProposal(
+    jobId: string,
+    proposalId: string,
+    expectedRevision: number
+  ): Promise<ApplyProposalResponse> {
+    const response = await fetch(
+      await apiUrl(`/api/v1/jobs/${jobId}/proposals/${proposalId}/apply`),
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expected_revision: expectedRevision }),
+      }
+    );
+    return handleResponse<ApplyProposalResponse>(response);
+  },
+
+  async applyPartialCandidates(
+    jobId: string,
+    body: {
+      indices: number[];
+      old_phrase: string;
+      new_phrase: string;
+      expected_revision: number;
+    }
+  ): Promise<ReviewMutationResponse> {
+    const response = await fetch(await apiUrl(`/api/v1/jobs/${jobId}/review/partial`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return handleResponse<ReviewMutationResponse>(response);
+  },
+
+  async undoReview(jobId: string, expectedRevision: number): Promise<ReviewMutationResponse> {
+    const response = await fetch(await apiUrl(`/api/v1/jobs/${jobId}/review/undo`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expected_revision: expectedRevision }),
+    });
+    return handleResponse<ReviewMutationResponse>(response);
+  },
+
+  async commitReview(jobId: string, expectedRevision: number): Promise<ReviewMutationResponse> {
+    const response = await fetch(await apiUrl(`/api/v1/jobs/${jobId}/review/commit`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expected_revision: expectedRevision }),
+    });
+    return handleResponse<ReviewMutationResponse>(response);
   },
 
   /**

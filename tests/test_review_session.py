@@ -6,12 +6,15 @@ import io
 import json
 import tempfile
 import unittest
+from copy import deepcopy
 from pathlib import Path
 from unittest import mock
 
 from pptx import Presentation
+from pptx.dml.color import RGBColor
 from pptx.util import Inches, Pt
 
+from src.chains.color_distribution_chain import ColoredSegment
 from src.core.ppt_parser import PPTParser
 from src.core.ppt_writer import snapshot_fit_geometry
 from src.services.consistency_sweep import Finding
@@ -39,6 +42,42 @@ def _session(text: str, n: int, targets=None, findings=None) -> ReviewSession:
         presentation=pres, paragraphs=paras, translated_texts=targets,
         findings=findings or [], source_lang="한국어", target_lang="영어",
         model="stub",
+    )
+
+
+def _multicolor_session() -> ReviewSession:
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    box = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(6), Inches(1))
+    paragraph = box.text_frame.paragraphs[0]
+    red = paragraph.add_run()
+    red.text = "강력히 "
+    red.font.color.rgb = RGBColor(255, 0, 0)
+    blue = paragraph.add_run()
+    blue.text = "추천합니다"
+    blue.font.color.rgb = RGBColor(0, 0, 255)
+    source = io.BytesIO()
+    prs.save(source)
+    source.seek(0)
+    paragraphs, presentation = PPTParser().extract_paragraphs(source)
+    target = "This approach is strongly recommended"
+    distribution = {
+        0: [
+            ColoredSegment(text="This approach is ", group_index=1),
+            ColoredSegment(text="strongly", group_index=0),
+            ColoredSegment(text=" recommended", group_index=1),
+        ]
+    }
+    return ReviewSession(
+        presentation=presentation,
+        paragraphs=paragraphs,
+        translated_texts=[target],
+        findings=[],
+        source_lang="한국어",
+        target_lang="영어",
+        model="stub",
+        color_distributions=distribution,
+        source_pptx=source.getvalue(),
     )
 
 
@@ -150,11 +189,9 @@ class IdempotentRenderTestCase(unittest.TestCase):
         buf.seek(0)
         return buf
 
-    def test_render_without_snapshot_compounds(self) -> None:
-        # Guards the premise: without the snapshot restore, renders compound.
-        # 4-char target vs 2-char source => ratio 2 => shrink factor 0.5, and
-        # min_font_ratio=50 keeps that off the floor so a second render halves
-        # again (40 -> 20 -> 10) instead of holding steady.
+    def test_render_without_snapshot_is_still_idempotent(self) -> None:
+        # Fresh-source rendering no longer depends on an optional geometry
+        # snapshot; every render starts from the pristine source bytes.
         paras, pres = PPTParser().extract_paragraphs(self._big_font_deck())
         sess = ReviewSession(
             presentation=pres, paragraphs=paras, translated_texts=["abcd"],
@@ -163,8 +200,104 @@ class IdempotentRenderTestCase(unittest.TestCase):
         )
         size1 = self._font_size_pt(sess.render())
         size2 = self._font_size_pt(sess.render())
-        # Without restore, the second render shrinks again from the smaller base.
-        self.assertLess(size2, size1)
+        self.assertAlmostEqual(size2, size1, places=3)
+
+
+class TransactionalColorRenderTestCase(unittest.TestCase):
+    @staticmethod
+    def _runs(buffer: io.BytesIO):
+        presentation = Presentation(buffer)
+        paragraph = presentation.slides[0].shapes[0].text_frame.paragraphs[0]
+        return [
+            (run.text, str(run.font.color.rgb) if run.font.color.rgb else None)
+            for run in paragraph.runs
+            if run.text
+        ]
+
+    def test_reordered_color_mapping_is_stable_across_renders(self) -> None:
+        session = _multicolor_session()
+        first = self._runs(session.render())
+        second = self._runs(session.render())
+        self.assertEqual(first, second)
+        self.assertEqual(
+            first,
+            [
+                ("This approach is ", "0000FF"),
+                ("strongly", "FF0000"),
+                (" recommended", "0000FF"),
+            ],
+        )
+
+    def test_same_text_save_is_noop_and_keeps_color_distribution(self) -> None:
+        session = _multicolor_session()
+        before = deepcopy(session.color_distributions)
+        changed = session.apply_edit(0, session.translated_texts[0])
+        self.assertEqual(changed, [])
+        self.assertEqual(session.color_distributions, before)
+        self.assertEqual(session.revision, 0)
+
+
+class DraftProposalTestCase(unittest.TestCase):
+    def test_proposal_does_not_mutate_until_apply_and_can_undo(self) -> None:
+        session = _session("원문", 1, targets=["OLD"])
+        proposal = session.create_proposal(
+            0,
+            action="edit",
+            target="NEW",
+            instruction=None,
+            propagate_identical=False,
+            model="stub",
+            provider="anthropic",
+        )
+        self.assertEqual(session.translated_texts[0], "OLD")
+        self.assertEqual(session.revision, 0)
+
+        applied = session.apply_proposal(proposal.id, expected_revision=0)
+        self.assertEqual(applied.changed_indices, [0])
+        self.assertEqual(session.translated_texts[0], "NEW")
+        self.assertTrue(session.dirty)
+        self.assertEqual(session.revision, 1)
+
+        undone = session.undo(expected_revision=1)
+        self.assertEqual(undone, [0])
+        self.assertEqual(session.translated_texts[0], "OLD")
+        self.assertEqual(session.revision, 2)
+
+    def test_stale_proposal_is_rejected(self) -> None:
+        session = _session("원문", 1, targets=["OLD"])
+        proposal = session.create_proposal(
+            0,
+            action="edit",
+            target="NEW",
+            instruction=None,
+            propagate_identical=False,
+            model="stub",
+            provider="anthropic",
+        )
+        session.apply_edit(0, "OTHER")
+        with self.assertRaises(RuntimeError):
+            session.apply_proposal(proposal.id, expected_revision=0)
+
+    def test_partial_candidates_use_changed_phrase(self) -> None:
+        session = _session("원문", 3, targets=[
+            "Adjusted field drop rates",
+            "The field drop table",
+            "Unrelated text",
+        ])
+        proposal = session.create_proposal(
+            0,
+            action="edit",
+            target="Adjusted World Spawn rates",
+            instruction=None,
+            propagate_identical=False,
+            model="stub",
+            provider="anthropic",
+        )
+        self.assertEqual(len(proposal.partial_candidates), 1)
+        candidate = proposal.partial_candidates[0]
+        self.assertEqual(candidate["old_phrase"], "field drop")
+        self.assertEqual(candidate["new_phrase"], "World Spawn")
+        self.assertEqual(candidate["proposed_target"], "The World Spawn table")
 
 
 class PartialMatchTestCase(unittest.TestCase):

@@ -32,6 +32,7 @@
 ## Service Layer (`src/services/`)
 - `models.py`: Data models (`TranslationRequest`, `TranslationResult`, `TranslationProgress`, `TranslationStatus`, `TextFitMode`, `ProgressCallback`) + `MODEL_REGISTRY` (single source of truth for supported models / default model IDs)
 - `translation_service.py`: `TranslationService` class with `ServiceProgressTracker` for progress callbacks
+- `review_session.py`: Versioned review drafts, styled edit/retranslation proposals, undo/partial propagation, and pristine-source final rendering
 - `job_manager.py`: Async job management
   - `JobManager`: In-memory store (max 100 jobs, 1h TTL; periodic background cleanup started in the FastAPI lifespan)
   - `Job`: State tracking (pending/running/completed/failed/cancelled)
@@ -42,7 +43,7 @@
 ## Translation Chain (`src/chains/`)
 - `llm_factory.py`: LLM factory (OpenAI/Anthropic) with `InMemoryRateLimiter`
 - `translation_chain.py`: LangChain pipeline with structured output (`TranslationOutput`), batch API, tenacity retry. Fail-fast validation on missing results
-- `color_distribution_chain.py`: LLM-based simultaneous translation + semantic style mapping for multi-color paragraphs
+- `color_distribution_chain.py`: ID-addressed semantic style mapping for final translated strings
 - `context_manager.py`: Global presentation context for consistency
 - `summarization_chain.py`: Context/instructions generation (GPT-5.4 Mini / Haiku 4.5)
 

@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional, TypeVar
 
 from langchain_core.prompts import PromptTemplate
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from src.chains.llm_factory import Provider, create_llm
 from src.utils.config import get_settings
@@ -111,19 +111,15 @@ class ColoredTranslationOutput(BaseModel):
         return value
 
 
-class ColorDistributionOutput(BaseModel):
-    """Structured output: text segments for each paragraph's format groups."""
+class ColorDistributionItem(BaseModel):
+    """ID-addressed style mapping for one input paragraph."""
 
-    distributions: List[List[ColoredSegment]] = Field(
-        description="For each paragraph, a list of ColoredSegment objects. "
-        "Each segment has text and the group_index it belongs to. "
-        "Segments are in translation word order (may differ from original)."
-    )
+    item_id: int = Field(description="Stable zero-based ID shown in the input")
+    segments: List[ColoredSegment]
 
-    @field_validator("distributions", mode="before")
+    @field_validator("segments", mode="before")
     @classmethod
-    def parse_stringified_distributions(cls, value):
-        """Accept providers that return the array as a JSON-encoded string."""
+    def parse_stringified_segments(cls, value):
         if isinstance(value, str):
             try:
                 return json.loads(value)
@@ -132,27 +128,67 @@ class ColorDistributionOutput(BaseModel):
         return value
 
 
+class ColorDistributionOutput(BaseModel):
+    """ID-addressed output that cannot silently shift on a missing item."""
+
+    items: List[ColorDistributionItem] = Field(
+        description="One item per input paragraph, addressed by item_id."
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_legacy_distributions(cls, value):
+        """Read old provider/test payloads while emitting the safer schema."""
+        if isinstance(value, dict) and "items" not in value and "distributions" in value:
+            distributions = value["distributions"]
+            if isinstance(distributions, str):
+                try:
+                    distributions = json.loads(distributions)
+                except json.JSONDecodeError:
+                    return value
+            return {
+                "items": [
+                    {"item_id": index, "segments": segments}
+                    for index, segments in enumerate(distributions)
+                ]
+            }
+        return value
+
+    @property
+    def distributions(self) -> List[List[ColoredSegment]]:
+        return [item.segments for item in sorted(self.items, key=lambda item: item.item_id)]
+
+
 COLOR_DISTRIBUTION_PROMPT = """원본 텍스트의 서식 구간별 텍스트와 번역 결과가 주어집니다.
 번역된 텍스트를 원본 서식 구간의 의미에 맞게 분배하세요.
 
 예시:
 입력: 원본 구간(2개): [[0]"Revenue " | [1]"increased by 20%"], 번역: "매출이 20% 증가했습니다"
-출력: [{{"text": "매출이 ", "group_index": 0}}, {{"text": "20% 증가했습니다", "group_index": 1}}]
+출력: {{"item_id": 0, "segments": [{{"text": "매출이 ", "group_index": 0}}, {{"text": "20% 증가했습니다", "group_index": 1}}]}}
 
 입력: 원본 구간(3개): [[0]"Click " | [1]"here" | [2]" to continue"], 번역: "계속하려면 여기를 클릭하세요"
-출력: [{{"text": "계속하려면 ", "group_index": 2}}, {{"text": "여기", "group_index": 1}}, {{"text": "를 클릭하세요", "group_index": 0}}]
+출력: {{"item_id": 0, "segments": [{{"text": "계속하려면 ", "group_index": 2}}, {{"text": "여기", "group_index": 1}}, {{"text": "를 클릭하세요", "group_index": 0}}]}}
 
 입력: 원본 구간(2개): [[0]"Total: " | [1]"$1,500"], 번역: "합계: $1,500"
-출력: [{{"text": "합계: ", "group_index": 0}}, {{"text": "$1,500", "group_index": 1}}]
+출력: {{"item_id": 0, "segments": [{{"text": "합계: ", "group_index": 0}}, {{"text": "$1,500", "group_index": 1}}]}}
+
+입력: 원본 구간(2개): [[0]"조준 시 " | [1]"자동발사 기능"], 번역: "Auto-fire while aiming"
+출력: {{"item_id": 0, "segments": [{{"text": "Auto-fire", "group_index": 1}}, {{"text": " while aiming", "group_index": 0}}]}}
+
+입력: 원본 구간(2개): [[0]"이 접근 방식을 " | [1]"강력히 추천합니다"], 번역: "This approach is highly recommended"
+출력: {{"item_id": 0, "segments": [{{"text": "This approach is ", "group_index": 0}}, {{"text": "highly recommended", "group_index": 1}}]}}
 
 지금 분배할 항목:
 {items}
 
 규칙:
+- 각 입력의 id를 item_id에 그대로 반환하세요. 항목을 생략하거나 순서를 추측하지 마세요.
 - 각 세그먼트에 해당하는 원본 구간 번호(group_index)를 지정하세요.
 - 세그먼트 순서는 번역문의 어순을 따르세요 (원본과 달라도 됩니다).
 - 모든 세그먼트의 text를 이어 붙이면 번역 텍스트와 정확히 동일해야 합니다. 공백 하나도 빠지면 안 됩니다.
-- 원본 각 구간의 의미에 대응하는 번역 부분을 해당 group_index에 배치하세요.
+- 원본 각 구간을 짧게 독립 번역해 의미 대응을 먼저 판단한 뒤 group_index를 배치하세요. 원문의 앞/뒤 위치를 그대로 따라 배치하지 마세요.
+- 시간·조건 표현("~할 때", "~ 시")은 target의 when/while 구문에, 기능·제품·수치 명사구는 해당 target 명사구에 연결하세요.
+- 강조 구간은 가장 작고 명확한 대응 구문만 가져야 합니다. 주변 연결어를 강조 구간에 불필요하게 포함하지 마세요.
 - 대응하는 의미가 없는 구간은 빈 문자열("")로 채우세요.
 - 숫자, 기호, 고유명사 등 번역 후에도 동일한 텍스트는 반드시 해당 원본 구간에 배치하세요."""
 
@@ -213,7 +249,8 @@ def _format_items(
     for i, (groups, translation) in enumerate(zip(original_groups, translated_texts), start=1):
         group_display = " | ".join(f'[{j}]"{g}"' for j, g in enumerate(groups))
         lines.append(
-            f'{i}. 원본 구간({len(groups)}개): [{group_display}], 번역: "{translation}"'
+            f'{i}. id={i - 1}: 원본 구간({len(groups)}개): [{group_display}], '
+            f'번역: "{translation}"'
         )
     return "\n".join(lines)
 
@@ -351,7 +388,7 @@ def _invoke_batch(
     chain,
     original_groups: list[list[str]],
     translated_texts: list[str],
-) -> list[list[ColoredSegment]] | None:
+) -> dict[int, list[ColoredSegment]] | None:
     """Invoke a prebuilt chain for a single batch of paragraphs.
 
     Returns:
@@ -361,7 +398,13 @@ def _invoke_batch(
 
     try:
         result: ColorDistributionOutput = chain.invoke({"items": items_str})
-        return result.distributions
+        mapped: dict[int, list[ColoredSegment]] = {}
+        for item in result.items:
+            if item.item_id in mapped or not (0 <= item.item_id < len(original_groups)):
+                LOGGER.warning("Invalid or duplicate color item_id=%s", item.item_id)
+                return None
+            mapped[item.item_id] = item.segments
+        return mapped
     except Exception:
         LOGGER.exception("Color distribution chain failed for batch of %d", len(original_groups))
         return None
@@ -433,9 +476,14 @@ def distribute_colors(
         batch_groups = original_groups[start:end]
         batch_result = results_by_start.get(start)
 
-        if batch_result is not None and len(batch_result) == len(batch_groups):
-            for i, dist in enumerate(batch_result):
-                all_distributions[start + i] = dist
+        # Compatibility for injected/mocked legacy batch helpers. Real model
+        # responses use the ID-addressed dictionary above.
+        if isinstance(batch_result, list):
+            batch_result = {idx: value for idx, value in enumerate(batch_result)}
+
+        if batch_result is not None and set(batch_result) == set(range(len(batch_groups))):
+            for local_id, dist in batch_result.items():
+                all_distributions[start + local_id] = dist
             any_success = True
         else:
             LOGGER.warning(

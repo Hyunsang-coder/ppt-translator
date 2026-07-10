@@ -10,7 +10,7 @@ import { LogViewer } from "./LogViewer";
 import { ReviewPanel } from "./ReviewPanel";
 import { useTranslation } from "@/hooks/useTranslation";
 import { useConfig } from "@/hooks/useConfig";
-import { Play, XCircle, Download, RefreshCw, AlertCircle, ClipboardCheck, CheckCircle2, Circle } from "lucide-react";
+import { Play, XCircle, RefreshCw, AlertCircle, ClipboardCheck, CheckCircle2, Circle } from "lucide-react";
 
 export function TranslationForm() {
   const [startTime, setStartTime] = useState<number | null>(null);
@@ -31,7 +31,6 @@ export function TranslationForm() {
     isCompleted,
     canStart,
     canCancel,
-    canDownload,
     setPptFile,
     setGlossaryFile,
     updateSettings,
@@ -172,15 +171,6 @@ export function TranslationForm() {
                   >
                     <ClipboardCheck className="w-4 h-4" />
                     검토 &amp; 수정
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={downloadResult}
-                    disabled={!canDownload}
-                    className="flex-1 gap-2"
-                  >
-                    <Download className="w-4 h-4" />
-                    검토 없이 저장
                   </Button>
                   <Button
                     variant="outline"

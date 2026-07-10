@@ -8,6 +8,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from pptx import Presentation
+from pptx.util import Inches
 
 from api import (
     app,
@@ -16,7 +18,9 @@ from api import (
     SUPPORTED_MODELS,
     generate_output_filename,
 )
-from src.services.job_manager import JobType
+from src.core.ppt_parser import PPTParser
+from src.services.job_manager import JobState, JobType, get_job_manager
+from src.services.review_session import ReviewSession
 from src.utils.config import get_settings
 
 
@@ -51,6 +55,36 @@ def sample_pptx_bytes():
 </Relationships>""")
     buffer.seek(0)
     return buffer.read()
+
+
+@pytest.fixture
+def review_job():
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    box = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(5), Inches(1))
+    box.text_frame.text = "원문"
+    source = io.BytesIO()
+    presentation.save(source)
+    source_bytes = source.getvalue()
+    paragraphs, parsed = PPTParser().extract_paragraphs(io.BytesIO(source_bytes))
+    session = ReviewSession(
+        presentation=parsed,
+        paragraphs=paragraphs,
+        translated_texts=["OLD"],
+        findings=[],
+        source_lang="한국어",
+        target_lang="영어",
+        model="stub",
+        source_pptx=source_bytes,
+    )
+    manager = get_job_manager()
+    job = manager.create_job(JobType.TRANSLATION)
+    job.state = JobState.COMPLETED
+    job.review_session = session
+    job.output_file = io.BytesIO(b"published-before-review")
+    job.output_filename = "review.pptx"
+    yield job
+    manager._jobs.pop(job.id, None)
 
 
 class TestFilenameGeneration:
@@ -307,6 +341,69 @@ class TestExtractionEndpoint:
         data = response.json()
         assert "markdown" in data
         assert "slide_count" in data
+
+
+class TestReviewEndpoints:
+    def test_proposal_is_previewed_then_staged_then_committed(self, client, review_job):
+        response = client.get(f"/api/v1/jobs/{review_job.id}/fragments")
+        assert response.status_code == 200
+        assert response.json()["revision"] == 0
+        assert response.json()["dirty"] is False
+
+        response = client.post(
+            f"/api/v1/jobs/{review_job.id}/fragments/0/proposals",
+            json={"action": "edit", "target": "NEW"},
+        )
+        assert response.status_code == 200
+        proposal = response.json()
+        assert proposal["old_target"] == "OLD"
+        assert proposal["target"] == "NEW"
+        assert review_job.review_session.translated_texts[0] == "OLD"
+
+        with patch("api._record_edit"):
+            response = client.post(
+                f"/api/v1/jobs/{review_job.id}/proposals/{proposal['proposal_id']}/apply",
+                json={"expected_revision": 0},
+            )
+        assert response.status_code == 200
+        assert response.json()["revision"] == 1
+        assert review_job.review_session.translated_texts[0] == "NEW"
+        # Staging never changes the published download.
+        assert review_job.output_file.getvalue() == b"published-before-review"
+
+        response = client.post(
+            f"/api/v1/jobs/{review_job.id}/review/commit",
+            json={"expected_revision": 1},
+        )
+        assert response.status_code == 200
+        assert response.json()["dirty"] is False
+        rendered = Presentation(review_job.output_file)
+        assert rendered.slides[0].shapes[0].text == "NEW"
+
+    def test_stale_apply_returns_conflict(self, client, review_job):
+        response = client.post(
+            f"/api/v1/jobs/{review_job.id}/fragments/0/proposals",
+            json={"action": "edit", "target": "NEW"},
+        )
+        proposal_id = response.json()["proposal_id"]
+        review_job.review_session.apply_edit(0, "OTHER")
+        response = client.post(
+            f"/api/v1/jobs/{review_job.id}/proposals/{proposal_id}/apply",
+            json={"expected_revision": 0},
+        )
+        assert response.status_code == 409
+
+    def test_failed_commit_keeps_published_file(self, client, review_job):
+        review_job.review_session.apply_edit(0, "NEW")
+        before = review_job.output_file.getvalue()
+        with patch.object(review_job.review_session, "render", side_effect=RuntimeError("boom")):
+            response = client.post(
+                f"/api/v1/jobs/{review_job.id}/review/commit",
+                json={"expected_revision": 1},
+            )
+        assert response.status_code == 500
+        assert review_job.output_file.getvalue() == before
+        assert review_job.review_session.dirty is True
 
 
 class TestJobManager:

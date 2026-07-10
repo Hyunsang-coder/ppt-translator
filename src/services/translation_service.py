@@ -707,6 +707,10 @@ class TranslationService:
         )
 
         parser = PPTParser()
+        # Keep pristine bytes for the transactional review session.  Review
+        # renders must always start here, never from the live Presentation that
+        # the initial writer mutates below.
+        source_pptx = request.ppt_file.getvalue()
         request.ppt_file.seek(0)
         paragraphs, presentation = parser.extract_paragraphs(
             request.ppt_file, translate_notes=request.translate_notes
@@ -917,9 +921,50 @@ class TranslationService:
                 for text in translated_texts
             ]
 
-        # Phase 9.7: Deterministic consistency sweep (WP-C3, token-0, always on).
-        # Runs on the full aligned lists; findings flow to the result and are
-        # recorded by the caller (which owns job_id / doc_ref). Never fatal.
+        # C-1: skip the second expensive LLM stage if cancelled mid-run.
+        if request.cancel_event is not None and request.cancel_event.is_set():
+            raise TranslationCancelled("Translation cancelled before color pass")
+
+        # Phase 9.5: Map the final translation onto source style groups.
+        # This deliberately does not translate the paragraph a second time:
+        # double translation broke repetition consistency and could overwrite
+        # glossary post-processing after the quality sweep had already run.
+        self._notify_progress(
+            TranslationProgress(
+                status=TranslationStatus.FIXING_COLORS,
+                percent=80,
+                message="부분 색상·서식 의미 매핑 중...",
+            )
+        )
+        color_distributions = self._fix_color_distributions(
+            paragraphs,
+            translated_texts,
+            provider=request.provider,
+            # Partial-word colour placement is a semantic alignment task. Use
+            # the user-selected translation model; the old lightweight model
+            # produced structurally valid but semantically wrong highlights.
+            model_name=request.model,
+        )
+        if color_distributions:
+            self._notify_progress(
+                TranslationProgress(
+                    status=TranslationStatus.FIXING_COLORS,
+                    percent=90,
+                    message=f"부분 색상·서식 {len(color_distributions)}개 의미 매핑 완료",
+                )
+            )
+        else:
+            self._notify_progress(
+                TranslationProgress(
+                    status=TranslationStatus.FIXING_COLORS,
+                    percent=90,
+                    message="다색 문단 없음 또는 매핑 실패 — 위치 기반 색상 적용 생략",
+                )
+            )
+
+        # Phase 9.7: run QA against the actual final text that will be written.
+        # Previously this ran before the colored-paragraph stage, leaving review
+        # badges stale whenever that stage changed a translation.
         sweep_findings: list = []
         try:
             sweep_findings = run_sweep(
@@ -934,49 +979,6 @@ class TranslationService:
             )
         except Exception:  # pylint: disable=broad-except
             LOGGER.exception("Consistency sweep failed; continuing without findings.")
-
-        # C-1: skip the second expensive LLM stage if cancelled mid-run.
-        if request.cancel_event is not None and request.cancel_event.is_set():
-            raise TranslationCancelled("Translation cancelled before color pass")
-
-        # Phase 9.5: Translate and style-map multi-color paragraphs
-        self._notify_progress(
-            TranslationProgress(
-                status=TranslationStatus.FIXING_COLORS,
-                percent=80,
-                message="다색 문단 자연 번역 및 서식 매핑 중...",
-            )
-        )
-        color_distributions = self._translate_colored_paragraphs_with_segments(
-            paragraphs,
-            translated_texts,
-            source_lang=source_language,
-            target_lang=target_language,
-            provider=request.provider,
-            model_name=request.model,
-            ppt_context=ppt_context,
-            context=request.context,
-            instructions=request.instructions,
-            glossary_terms=glossary_terms,
-            length_limit=request.length_limit,
-            team_rules=team_rules_text,
-        )
-        if color_distributions:
-            self._notify_progress(
-                TranslationProgress(
-                    status=TranslationStatus.FIXING_COLORS,
-                    percent=90,
-                    message=f"다색 문단 {len(color_distributions)}개 자연 번역 및 서식 매핑 완료",
-                )
-            )
-        else:
-            self._notify_progress(
-                TranslationProgress(
-                    status=TranslationStatus.FIXING_COLORS,
-                    percent=90,
-                    message="다색 문단 없음 또는 매핑 실패 — 위치 기반 색상 적용 생략",
-                )
-            )
 
         # Phase 10: Write output
         self._notify_progress(
@@ -1042,9 +1044,20 @@ class TranslationService:
                 min_font_ratio=request.min_font_ratio,
                 ppt_context=ppt_context,
                 glossary_terms=glossary_terms,
+                glossary=glossary,
+                context=request.context,
+                instructions=request.instructions,
+                team_rules=team_rules_text,
+                locked_terms=RulesLoader.locked_terms(
+                    request.team_rules, target_language
+                ),
                 color_distributions=dict(color_distributions or {}),
                 fit_snapshot=fit_snapshot,
+                source_pptx=source_pptx,
             )
+            # Recompute once through the review session so geometry-derived
+            # fit.overflow findings are included in the initial review list.
+            sweep_findings = review_session.run_final_sweep()
         except Exception:  # pylint: disable=broad-except
             LOGGER.exception("Failed to build review session; review disabled for job.")
 

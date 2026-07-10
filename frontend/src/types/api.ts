@@ -61,6 +61,15 @@ export interface FragmentFinding {
   related_location: Record<string, unknown> | null;
 }
 
+export interface StyleSegment {
+  text: string;
+  group_index: number;
+  color: string | null;
+  scheme: string | null;
+  bold: boolean;
+  italic: boolean;
+}
+
 export interface FragmentItem {
   index: number;
   slide: number;
@@ -74,12 +83,17 @@ export interface FragmentItem {
   length_budget: number | null;
   findings: FragmentFinding[];
   edited: boolean;
+  style_segments: StyleSegment[];
+  style_status: "single_style" | "preserved" | "partial" | "dropped";
 }
 
 export interface FragmentsResponse {
   job_id: string;
   total: number;
   fragments: FragmentItem[];
+  revision: number;
+  committed_revision: number;
+  dirty: boolean;
 }
 
 export interface PartialCandidate {
@@ -87,6 +101,9 @@ export interface PartialCandidate {
   slide: number;
   is_note: boolean;
   target: string;
+  proposed_target: string;
+  old_phrase: string;
+  new_phrase: string;
 }
 
 export interface FragmentEditRequest {
@@ -102,6 +119,44 @@ export interface FragmentEditResponse {
   target: string;
   changed_indices: number[];
   partial_candidates: PartialCandidate[];
+  revision: number;
+}
+
+export interface FragmentProposalRequest {
+  action: "edit" | "retranslate";
+  target?: string;
+  instruction?: string;
+  propagate_identical?: boolean;
+}
+
+export interface FragmentProposalResponse {
+  proposal_id: string;
+  index: number;
+  base_revision: number;
+  old_target: string;
+  target: string;
+  changed_indices: number[];
+  style_segments: StyleSegment[];
+  style_status: string;
+  partial_candidates: PartialCandidate[];
+  over_budget: boolean;
+}
+
+export interface ApplyProposalResponse {
+  index: number;
+  target: string;
+  changed_indices: number[];
+  partial_candidates: PartialCandidate[];
+  revision: number;
+  dirty: boolean;
+}
+
+export interface ReviewMutationResponse {
+  changed_indices: number[];
+  revision: number;
+  committed_revision: number;
+  dirty: boolean;
+  findings_count: number;
 }
 
 export interface SSEEvent {

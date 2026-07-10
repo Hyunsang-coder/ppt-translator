@@ -195,6 +195,17 @@ class FragmentFinding(BaseModel):
     related_location: Optional[Dict[str, Any]] = None
 
 
+class StyleSegment(BaseModel):
+    """One target span carrying a source run style."""
+
+    text: str
+    group_index: int
+    color: Optional[str] = None
+    scheme: Optional[str] = None
+    bold: bool = False
+    italic: bool = False
+
+
 class FragmentItem(BaseModel):
     """One reviewable fragment (source/target + badges)."""
 
@@ -210,6 +221,8 @@ class FragmentItem(BaseModel):
     length_budget: Optional[int] = None
     findings: List[FragmentFinding] = []
     edited: bool = False
+    style_segments: List[StyleSegment] = []
+    style_status: Literal["single_style", "preserved", "partial", "dropped"] = "single_style"
 
 
 class FragmentsResponse(BaseModel):
@@ -218,6 +231,9 @@ class FragmentsResponse(BaseModel):
     job_id: str
     total: int
     fragments: List[FragmentItem]
+    revision: int = 0
+    committed_revision: int = 0
+    dirty: bool = False
 
 
 class FragmentEditRequest(BaseModel):
@@ -241,6 +257,61 @@ class FragmentEditResponse(BaseModel):
     target: str
     changed_indices: List[int]
     partial_candidates: List[Dict[str, Any]] = []
+    revision: int = 0
+
+
+class FragmentProposalRequest(BaseModel):
+    """Generate a direct-edit or retranslation candidate without applying it."""
+
+    action: Literal["edit", "retranslate"]
+    target: Optional[str] = None
+    instruction: Optional[str] = None
+    propagate_identical: bool = False
+
+
+class FragmentProposalResponse(BaseModel):
+    proposal_id: str
+    index: int
+    base_revision: int
+    old_target: str
+    target: str
+    changed_indices: List[int]
+    style_segments: List[StyleSegment]
+    style_status: str
+    partial_candidates: List[Dict[str, Any]] = []
+    over_budget: bool = False
+
+
+class ApplyProposalRequest(BaseModel):
+    expected_revision: int
+
+
+class ApplyProposalResponse(BaseModel):
+    index: int
+    target: str
+    changed_indices: List[int]
+    partial_candidates: List[Dict[str, Any]] = []
+    revision: int
+    dirty: bool
+
+
+class PartialApplyRequest(BaseModel):
+    indices: List[int]
+    old_phrase: str
+    new_phrase: str
+    expected_revision: int
+
+
+class ReviewRevisionRequest(BaseModel):
+    expected_revision: int
+
+
+class ReviewMutationResponse(BaseModel):
+    changed_indices: List[int] = []
+    revision: int
+    committed_revision: int
+    dirty: bool
+    findings_count: int = 0
 
 
 class ExtractionResponse(BaseModel):
@@ -922,12 +993,21 @@ async def get_job_fragments(job_id: str) -> FragmentsResponse:
                 source=view.source,
                 target=view.target,
                 repeat_count=view.repeat_count,
-                length_budget=session.length_budget(view.index),
+                length_budget=view.length_budget,
                 findings=[FragmentFinding(**f) for f in view.findings],
                 edited=view.edited,
+                style_segments=[StyleSegment(**segment) for segment in view.style_segments],
+                style_status=view.style_status,
             )
         )
-    return FragmentsResponse(job_id=job_id, total=len(items), fragments=items)
+    return FragmentsResponse(
+        job_id=job_id,
+        total=len(items),
+        fragments=items,
+        revision=session.revision,
+        committed_revision=session.committed_revision,
+        dirty=session.dirty,
+    )
 
 
 @app.post("/api/v1/jobs/{job_id}/fragments/{index}", response_model=FragmentEditResponse)
@@ -936,9 +1016,8 @@ async def edit_job_fragment(
 ) -> FragmentEditResponse:
     """Edit, re-translate, or ignore a single fragment (WP-C5).
 
-    Mutates the in-memory review session, re-renders the output pptx so the
-    download reflects the edit, and records the action as a quality record
-    (accepted with corrected triplet for edits, rejected for ignores).
+    Compatibility endpoint that stages an edit in the review draft. New clients
+    should use the proposal endpoints so the user can compare before applying.
     """
     job_manager = get_job_manager()
     job = job_manager.get_job(job_id)
@@ -960,61 +1039,43 @@ async def edit_job_fragment(
 
     # --- ignore: dismiss a finding, record as rejected -------------------
     if body.action == "ignore":
+        session.dismiss_finding(index, body.finding_type or "")
         _record_edit(
             recorder, session, index, source_text, original_target,
             corrected=None, disposition="rejected", doc_ref=doc_ref,
             finding_type=body.finding_type,
         )
         return FragmentEditResponse(
-            index=index, target=original_target, changed_indices=[]
+            index=index, target=original_target, changed_indices=[],
+            revision=session.revision,
         )
 
-    # C-2: serialize edit + render per job. apply_edit and session.render both
-    # mutate the shared live Presentation / paragraph run structure, and
-    # retranslate_fragment reads those runs while re-mapping colors; overlapping
-    # requests could corrupt the XML or interleave renders. The lock keeps one
-    # edit's mutate+render atomic.
+    # Compatibility path: create and immediately stage a server-side proposal.
+    # The published output remains unchanged until /review/commit.
     async with job.review_lock:
-        # --- edit / retranslate: produce the new target ------------------
-        color_segments: Optional[list] = None
-        if body.action == "retranslate":
-            loop = asyncio.get_running_loop()
-            try:
-                new_target, color_segments = await loop.run_in_executor(
-                    None,
-                    functools.partial(
-                        session.retranslate_fragment,
-                        index,
-                        body.instruction,
-                        model=session.model or DEFAULT_TRANSLATION_MODEL,
-                        provider=session.provider,
-                    ),
-                )
-            except Exception as exc:
-                LOGGER.exception("Fragment re-translation failed: %s", exc)
-                raise HTTPException(status_code=500, detail="재번역에 실패했습니다.")
-        else:  # edit
-            if body.target is None:
-                raise HTTPException(status_code=400, detail="edit action requires 'target'")
-            new_target = body.target
-
-        changed = session.apply_edit(
-            index, new_target, propagate_identical=body.propagate_identical
-        )
-        # apply_edit dropped any stale color segmentation for `index`; re-seed it
-        # with the freshly re-mapped segments (retranslate only). Identical
-        # propagated fragments intentionally stay single-color — their run
-        # structure may differ from this fragment's.
-        session.set_color_distribution(index, color_segments)
-
-        # Re-render the output pptx in place so the download reflects the edit.
         try:
             loop = asyncio.get_running_loop()
-            new_buffer = await loop.run_in_executor(None, session.render)
-            job.output_file = new_buffer
+            proposal = await loop.run_in_executor(
+                None,
+                functools.partial(
+                    session.create_proposal,
+                    index,
+                    action=body.action,
+                    target=body.target,
+                    instruction=body.instruction,
+                    propagate_identical=body.propagate_identical,
+                    model=session.model or DEFAULT_TRANSLATION_MODEL,
+                    provider=session.provider,
+                ),
+            )
+            session.apply_proposal(proposal.id, session.revision)
+            session.run_final_sweep()
         except Exception as exc:
-            LOGGER.exception("Failed to re-render pptx after edit: %s", exc)
-            raise HTTPException(status_code=500, detail="수정 반영에 실패했습니다.")
+            LOGGER.exception("Failed to stage review edit: %s", exc)
+            raise HTTPException(status_code=500, detail="수정 준비에 실패했습니다.")
+
+        new_target = proposal.target
+        changed = proposal.changed_indices
 
     # Record the accepted edit with the corrected triplet.
     _record_edit(
@@ -1023,14 +1084,230 @@ async def edit_job_fragment(
         propagated=len(changed) - 1,
     )
 
-    # Partial-match candidates: other fragments containing the edited phrase.
-    partial = session.partial_match_candidates(index, new_target)
+    partial = proposal.partial_candidates
 
     return FragmentEditResponse(
         index=index,
         target=new_target,
         changed_indices=changed,
         partial_candidates=partial,
+        revision=session.revision,
+    )
+
+
+@app.post(
+    "/api/v1/jobs/{job_id}/fragments/{index}/proposals",
+    response_model=FragmentProposalResponse,
+)
+async def propose_job_fragment_edit(
+    job_id: str, index: int, body: FragmentProposalRequest
+) -> FragmentProposalResponse:
+    """Generate a review candidate without mutating the draft."""
+    job = get_job_manager().get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.state != JobState.COMPLETED or job.review_session is None:
+        raise HTTPException(status_code=400, detail="Job has no editable review session")
+    session = job.review_session
+    if not (0 <= index < len(session.paragraphs)):
+        raise HTTPException(status_code=400, detail="Fragment index out of range")
+    if body.action == "edit" and body.target is None:
+        raise HTTPException(status_code=400, detail="edit proposal requires target")
+
+    async with job.review_lock:
+        try:
+            loop = asyncio.get_running_loop()
+            proposal = await loop.run_in_executor(
+                None,
+                functools.partial(
+                    session.create_proposal,
+                    index,
+                    action=body.action,
+                    target=body.target,
+                    instruction=body.instruction,
+                    propagate_identical=body.propagate_identical,
+                    model=session.model or DEFAULT_TRANSLATION_MODEL,
+                    provider=session.provider,
+                ),
+            )
+        except Exception as exc:
+            LOGGER.exception("Fragment proposal failed: %s", exc)
+            raise HTTPException(status_code=500, detail="수정 후보 생성에 실패했습니다.")
+
+    return FragmentProposalResponse(
+        proposal_id=proposal.id,
+        index=proposal.index,
+        base_revision=proposal.base_revision,
+        old_target=proposal.old_target,
+        target=proposal.target,
+        changed_indices=proposal.changed_indices,
+        style_segments=[StyleSegment(**segment) for segment in proposal.style_segments],
+        style_status=proposal.style_status,
+        partial_candidates=proposal.partial_candidates,
+        over_budget=proposal.over_budget,
+    )
+
+
+@app.post(
+    "/api/v1/jobs/{job_id}/proposals/{proposal_id}/apply",
+    response_model=ApplyProposalResponse,
+)
+async def apply_job_fragment_proposal(
+    job_id: str, proposal_id: str, body: ApplyProposalRequest
+) -> ApplyProposalResponse:
+    """Stage a previously previewed candidate using optimistic revision checks."""
+    job = get_job_manager().get_job(job_id)
+    if job is None or job.review_session is None:
+        raise HTTPException(status_code=404, detail="Review session not found")
+    session = job.review_session
+    async with job.review_lock:
+        try:
+            proposal = session.apply_proposal(proposal_id, body.expected_revision)
+            session.run_final_sweep()
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Proposal not found")
+        except RuntimeError:
+            raise HTTPException(status_code=409, detail="검토 내용이 변경되었습니다. 다시 확인해주세요.")
+
+    index = proposal.index
+    _record_edit(
+        QualityRecorder(quality_dir=get_settings().quality_dir),
+        session,
+        index,
+        session.paragraphs[index].original_text or "",
+        proposal.old_target,
+        corrected=proposal.target,
+        disposition="accepted",
+        doc_ref=f"deck:{job.output_filename or 'deck.pptx'}",
+        propagated=max(0, len(proposal.changed_indices) - 1),
+    )
+    return ApplyProposalResponse(
+        index=index,
+        target=proposal.target,
+        changed_indices=proposal.changed_indices,
+        partial_candidates=proposal.partial_candidates,
+        revision=session.revision,
+        dirty=session.dirty,
+    )
+
+
+@app.post(
+    "/api/v1/jobs/{job_id}/review/partial",
+    response_model=ReviewMutationResponse,
+)
+async def apply_review_partial_candidates(
+    job_id: str, body: PartialApplyRequest
+) -> ReviewMutationResponse:
+    """Apply a reviewed phrase replacement to selected candidate fragments."""
+    job = get_job_manager().get_job(job_id)
+    if job is None or job.review_session is None:
+        raise HTTPException(status_code=404, detail="Review session not found")
+    session = job.review_session
+    async with job.review_lock:
+        previous_targets = {
+            index: session.translated_texts[index]
+            for index in body.indices
+            if 0 <= index < len(session.translated_texts)
+        }
+        try:
+            loop = asyncio.get_running_loop()
+            changed = await loop.run_in_executor(
+                None,
+                functools.partial(
+                    session.apply_partial_candidates,
+                    body.indices,
+                    old_phrase=body.old_phrase,
+                    new_phrase=body.new_phrase,
+                    expected_revision=body.expected_revision,
+                    model=session.model or DEFAULT_TRANSLATION_MODEL,
+                    provider=session.provider,
+                ),
+            )
+            await loop.run_in_executor(None, session.run_final_sweep)
+        except RuntimeError:
+            raise HTTPException(status_code=409, detail="검토 내용이 변경되었습니다. 다시 확인해주세요.")
+    recorder = QualityRecorder(quality_dir=get_settings().quality_dir)
+    for index in changed:
+        _record_edit(
+            recorder,
+            session,
+            index,
+            session.paragraphs[index].original_text or "",
+            previous_targets[index],
+            corrected=session.translated_texts[index],
+            disposition="accepted",
+            doc_ref=f"deck:{job.output_filename or 'deck.pptx'}",
+        )
+    return ReviewMutationResponse(
+        changed_indices=changed,
+        revision=session.revision,
+        committed_revision=session.committed_revision,
+        dirty=session.dirty,
+    )
+
+
+@app.post(
+    "/api/v1/jobs/{job_id}/review/undo",
+    response_model=ReviewMutationResponse,
+)
+async def undo_review_change(
+    job_id: str, body: ReviewRevisionRequest
+) -> ReviewMutationResponse:
+    job = get_job_manager().get_job(job_id)
+    if job is None or job.review_session is None:
+        raise HTTPException(status_code=404, detail="Review session not found")
+    session = job.review_session
+    async with job.review_lock:
+        try:
+            changed = session.undo(body.expected_revision)
+            session.run_final_sweep()
+        except RuntimeError:
+            raise HTTPException(status_code=409, detail="검토 내용이 변경되었습니다. 다시 확인해주세요.")
+    return ReviewMutationResponse(
+        changed_indices=changed,
+        revision=session.revision,
+        committed_revision=session.committed_revision,
+        dirty=session.dirty,
+    )
+
+
+@app.post(
+    "/api/v1/jobs/{job_id}/review/commit",
+    response_model=ReviewMutationResponse,
+)
+async def commit_review_draft(
+    job_id: str, body: ReviewRevisionRequest
+) -> ReviewMutationResponse:
+    """Atomically render and publish the current review draft."""
+    job = get_job_manager().get_job(job_id)
+    if job is None or job.review_session is None:
+        raise HTTPException(status_code=404, detail="Review session not found")
+    session = job.review_session
+    async with job.review_lock:
+        if body.expected_revision != session.revision:
+            raise HTTPException(status_code=409, detail="검토 내용이 변경되었습니다. 다시 확인해주세요.")
+
+        def _render_and_check():
+            buffer = session.render()
+            findings = session.run_final_sweep()
+            return buffer, findings
+
+        try:
+            loop = asyncio.get_running_loop()
+            new_buffer, findings = await loop.run_in_executor(None, _render_and_check)
+        except Exception as exc:
+            LOGGER.exception("Review commit failed: %s", exc)
+            raise HTTPException(status_code=500, detail="최종 반영에 실패했습니다. 기존 파일은 유지됩니다.")
+
+        # Publish only after render + QA both succeeded.
+        job.output_file = new_buffer
+        session.mark_committed()
+
+    return ReviewMutationResponse(
+        revision=session.revision,
+        committed_revision=session.committed_revision,
+        dirty=session.dirty,
+        findings_count=len(findings),
     )
 
 

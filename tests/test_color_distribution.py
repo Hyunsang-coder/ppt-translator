@@ -1026,18 +1026,18 @@ class TranslateColoredParagraphsServiceTestCase(unittest.TestCase):
         self.assertEqual(result[0][0].group_index, 1)
 
     @patch("src.services.translation_service.PPTWriter")
-    @patch("src.services.translation_service.TranslationService._translate_colored_paragraphs_with_segments")
+    @patch("src.services.translation_service.TranslationService._fix_color_distributions")
     @patch("src.services.translation_service.translate_with_progress")
     @patch("src.services.translation_service.create_translation_chain")
     @patch("src.services.translation_service.ContextManager")
     @patch("src.services.translation_service.PPTParser")
-    def test_execute_uses_selected_model_for_colored_translation(
+    def test_execute_uses_selected_model_for_color_mapping(
         self,
         mock_parser_cls,
         mock_context_cls,
         mock_create_chain,
         mock_translate_progress,
-        mock_translate_colored,
+        mock_fix_colors,
         mock_writer_cls,
     ) -> None:
         from src.services.models import TranslationRequest
@@ -1057,7 +1057,7 @@ class TranslateColoredParagraphsServiceTestCase(unittest.TestCase):
         mock_translate_progress.return_value = [
             "An attack-focused skill that activates instantly with a short cooldown"
         ]
-        mock_translate_colored.return_value = None
+        mock_fix_colors.return_value = None
         mock_writer_cls.return_value.apply_translations.return_value = BytesIO(b"pptx")
 
         settings = types.SimpleNamespace(
@@ -1082,9 +1082,9 @@ class TranslateColoredParagraphsServiceTestCase(unittest.TestCase):
         result = service.translate(request)
 
         self.assertTrue(result.success)
-        mock_translate_colored.assert_called_once()
+        mock_fix_colors.assert_called_once()
         self.assertEqual(
-            mock_translate_colored.call_args.kwargs["model_name"],
+            mock_fix_colors.call_args.kwargs["model_name"],
             "gpt-5.5-2026-04-23",
         )
 
