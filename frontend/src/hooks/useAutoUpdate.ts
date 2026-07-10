@@ -81,6 +81,7 @@ export function useAutoUpdate() {
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
+    let sidecarStopped = false;
 
     setState((prev) => ({ ...prev, downloading: true, progress: 0, error: null }));
 
@@ -88,7 +89,9 @@ export function useAutoUpdate() {
       let contentLength = 0;
       let downloaded = 0;
 
-      await state.update.downloadAndInstall((event) => {
+      // Keep the sidecar available while the package downloads. It is stopped
+      // only for the short install window, after all bytes are on disk.
+      await state.update.download((event) => {
         if (controller.signal.aborted) {
           throw new Error("Download cancelled");
         }
@@ -112,9 +115,33 @@ export function useAutoUpdate() {
         }
       });
 
+      if (controller.signal.aborted) {
+        throw new Error("Download cancelled");
+      }
+
+      // Windows cannot overwrite native modules loaded by the Python sidecar.
+      // The Rust command kills it and waits for the process handle to signal,
+      // guaranteeing that files such as PIL/_imaging*.pyd are unlocked.
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("prepare_for_update");
+      sidecarStopped = true;
+
+      await state.update.install();
+
       const { relaunch } = await import("@tauri-apps/plugin-process");
       await relaunch();
     } catch (error) {
+      // If download or installation fails after the sidecar was stopped, make
+      // the current app usable again without requiring a manual restart.
+      if (sidecarStopped) {
+        try {
+          const { invoke } = await import("@tauri-apps/api/core");
+          await invoke("restart_sidecar");
+        } catch (restartError) {
+          console.error("[updater] failed to restart sidecar", restartError);
+        }
+      }
+
       if (controller.signal.aborted) {
         setState((prev) => ({
           ...prev,

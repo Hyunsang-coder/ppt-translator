@@ -49,6 +49,11 @@
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": true,
+    "windows": {
+      "nsis": {
+        "installerHooks": "installer-hooks.nsh"
+      }
+    },
     "macOS": {
       "entitlements": "entitlements.plist"
     },

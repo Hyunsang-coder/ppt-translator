@@ -35,6 +35,13 @@ The desktop app checks GitHub Releases for a newer version on launch (and from *
 
 The app verifies updates against the public key in `tauri.conf.json` → `plugins.updater.pubkey`.
 
+On Windows, the updater downloads the package first, then calls
+`prepare_for_update` to stop and wait for the bundled Python sidecar before
+NSIS copies files. `src-tauri/installer-hooks.nsh` also terminates orphaned
+sidecars for manual upgrades and uninstalls. Keep this hook configured under
+`bundle.windows.nsis.installerHooks`; removing it can make native modules such
+as Pillow's `_imaging*.pyd` remain locked during an upgrade.
+
 > Auto-update only activates from **0.1.6 onward** (the first build containing the updater plugin). A 0.1.5 install cannot self-detect 0.1.6; users must download 0.1.6 manually once, after which 0.1.6 → 0.1.7 updates in-app.
 
 ### Updater signing key (one-time)

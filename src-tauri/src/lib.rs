@@ -57,6 +57,33 @@ struct SidecarState {
     child: Mutex<Option<Child>>,
 }
 
+/// Stop the sidecar and wait until Windows has released every loaded native
+/// module. Waiting is essential before an update overwrites the PyInstaller
+/// bundle: `Child::kill` only requests termination and can otherwise race the
+/// NSIS installer copying files such as Pillow's `_imaging*.pyd`.
+fn stop_sidecar(state: &SidecarState) -> Result<(), AppError> {
+    *state.port.lock().unwrap() = None;
+
+    if let Some(mut child) = state.child.lock().unwrap().take() {
+        let is_running = child
+            .try_wait()
+            .map_err(|e| AppError::Sidecar(format!("failed to inspect sidecar: {e}")))?
+            .is_none();
+
+        if is_running {
+            child
+                .kill()
+                .map_err(|e| AppError::Sidecar(format!("failed to stop sidecar: {e}")))?;
+        }
+
+        child
+            .wait()
+            .map_err(|e| AppError::Sidecar(format!("failed to wait for sidecar: {e}")))?;
+    }
+
+    Ok(())
+}
+
 fn keyring_entry(provider: &str) -> Result<keyring::Entry, AppError> {
     if env_var_for(provider).is_none() {
         return Err(AppError::UnknownProvider(provider.to_string()));
@@ -109,14 +136,7 @@ fn read_key(provider: &str) -> Option<String> {
 /// caller can translate immediately afterwards.
 #[tauri::command]
 fn restart_sidecar(app: tauri::AppHandle) -> Result<(), AppError> {
-    {
-        let state = app.state::<SidecarState>();
-        if let Some(mut child) = state.child.lock().unwrap().take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-        *state.port.lock().unwrap() = None;
-    }
+    stop_sidecar(&app.state::<SidecarState>())?;
     spawn_sidecar(&app)?;
 
     // Wait for the stdout reader thread to record the new port.
@@ -129,6 +149,17 @@ fn restart_sidecar(app: tauri::AppHandle) -> Result<(), AppError> {
     Err(AppError::Sidecar(
         "sidecar did not report a port after restart".into(),
     ))
+}
+
+/// Fully stop the sidecar immediately before installing a downloaded update.
+/// The frontend calls this only after the updater package has finished
+/// downloading, minimizing downtime. If installation fails it restarts the
+/// sidecar through `restart_sidecar`.
+#[tauri::command]
+async fn prepare_for_update(app: tauri::AppHandle) -> Result<(), AppError> {
+    tauri::async_runtime::spawn_blocking(move || stop_sidecar(&app.state::<SidecarState>()))
+        .await
+        .map_err(|e| AppError::Sidecar(format!("failed to join sidecar shutdown task: {e}")))?
 }
 
 /// Resolve the bundled sidecar executable inside the app's resource dir.
@@ -270,11 +301,12 @@ pub fn run() {
             has_api_key,
             get_sidecar_port,
             restart_sidecar,
+            prepare_for_update,
         ])
         .setup(|app| {
             // Don't let a sidecar failure abort app startup — surface it to the
             // UI instead so the user can still reach settings / see the error.
-            if let Err(e) = spawn_sidecar(&app.handle()) {
+            if let Err(e) = spawn_sidecar(app.handle()) {
                 eprintln!("[sidecar] failed to start: {e}");
                 let _ = app.handle().emit("sidecar-error", e.to_string());
             }
@@ -285,14 +317,8 @@ pub fn run() {
         .run(|app_handle, event| {
             // Terminate the sidecar when the app is exiting.
             if let RunEvent::Exit = event {
-                if let Some(mut child) = app_handle
-                    .state::<SidecarState>()
-                    .child
-                    .lock()
-                    .unwrap()
-                    .take()
-                {
-                    let _ = child.kill();
+                if let Err(error) = stop_sidecar(&app_handle.state::<SidecarState>()) {
+                    eprintln!("[sidecar] failed to stop during app exit: {error}");
                 }
             }
         });
@@ -300,7 +326,9 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_ready_port;
+    use super::{parse_ready_port, stop_sidecar, SidecarState};
+    use std::process::{Command, Stdio};
+    use std::sync::Mutex;
 
     #[test]
     fn parses_ready_line() {
@@ -308,5 +336,32 @@ mod tests {
         assert_eq!(parse_ready_port("  SIDECAR_READY port=8000  "), Some(8000));
         assert_eq!(parse_ready_port("INFO: something else"), None);
         assert_eq!(parse_ready_port("SIDECAR_READY port=notaport"), None);
+    }
+
+    #[test]
+    fn stops_sidecar_and_clears_runtime_state() {
+        let mut command = if cfg!(windows) {
+            let mut command = Command::new("ping");
+            command.args(["-n", "30", "127.0.0.1"]);
+            command
+        } else {
+            let mut command = Command::new("sleep");
+            command.arg("30");
+            command
+        };
+        let child = command
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("failed to start test child process");
+        let state = SidecarState {
+            port: Mutex::new(Some(54321)),
+            child: Mutex::new(Some(child)),
+        };
+
+        stop_sidecar(&state).expect("failed to stop test child process");
+
+        assert_eq!(*state.port.lock().unwrap(), None);
+        assert!(state.child.lock().unwrap().is_none());
     }
 }
