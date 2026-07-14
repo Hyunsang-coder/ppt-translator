@@ -647,12 +647,24 @@ class LengthBudgetTestCase(unittest.TestCase):
         # No notes in this deck; body fragment has a budget.
         self.assertIsNotNone(sess.length_budget(0))
 
+    def test_length_limit_violation_is_visible_in_review(self) -> None:
+        sess = _session("1234567890", 1, targets=["x" * 14])
+        sess.length_limit = 130
+
+        findings = sess.run_final_sweep()
+
+        length_findings = [f for f in findings if f.type == "fit.length_limit"]
+        self.assertEqual(len(length_findings), 1)
+        self.assertEqual(length_findings[0].fragment_index, 0)
+        self.assertIn("최대 13자", length_findings[0].description)
+
 
 class RetranslateFragmentTestCase(unittest.TestCase):
     """A-1: retranslate logic lives on ReviewSession, chain mocked out."""
 
     def test_returns_new_target_and_threads_instruction_and_budget(self) -> None:
         sess = _session("반복", 1, targets=["OLD"])
+        sess.length_limit = 130
 
         captured: dict = {}
 
@@ -660,6 +672,7 @@ class RetranslateFragmentTestCase(unittest.TestCase):
             captured["instructions"] = kwargs.get("instructions")
             captured["model_name"] = kwargs.get("model_name")
             captured["provider"] = kwargs.get("provider")
+            captured["length_limit"] = kwargs.get("length_limit")
             return object()  # opaque chain handle; translate is mocked below
 
         with mock.patch(
@@ -678,6 +691,7 @@ class RetranslateFragmentTestCase(unittest.TestCase):
         self.assertIsNone(color_segments)
         self.assertEqual(captured["model_name"], "m")
         self.assertEqual(captured["provider"], "anthropic")
+        self.assertEqual(captured["length_limit"], 130)
         # Both the user instruction and the length-budget guidance are threaded in.
         self.assertIn("격식체로", captured["instructions"])
         self.assertIn("슬라이드 박스", captured["instructions"])

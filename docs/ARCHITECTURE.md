@@ -45,7 +45,7 @@
 - `translation_chain.py`: LangChain pipeline with structured output (`TranslationOutput`), batch API, tenacity retry. Fail-fast validation on missing results
 - `color_distribution_chain.py`: ID-addressed semantic style mapping for final translated strings
 - `context_manager.py`: Global presentation context for consistency
-- `summarization_chain.py`: Context/instructions generation (GPT-5.4 Mini / Haiku 4.5)
+- `summarization_chain.py`: Context/instructions generation (GPT-5.6 Luna / Haiku 4.5)
 
 ## Utilities (`src/utils/`)
 - `config.py`: Settings from environment
@@ -74,7 +74,7 @@ Next.js 16, React 19, TypeScript 5, Tailwind CSS 4, Zustand 5.
 - **ui/**: Shadcn/Radix UI components. `update-modal.tsx`: self-contained update dialog (download progress, skip-version)
 
 ### State & Hooks
-- `stores/translation-store.ts`: Zustand store. `resetJobState()` preserves file/settings. Defaults: `textFitMode: "expand_box"`, `imageCompression: "medium"`, `lengthLimit: null`
+- `stores/translation-store.ts`: Zustand store. `resetJobState()` preserves file/settings. Defaults: `textFitMode: "expand_box"`, `imageCompression: "medium"`, `lengthLimit: null`. Text fitting is geometry-aware; length guides are retained in review retranslations and surfaced as findings when exceeded
 - `stores/extraction-store.ts`: Extraction state
 - `hooks/useTranslation.ts`: Translation workflow with `retranslate()`. Uses `getState()` to avoid stale closures
 - `hooks/useExtraction.ts`: Extraction workflow

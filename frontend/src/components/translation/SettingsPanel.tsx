@@ -300,14 +300,14 @@ export function SettingsPanel({
                   disabled={disabled}
                 />
                 <Label htmlFor="length-limit" className="text-sm font-normal cursor-pointer">
-                  번역 길이 제한
+                  번역 길이 가이드
                 </Label>
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Info className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
                   </TooltipTrigger>
                   <TooltipContent>
-                    번역문의 길이를 원문 대비 일정 비율 이내로 유지하도록 AI에게 지시합니다. 레이아웃 유지에 도움이 되지만 번역 품질이 다소 저하될 수 있습니다.
+                    AI에 항목별 최대 글자 수를 지시하고, 초과 결과는 검토 화면에 표시합니다. 문장을 강제로 잘라내지는 않습니다.
                   </TooltipContent>
                 </Tooltip>
               </div>

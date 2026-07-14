@@ -106,6 +106,9 @@ Slide body text favors noun phrases and concise phrasing over full sentences. Av
 **Translation Style/Tone Guidelines:**
 {instructions}
 {length_constraint}
+**Per-item Target Lengths:**
+{item_length_limits}
+
 **Task:**
 Translate the following texts from {source_lang} to {target_lang}.
 Maintain consistency with the context, background information, and glossary.
@@ -136,8 +139,9 @@ def _build_length_constraint(length_limit: int | None) -> str:
     return (
         f"\n**Length Constraint:**\n"
         f"IMPORTANT: Keep each translation concise. "
-        f"The translated text for each item MUST NOT exceed {length_limit}% "
-        f"of the original text length (character count). "
+        f"Each constrained slide-body item MUST NOT exceed {length_limit}% "
+        f"of its original text length (character count). Follow the exact "
+        f"per-item maximums below; speaker notes marked as no limit are exempt. "
         f"If the direct translation is too long, rephrase it more concisely "
         f"while preserving the core meaning.\n"
     )
@@ -159,7 +163,7 @@ def create_translation_chain(
     """Create a LangChain sequence for translation.
 
     Args:
-        model_name: Model identifier (e.g., gpt-5.5-2026-04-23, claude-sonnet-5).
+        model_name: Model identifier (e.g., gpt-5.6-sol, claude-sonnet-5).
         source_lang: Display name of the source language.
         target_lang: Display name of the target language.
         context: Optional background information about the presentation.
@@ -205,6 +209,7 @@ def create_translation_chain(
             context=lambda _: context_text,
             instructions=lambda _: instructions_text,
             length_constraint=lambda _: length_constraint_text,
+            item_length_limits=lambda x: x.get("item_length_limits", "None"),
             expected_count=lambda x: int(x.get("expected_count", 0)),
         )
         | PromptTemplate.from_template(PROMPT_TEMPLATE)

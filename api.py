@@ -1516,7 +1516,6 @@ async def generate_instructions(request: GenerateInstructionsRequest) -> Generat
 
     Creates style/tone guidelines appropriate for the target language and culture.
     """
-    from langchain_openai import ChatOpenAI
     from langchain_anthropic import ChatAnthropic
     from langchain_core.prompts import ChatPromptTemplate
 
@@ -1543,11 +1542,13 @@ async def generate_instructions(request: GenerateInstructionsRequest) -> Generat
     try:
         # Create LLM with max_tokens limit
         if request.provider == "openai":
-            llm = ChatOpenAI(
-                model=request.model,
+            from src.chains.llm_factory import create_llm
+
+            llm = create_llm(
+                provider="openai",
+                model_name=request.model,
+                max_tokens=512,
                 api_key=settings.openai_api_key,
-                temperature=0.7,
-                max_tokens=512,  # Limit for concise output (~300 chars)
             )
         else:
             llm = ChatAnthropic(

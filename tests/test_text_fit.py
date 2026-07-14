@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from pptx import Presentation
 from pptx.enum.text import MSO_AUTO_SIZE
@@ -346,7 +347,7 @@ def _make_textbox_on_slide(slide, left, top, width, height, text="Hello", font_s
     return shape, tf
 
 
-def _make_paragraph_info(shape, slide_index=0):
+def _make_paragraph_info(shape, slide_index=0, *, is_note=False):
     """Create a ParagraphInfo from a shape's first paragraph."""
     tf = shape.text_frame
     p = tf.paragraphs[0]
@@ -358,6 +359,7 @@ def _make_paragraph_info(shape, slide_index=0):
         original_text=text,
         paragraph=p,
         slide_title=None,
+        is_note=is_note,
     )
 
 
@@ -569,45 +571,109 @@ class WidthExpansionTestCase(unittest.TestCase):
         expected_right = slide_w - (Inches(3) + Inches(2)) - _EXPANSION_GAP_EMU
         self.assertAlmostEqual(ar, expected_right, delta=1)
 
-    def test_auto_shrink_reduced_by_width_expansion(self):
-        """Width expansion should reduce the amount of font shrinking needed."""
+    def test_auto_shrink_does_not_expand_box(self):
+        """Selecting font shrink alone must leave textbox geometry unchanged."""
         prs = Presentation()
         slide = prs.slides.add_slide(prs.slide_layouts[6])
-        # Centered textbox with plenty of room
         shape, tf = _make_textbox_on_slide(
-            slide, Inches(3), Inches(1), Inches(2), Inches(1),
+            slide, Inches(3), Inches(1), Inches(1.2), Inches(0.4),
             text="Hello", font_size_pt=20,
         )
         para_info = _make_paragraph_info(shape)
-        orig_text = para_info.original_text
+        original_width = shape.width
 
-        # Create a second presentation with same setup but NO width expansion (mode=none first, then manual)
-        prs2 = Presentation()
-        slide2 = prs2.slides.add_slide(prs2.slide_layouts[6])
-        shape2, tf2 = _make_textbox_on_slide(
-            slide2, Inches(3), Inches(1), Inches(2), Inches(1),
-            text="Hello", font_size_pt=20,
-        )
-
-        # Text 2x longer
-        long_text = "x" * (len(orig_text) * 2)
-
-        # Apply with auto_shrink (has width expansion)
-        para1 = _make_paragraph_info(shape)
-        writer = PPTWriter()
-        writer.apply_translations(
-            [para1], [long_text], prs,
+        PPTWriter().apply_translations(
+            [para_info], ["A much longer translated label that will not fit"], prs,
             text_fit_mode="auto_shrink", min_font_ratio=50,
         )
 
-        # Apply directly without width expansion
-        apply_text_fit(tf2, len(orig_text), len(long_text), mode="auto_shrink", min_font_ratio=50)
+        self.assertEqual(shape.width, original_width)
+        self.assertLess(tf.paragraphs[0].runs[0].font.size, Pt(20))
 
-        font_with_expansion = tf.paragraphs[0].runs[0].font.size
-        font_without_expansion = tf2.paragraphs[0].runs[0].font.size
+    def test_large_box_is_not_changed_when_longer_text_still_fits(self):
+        """A longer translation should not trigger fitting when geometry has room."""
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        shape, tf = _make_textbox_on_slide(
+            slide, Inches(0.5), Inches(1), Inches(8), Inches(2),
+            text="Hi", font_size_pt=18,
+        )
+        para_info = _make_paragraph_info(shape)
+        original_width = shape.width
 
-        # Font with width expansion should be >= font without (less shrink needed)
-        self.assertGreaterEqual(font_with_expansion, font_without_expansion)
+        PPTWriter().apply_translations(
+            [para_info], ["This sentence is longer but comfortably fits."], prs,
+            text_fit_mode="expand_box", min_font_ratio=80,
+        )
+
+        self.assertEqual(shape.width, original_width)
+        self.assertEqual(tf.paragraphs[0].runs[0].font.size, Pt(18))
+
+    def test_line_break_overflow_is_detected_even_with_fewer_characters(self):
+        """Explicit line breaks can overflow despite a shorter character count."""
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        shape, tf = _make_textbox_on_slide(
+            slide, Inches(0.5), Inches(1), Inches(8), Inches(0.45),
+            text="A" * 40, font_size_pt=18,
+        )
+        para_info = _make_paragraph_info(shape)
+
+        PPTWriter().apply_translations(
+            [para_info], ["A\nB\nC\nD\nE"], prs,
+            text_fit_mode="auto_shrink", min_font_ratio=80,
+        )
+
+        self.assertEqual(tf.auto_size, MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE)
+
+    def test_speaker_notes_are_not_text_fitted(self):
+        """Speaker-note formatting should not be altered by slide fit options."""
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        shape, tf = _make_textbox_on_slide(
+            slide, Inches(1), Inches(1), Inches(1), Inches(0.4),
+            text="Note", font_size_pt=20,
+        )
+        para_info = _make_paragraph_info(shape, is_note=True)
+        original_width = shape.width
+
+        PPTWriter().apply_translations(
+            [para_info], ["A very long speaker note that exceeds the mock box"], prs,
+            text_fit_mode="shrink_then_expand", min_font_ratio=70,
+        )
+
+        self.assertEqual(shape.width, original_width)
+        self.assertEqual(tf.paragraphs[0].runs[0].font.size, Pt(20))
+
+    def test_hybrid_shrinks_before_requesting_width_expansion(self):
+        """Combined mode must shrink fonts before it considers box resizing."""
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        shape, tf = _make_textbox_on_slide(
+            slide, Inches(2), Inches(1), Inches(1.2), Inches(0.4),
+            text="Short", font_size_pt=20,
+        )
+        para_info = _make_paragraph_info(shape)
+        font_sizes_at_expansion: list[float] = []
+
+        def capture_expansion(target_shape, available_right, needed):
+            font_sizes_at_expansion.append(tf.paragraphs[0].runs[0].font.size.pt)
+            return _safe_expand_width(target_shape, available_right, needed)
+
+        with patch(
+            "src.core.ppt_writer._safe_expand_width",
+            side_effect=capture_expansion,
+        ):
+            PPTWriter().apply_translations(
+                [para_info],
+                ["A very long translated label that needs both strategies"],
+                prs,
+                text_fit_mode="shrink_then_expand",
+                min_font_ratio=80,
+            )
+
+        self.assertTrue(font_sizes_at_expansion)
+        self.assertLess(font_sizes_at_expansion[0], 20)
 
     def test_expand_box_skipped_when_width_expansion_sufficient(self):
         """If width expansion covers the text growth, SHAPE_TO_FIT_TEXT should not be set."""
@@ -704,7 +770,7 @@ class AutoSizePreservationTestCase(unittest.TestCase):
         prs = Presentation()
         slide = prs.slides.add_slide(prs.slide_layouts[6])
         shape, tf = _make_textbox_on_slide(
-            slide, Inches(1), Inches(1), Inches(2), Inches(1),
+            slide, Inches(1), Inches(1), Inches(2), Inches(0.4),
             text="Short", font_size_pt=20,
         )
         tf.auto_size = MSO_AUTO_SIZE.NONE

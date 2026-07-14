@@ -116,15 +116,23 @@ def create_llm(
 
     if provider == "openai":
         from langchain_openai import ChatOpenAI
+        from src.services.models import MODEL_REASONING_EFFORT
 
         key = api_key or os.getenv("OPENAI_API_KEY")
-        LOGGER.debug("Creating ChatOpenAI with model=%s", model_name)
+        reasoning_effort = MODEL_REASONING_EFFORT.get(model_name)
+        LOGGER.debug(
+            "Creating ChatOpenAI with model=%s, reasoning_effort=%s",
+            model_name,
+            reasoning_effort,
+        )
         kwargs: dict = dict(
             model=model_name,
             api_key=key,
             rate_limiter=_rate_limiter,
         )
-        if temperature is not None:
+        if reasoning_effort is not None:
+            kwargs["reasoning_effort"] = reasoning_effort
+        elif temperature is not None:
             kwargs["temperature"] = temperature
         return ChatOpenAI(**kwargs)
 

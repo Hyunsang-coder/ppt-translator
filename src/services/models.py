@@ -18,8 +18,8 @@ from typing import Any, Callable, Dict, List, Optional
 # ---------------------------------------------------------------------------
 MODEL_REGISTRY: Dict[str, list[tuple[str, str]]] = {
     "openai": [
-        ("gpt-5.5-2026-04-23", "GPT-5.5"),
-        ("gpt-5.4-mini-2026-03-17", "GPT-5.4 Mini"),
+        ("gpt-5.6-sol", "GPT-5.6 Sol (High)"),
+        ("gpt-5.6-luna", "GPT-5.6 Luna (High)"),
     ],
     "anthropic": [
         ("claude-opus-4-8", "Claude Opus 4.8"),
@@ -31,8 +31,15 @@ MODEL_REGISTRY: Dict[str, list[tuple[str, str]]] = {
 # Default models referenced by request schemas and endpoints.
 DEFAULT_TRANSLATION_MODEL = "claude-sonnet-5"
 DEFAULT_LIGHT_MODEL = {
-    "openai": "gpt-5.4-mini-2026-03-17",
+    "openai": "gpt-5.6-luna",
     "anthropic": "claude-haiku-4-5-20251001",
+}
+
+# GPT-5.6 reasoning effort is configured per model so all OpenAI call paths
+# (translation, summarization, and post-processing) use the same setting.
+MODEL_REASONING_EFFORT: Dict[str, str] = {
+    "gpt-5.6-sol": "high",
+    "gpt-5.6-luna": "high",
 }
 
 

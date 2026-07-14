@@ -36,6 +36,8 @@ function badgeStyle(finding: FragmentFinding): { cls: string; label: string } {
       return { cls: "text-destructive bg-destructive/10", label: "미번역" };
     case "fit.overflow":
       return { cls: "text-warning bg-warning/10", label: "공간 초과" };
+    case "fit.length_limit":
+      return { cls: "text-warning bg-warning/10", label: "길이 초과" };
     case "style.mapping_dropped":
       return { cls: "text-warning bg-warning/10", label: "색상 확인" };
     default:

@@ -811,6 +811,7 @@ class TranslationService:
             ppt_context=ppt_context,
             glossary_terms=glossary_terms,
             prepared_texts=target_prepared_texts,
+            length_limit=request.length_limit,
         )
 
         LOGGER.info(
@@ -1042,6 +1043,7 @@ class TranslationService:
                 provider=request.provider,
                 text_fit_mode=request.text_fit_mode.value,
                 min_font_ratio=request.min_font_ratio,
+                length_limit=request.length_limit,
                 ppt_context=ppt_context,
                 glossary_terms=glossary_terms,
                 glossary=glossary,

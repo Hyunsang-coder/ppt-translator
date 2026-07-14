@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import logging
+import math
 from typing import Iterable, List
 
 from lxml import etree
@@ -31,6 +32,14 @@ _EXPANSION_GAP_EMU = 457200
 # Maximum width expansion as a fraction of original width (30%)
 # Prevents unrealistic expansion when text length ratio is large (e.g. KR→EN)
 _MAX_EXPANSION_RATIO = 0.30
+
+# Geometry-based fitting is necessarily an estimate because python-pptx does
+# not expose PowerPoint's rendered line metrics. Keep a small tolerance to
+# avoid resizing for rounding noise around the box boundary.
+_GEOMETRY_OVERFLOW_THRESHOLD = 1.05
+_EMU_PER_POINT = 12700
+_DEFAULT_FONT_SIZE_PT = 18.0
+_LINE_HEIGHT_FACTOR = 1.2
 
 _A_NS = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
 
@@ -351,6 +360,7 @@ def apply_text_fit(
     translated_len: int,
     mode="none",
     min_font_ratio: int = 80,
+    overflow_ratio: float | None = None,
 ) -> None:
     """Apply text fitting adjustments to a text frame after translation.
 
@@ -368,12 +378,16 @@ def apply_text_fit(
     if mode_str == _MODE_NONE:
         return
 
-    if original_len <= 0 or translated_len <= original_len:
-        return
-
-    expansion_ratio = translated_len / original_len
-    if expansion_ratio <= _EXPANSION_THRESHOLD:
-        return
+    if overflow_ratio is None:
+        if original_len <= 0 or translated_len <= original_len:
+            return
+        expansion_ratio = translated_len / original_len
+        if expansion_ratio <= _EXPANSION_THRESHOLD:
+            return
+    else:
+        expansion_ratio = max(0.0, float(overflow_ratio))
+        if expansion_ratio <= _GEOMETRY_OVERFLOW_THRESHOLD:
+            return
 
     if mode_str == _MODE_AUTO_SHRINK:
         _apply_auto_shrink(text_frame, expansion_ratio, min_font_ratio)
@@ -448,6 +462,139 @@ def _shrink_runs(text_frame, factor: float) -> None:
                 new_emu = run.font.size * factor
                 rounded_pt = round(new_emu / _EMU_PER_PT)
                 run.font.size = max(rounded_pt, 1) * _EMU_PER_PT
+
+
+def _character_width_factor(character: str) -> float:
+    """Approximate one character's width relative to the font size."""
+    code = ord(character)
+    if (
+        0x1100 <= code <= 0x11FF
+        or 0x3040 <= code <= 0x30FF
+        or 0x3400 <= code <= 0x4DBF
+        or 0x4E00 <= code <= 0x9FFF
+        or 0xAC00 <= code <= 0xD7A3
+    ):
+        return 1.0
+    if character.isspace():
+        return 0.33
+    if character in "ilI.,'`|!:;":
+        return 0.30
+    if character in "MW@#%&":
+        return 0.85
+    return 0.55
+
+
+def _estimate_text_frame_overflow_ratio(text_frame) -> float | None:
+    """Estimate rendered text height divided by usable box height.
+
+    PowerPoint's actual layout engine is unavailable in python-pptx, so this
+    uses box geometry, margins, explicit font sizes, character widths, wrapping,
+    and hard line breaks. ``None`` means geometry was unavailable and callers
+    should fall back to the legacy source/target length ratio.
+    """
+    owner = getattr(text_frame, "_parent", None)
+    width = getattr(owner, "width", None)
+    height = getattr(owner, "height", None)
+    if not width or not height:
+        return None
+
+    horizontal_margin = (
+        (getattr(text_frame, "margin_left", 0) or 0)
+        + (getattr(text_frame, "margin_right", 0) or 0)
+    )
+    vertical_margin = (
+        (getattr(text_frame, "margin_top", 0) or 0)
+        + (getattr(text_frame, "margin_bottom", 0) or 0)
+    )
+    usable_width_pt = max(1.0, (width - horizontal_margin) / _EMU_PER_POINT)
+    usable_height_pt = max(1.0, (height - vertical_margin) / _EMU_PER_POINT)
+
+    explicit_sizes = [
+        run.font.size.pt
+        for paragraph in text_frame.paragraphs
+        for run in paragraph.runs
+        if run.font.size is not None
+    ]
+    fallback_font_pt = (
+        sum(explicit_sizes) / len(explicit_sizes)
+        if explicit_sizes
+        else _DEFAULT_FONT_SIZE_PT
+    )
+
+    required_height_pt = 0.0
+    for paragraph in text_frame.paragraphs:
+        logical_lines: list[tuple[float, float]] = []
+        line_width_pt = 0.0
+        line_font_pt = fallback_font_pt
+
+        def finish_line() -> None:
+            nonlocal line_width_pt, line_font_pt
+            wrapped_lines = max(1, math.ceil(line_width_pt / usable_width_pt))
+            logical_lines.append((wrapped_lines, line_font_pt))
+            line_width_pt = 0.0
+            line_font_pt = fallback_font_pt
+
+        runs = list(paragraph.runs)
+        if not runs:
+            finish_line()
+        else:
+            for run in runs:
+                font_pt = (
+                    run.font.size.pt
+                    if run.font.size is not None
+                    else fallback_font_pt
+                )
+                line_font_pt = max(line_font_pt, font_pt)
+                for character in run.text or "":
+                    if character in {"\n", "\v"}:
+                        finish_line()
+                        continue
+                    line_width_pt += _character_width_factor(character) * font_pt
+            finish_line()
+
+        required_height_pt += sum(
+            wrapped_lines * font_pt * _LINE_HEIGHT_FACTOR
+            for wrapped_lines, font_pt in logical_lines
+        )
+
+    return required_height_pt / usable_height_pt
+
+
+def _fallback_overflow_ratio(original_len: int, translated_len: int) -> float:
+    """Legacy fallback when text-frame geometry cannot be inspected."""
+    if original_len <= 0 or translated_len <= original_len:
+        return 1.0
+    return translated_len / original_len
+
+
+def _expand_text_frame_width(
+    text_frame,
+    overflow_ratio: float,
+    txbody_to_shape: dict,
+    slide_bounds_map: dict,
+    slide_w: int,
+) -> float:
+    """Expand one unrotated top-level textbox to the right when space exists."""
+    if overflow_ratio <= _GEOMETRY_OVERFLOW_THRESHOLD or not txbody_to_shape:
+        return 1.0
+    bridge_key = id(text_frame._txBody)
+    shape_info = txbody_to_shape.get(bridge_key)
+    if shape_info is None:
+        return 1.0
+    shape, slide_index = shape_info
+    rotation = getattr(shape, "rotation", 0.0) or 0.0
+    if abs(rotation) >= 0.01:
+        return 1.0
+
+    needed = int(shape.width * (overflow_ratio - 1.0))
+    bounds = slide_bounds_map.get(slide_index, [])
+    _, available_right = _calculate_available_expansion(
+        shape, bounds, slide_w, bridge_key
+    )
+    width_ratio = _safe_expand_width(shape, available_right, needed)
+    if width_ratio > 1.0:
+        _update_slide_bounds(slide_bounds_map, slide_index, bridge_key, shape)
+    return width_ratio
 
 
 def snapshot_fit_geometry(presentation) -> dict:
@@ -600,7 +747,7 @@ class PPTWriter:
                 _apply_fallback_format(translation, groups, runs)
 
             # Track text frames for fitting
-            if text_fit_mode != _MODE_NONE:
+            if text_fit_mode != _MODE_NONE and not paragraph_info.is_note:
                 text_frame = paragraph._parent
                 tf_id = id(text_frame)
                 if tf_id not in text_frames_to_fit:
@@ -614,45 +761,57 @@ class PPTWriter:
                         prev_trans + len(translation),
                     )
 
-        # Build shape context for width expansion (all non-NONE modes)
+        # Build shape context only for modes that explicitly allow resizing.
         txbody_to_shape: dict = {}
         slide_bounds_map: dict = {}
         slide_w = 0
-        if text_fit_mode != _MODE_NONE:
+        if text_fit_mode in {_MODE_EXPAND_BOX, _MODE_SHRINK_THEN_EXPAND}:
             txbody_to_shape, slide_bounds_map, slide_w = _build_shape_context(presentation)
 
-        # Apply width expansion + text fitting per text frame
+        # Apply fitting per text frame using estimated rendered geometry. If
+        # geometry is unavailable (e.g. an unusual container), retain the old
+        # source/target character-ratio fallback.
         for tf, orig_len, trans_len in text_frames_to_fit.values():
-            if trans_len > orig_len:
-                effective_orig = orig_len
+            estimated_ratio = _estimate_text_frame_overflow_ratio(tf)
+            overflow_ratio = (
+                estimated_ratio
+                if estimated_ratio is not None
+                else _fallback_overflow_ratio(orig_len, trans_len)
+            )
+            if overflow_ratio <= _GEOMETRY_OVERFLOW_THRESHOLD:
+                continue
 
-                # Width expansion before text fit
-                if txbody_to_shape and orig_len > 0:
-                    exp_ratio = trans_len / orig_len
-                    if exp_ratio > _EXPANSION_THRESHOLD:
-                        bridge_key = id(tf._txBody)
-                        shape_info = txbody_to_shape.get(bridge_key)
-                        if shape_info is not None:
-                            shape, s_idx = shape_info
-                            rotation = getattr(shape, "rotation", 0.0) or 0.0
-                            if abs(rotation) < 0.01:
-                                needed = int(shape.width * (exp_ratio - 1))
-                                bounds = slide_bounds_map.get(s_idx, [])
-                                _, ar = _calculate_available_expansion(
-                                    shape, bounds, slide_w, bridge_key
-                                )
-                                w_ratio = _safe_expand_width(shape, ar, needed)
-                                if w_ratio > 1.0:
-                                    effective_orig = int(orig_len * w_ratio)
-                                    _update_slide_bounds(
-                                        slide_bounds_map, s_idx, bridge_key, shape
-                                    )
-
+            if text_fit_mode == _MODE_AUTO_SHRINK:
                 apply_text_fit(
-                    tf, effective_orig, trans_len,
+                    tf, orig_len, trans_len,
                     mode=text_fit_mode, min_font_ratio=min_font_ratio,
+                    overflow_ratio=overflow_ratio,
                 )
-                fit_adjusted_count += 1
+            elif text_fit_mode == _MODE_EXPAND_BOX:
+                # Expansion-only mode never changes font sizes.
+                tf.word_wrap = True
+                _expand_text_frame_width(
+                    tf, overflow_ratio, txbody_to_shape, slide_bounds_map, slide_w
+                )
+            elif text_fit_mode == _MODE_SHRINK_THEN_EXPAND:
+                # Honour the mode name: shrink first, then use width expansion
+                # only if the geometry estimate still reports overflow.
+                apply_text_fit(
+                    tf, orig_len, trans_len,
+                    mode=text_fit_mode, min_font_ratio=min_font_ratio,
+                    overflow_ratio=overflow_ratio,
+                )
+                remaining_ratio = _estimate_text_frame_overflow_ratio(tf)
+                if remaining_ratio is None:
+                    floor_factor = min_font_ratio / 100.0
+                    remaining_ratio = overflow_ratio * max(
+                        1.0 / overflow_ratio, floor_factor
+                    )
+                _expand_text_frame_width(
+                    tf, remaining_ratio, txbody_to_shape, slide_bounds_map, slide_w
+                )
+
+            fit_adjusted_count += 1
 
         if color_applied_count > 0:
             LOGGER.info(

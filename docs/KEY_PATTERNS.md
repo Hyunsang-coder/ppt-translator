@@ -37,11 +37,19 @@ Add `--json` when the findings need to be consumed by another script.
 
 ## Text Fit
 - `none`: No adjustment
-- `auto_shrink`: Reduce font size (down to `min_font_ratio`%)
-- `expand_box`: Widen text box (max 30%, skips rotated/grouped/table). Preserves original auto_size
-- `shrink_then_expand`: Shrink first, then expand if needed
+- `auto_shrink`: Reduce font size (down to `min_font_ratio`%) without changing box geometry
+- `expand_box`: Widen text box to the right (max 30%, skips rotated/grouped/table). Preserves original auto_size and font sizes
+- `shrink_then_expand`: Shrink first, then expand only when estimated overflow remains
 
-Width expansion applied before text fit. Font sizes rounded to nearest whole point (12700 EMU).
+Fit decisions use box width/height, margins, explicit font sizes, approximate
+character widths, wrapping, and hard line breaks. Character-count growth is used
+only as a fallback when container geometry is unavailable. Speaker notes are
+excluded from slide text fitting. Font sizes are rounded to the nearest whole
+point (12700 EMU).
+
+The translation length guide adds exact per-item target character limits to the
+prompt. Results are never truncated; remaining violations appear in review as
+`fit.length_limit`. The same percentage is retained for fragment retranslation.
 Placeholder shapes: all 4 positional attributes (left/top/width/height) must be materialised before modifying width to prevent python-pptx xfrm cy=0 collapse.
 
 ## Progress Tracking

@@ -24,6 +24,7 @@ from src.core.ppt_parser import PPTParser, ParagraphInfo
 from src.core.ppt_writer import PPTWriter, _group_runs_by_format
 from src.services.consistency_sweep import Finding, run_sweep
 from src.utils.repetition import RepetitionPlan, build_repetition_plan
+from src.utils.helpers import calculate_target_character_limit
 
 LOGGER = logging.getLogger(__name__)
 _EMU_PER_POINT = 12700
@@ -93,6 +94,7 @@ class ReviewSession:
     provider: str = "anthropic"
     text_fit_mode: str = "none"
     min_font_ratio: int = 80
+    length_limit: Optional[int] = None
     ppt_context: str = ""
     glossary_terms: str = "None"
     glossary: Optional[Dict[str, str]] = None
@@ -434,11 +436,13 @@ class ReviewSession:
                 context=self.context,
                 instructions="\n".join(f"- {item}" for item in extra) or None,
                 provider=provider,
+                length_limit=self.length_limit,
                 team_rules=self.team_rules,
             )
             batches = chunk_paragraphs(
                 [info], batch_size=1, ppt_context=self.ppt_context,
                 glossary_terms=self.glossary_terms,
+                length_limit=self.length_limit,
             )
             results = translate_with_progress(chain, batches, None, max_concurrency=1)
             if not results:
@@ -761,6 +765,35 @@ class ReviewSession:
                 )
             )
             ordinal += 1
+        if self.length_limit is not None:
+            for index, target in enumerate(self.translated_texts):
+                info = self.paragraphs[index]
+                if info.is_note:
+                    continue
+                max_characters = calculate_target_character_limit(
+                    info.original_text or "", self.length_limit
+                )
+                if len(target) <= max_characters:
+                    continue
+                overflows.append(
+                    Finding(
+                        type="fit.length_limit",
+                        severity="major",
+                        description=(
+                            f"번역 {len(target)}자가 설정한 최대 {max_characters}자"
+                            f"({self.length_limit}%)를 초과합니다."
+                        ),
+                        location={
+                            "slide": info.slide_index + 1,
+                            "shape": info.shape_index,
+                            "paragraph": info.paragraph_index,
+                        },
+                        segment={"source": info.original_text, "output": target},
+                        ordinal=ordinal,
+                        fragment_index=index,
+                    )
+                )
+                ordinal += 1
         findings = run_sweep(
             self.paragraphs,
             self.translated_texts,

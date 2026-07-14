@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING, Dict, Iterable, List, Sequence
 
 if TYPE_CHECKING:  # pragma: no cover - import for typing only
@@ -21,12 +22,18 @@ def clean_text(text: str) -> str:
     return (text or "").replace("\r", " ").replace("\n", " ").strip()
 
 
+def calculate_target_character_limit(source_text: str, percentage: int) -> int:
+    """Return the inclusive target character cap for one source fragment."""
+    return max(1, math.floor(len(clean_text(source_text)) * percentage / 100))
+
+
 def chunk_paragraphs(
     paragraphs: Iterable["ParagraphInfo"],
     batch_size: int,
     ppt_context: str,
     glossary_terms: str,
     prepared_texts: Sequence[str] | None = None,
+    length_limit: int | None = None,
 ) -> List[Dict[str, object]]:
     """Split paragraphs into batches suitable for sequential translation.
 
@@ -37,6 +44,7 @@ def chunk_paragraphs(
         glossary_terms: Glossary string injected into prompts.
         prepared_texts: Optional list of preprocessed texts aligned with the
             paragraphs, used when glossary substitutions were already applied.
+        length_limit: Optional target length as a percentage of each source.
 
     Returns:
         A list of batch dictionaries ready for the translation chain.
@@ -49,6 +57,7 @@ def chunk_paragraphs(
     for start_idx in range(0, total, batch_size):
         chunk = paragraph_list[start_idx : start_idx + batch_size]
         lines = []
+        item_limits: list[int | None] = []
         for offset, paragraph in enumerate(chunk, start=1):
             if prepared_texts is not None:
                 raw_text = prepared_texts[start_idx + offset - 1]
@@ -57,6 +66,14 @@ def chunk_paragraphs(
             cleaned = clean_text(raw_text)
             text = cleaned or "[EMPTY]"
             lines.append(f"{offset}. {text}")
+            if length_limit is not None:
+                item_limits.append(
+                    None
+                    if getattr(paragraph, "is_note", False)
+                    else calculate_target_character_limit(
+                        paragraph.original_text, length_limit
+                    )
+                )
 
         batches.append(
             {
@@ -67,6 +84,19 @@ def chunk_paragraphs(
                 "start_idx": start_idx + 1,
                 "end_idx": start_idx + len(chunk),
                 "expected_count": len(chunk),
+                "length_limits": item_limits,
+                "item_length_limits": (
+                    "\n".join(
+                        (
+                            f"{index}. no length limit (speaker note)"
+                            if limit is None
+                            else f"{index}. maximum {limit} target characters"
+                        )
+                        for index, limit in enumerate(item_limits, start=1)
+                    )
+                    if item_limits
+                    else "None"
+                ),
             }
         )
 

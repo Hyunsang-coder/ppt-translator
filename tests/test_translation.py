@@ -77,6 +77,29 @@ class HelperTestCase(unittest.TestCase):
         self.assertEqual(len(batches), 2)
         self.assertIn("1. Paragraph 0", batches[0]["texts"])
 
+    def test_chunk_paragraphs_builds_exact_per_item_length_limits(self) -> None:
+        paragraphs = [_fake_paragraph("1234567890"), _fake_paragraph("12345")]
+        batches = chunk_paragraphs(
+            paragraphs,
+            batch_size=2,
+            ppt_context="ctx",
+            glossary_terms="None",
+            length_limit=130,
+        )
+
+        self.assertEqual(batches[0]["length_limits"], [13, 6])
+        self.assertIn("1. maximum 13 target characters", batches[0]["item_length_limits"])
+        self.assertIn("2. maximum 6 target characters", batches[0]["item_length_limits"])
+
+    def test_chunk_paragraphs_exempts_speaker_notes_from_length_limit(self) -> None:
+        note = types.SimpleNamespace(original_text="speaker note", is_note=True)
+        batch = chunk_paragraphs(
+            [note], 1, ppt_context="ctx", glossary_terms="None", length_limit=110
+        )[0]
+
+        self.assertEqual(batch["length_limits"], [None])
+        self.assertIn("no length limit (speaker note)", batch["item_length_limits"])
+
     def test_split_text_into_segments_respects_segment_count(self) -> None:
         segments = split_text_into_segments("abcdefghij", 3, weights=[10, 5, 5])
         self.assertEqual(len(segments), 3)
@@ -97,6 +120,7 @@ class TeamRulesInjectionTestCase(unittest.TestCase):
             glossary_terms="None",
             instructions="inst",
             length_constraint="",
+            item_length_limits="None",
             source_lang="영어",
             target_lang="한국어",
             expected_count=1,

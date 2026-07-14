@@ -74,8 +74,8 @@ cd frontend && npx tsc --noEmit && npm run build
 
 | Provider | Model ID | Display Name |
 |----------|----------|--------------|
-| OpenAI | `gpt-5.5-2026-04-23` | GPT-5.5 |
-| OpenAI | `gpt-5.4-mini-2026-03-17` | GPT-5.4 Mini |
+| OpenAI | `gpt-5.6-sol` | GPT-5.6 Sol (High) |
+| OpenAI | `gpt-5.6-luna` | GPT-5.6 Luna (High) |
 | Anthropic | `claude-opus-4-8` | Claude Opus 4.8 |
 | Anthropic | `claude-sonnet-5` | Claude Sonnet 5 |
 | Anthropic | `claude-haiku-4-5-20251001` | Claude Haiku 4.5 |
