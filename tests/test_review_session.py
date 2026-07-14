@@ -310,6 +310,336 @@ class PartialMatchTestCase(unittest.TestCase):
         # No fragment (other than index 0) contains "World Spawn" yet.
         self.assertEqual(candidates, [])
 
+    def test_single_hangul_character_change_is_not_suggested_across_deck(self) -> None:
+        sess = _session("원문", 4, targets=[
+            "활성화 기준",
+            "3개월 개발 + 6주 안정화, 11월 중순 베타 테스트",
+            "Phase 2 범위는 활성화, 명확성, 매치메이킹에 초점",
+            "원인이 방향성 실패인지 활성화 실패인지가 핵심 질문",
+        ])
+        proposal = sess.create_proposal(
+            0,
+            action="edit",
+            target="활성총 기준",
+            instruction=None,
+            propagate_identical=False,
+            model="stub",
+            provider="anthropic",
+        )
+        self.assertEqual(ReviewSession._changed_phrase("활성화 기준", "활성총 기준"), ("화", "총"))
+        self.assertEqual(proposal.partial_candidates, [])
+
+    def test_common_two_character_cjk_phrase_is_not_suggested_across_deck(self) -> None:
+        sess = _session("원문", 3, targets=[
+            "활성화 기준",
+            "품질 기준",
+            "출시 기준",
+        ])
+        proposal = sess.create_proposal(
+            0,
+            action="edit",
+            target="활성화 규칙",
+            instruction=None,
+            propagate_identical=False,
+            model="stub",
+            provider="anthropic",
+        )
+        self.assertEqual(ReviewSession._changed_phrase("활성화 기준", "활성화 규칙"), ("기준", "규칙"))
+        self.assertEqual(proposal.partial_candidates, [])
+
+    def test_short_lowercase_latin_word_is_not_suggested_across_deck(self) -> None:
+        sess = _session("source", 3, targets=[
+            "replace the policy",
+            "the schedule",
+            "review the results",
+        ])
+        proposal = sess.create_proposal(
+            0,
+            action="edit",
+            target="replace a policy",
+            instruction=None,
+            propagate_identical=False,
+            model="stub",
+            provider="anthropic",
+        )
+        self.assertEqual(ReviewSession._changed_phrase("replace the policy", "replace a policy"), ("the", "a"))
+        self.assertEqual(proposal.partial_candidates, [])
+
+    def test_latin_partial_match_requires_word_boundaries(self) -> None:
+        sess = _session("source", 3, targets=[
+            "CAT policy",
+            "CONCAT function",
+            "The CAT schedule",
+        ])
+        proposal = sess.create_proposal(
+            0,
+            action="edit",
+            target="DOG policy",
+            instruction=None,
+            propagate_identical=False,
+            model="stub",
+            provider="anthropic",
+        )
+        self.assertEqual(
+            [candidate["target"] for candidate in proposal.partial_candidates],
+            ["The CAT schedule"],
+        )
+
+    def test_accented_latin_partial_match_requires_unicode_word_boundaries(self) -> None:
+        sess = _session("source", 3, targets=[
+            "café policy",
+            "caféteria",
+            "Le café schedule",
+        ])
+        proposal = sess.create_proposal(
+            0,
+            action="edit",
+            target="bistro policy",
+            instruction=None,
+            propagate_identical=False,
+            model="stub",
+            provider="anthropic",
+        )
+        self.assertEqual(
+            [candidate["target"] for candidate in proposal.partial_candidates],
+            ["Le café schedule"],
+        )
+
+    def test_hangul_phrase_inside_longer_word_is_not_suggested(self) -> None:
+        sess = _session("원문", 3, targets=[
+            "Phase 2 활성화 기준",
+            "비활성화 정책",
+            "활성화 일정",
+        ])
+        proposal = sess.create_proposal(
+            0,
+            action="edit",
+            target="Phase 2 기준",
+            instruction=None,
+            propagate_identical=False,
+            model="stub",
+            provider="anthropic",
+        )
+        self.assertEqual(
+            [(candidate["target"], candidate["proposed_target"])
+             for candidate in proposal.partial_candidates],
+            [("활성화 일정", "일정")],
+        )
+
+    def test_japanese_phrase_without_spaces_remains_supported(self) -> None:
+        sess = _session("source", 2, targets=[
+            "有効化 policy",
+            "新規有効化基準",
+        ])
+        proposal = sess.create_proposal(
+            0,
+            action="edit",
+            target="activation policy",
+            instruction=None,
+            propagate_identical=False,
+            model="stub",
+            provider="anthropic",
+        )
+        self.assertEqual(
+            [(candidate["target"], candidate["proposed_target"])
+             for candidate in proposal.partial_candidates],
+            [("新規有効化基準", "新規activation基準")],
+        )
+
+    def test_deletion_preview_matches_applied_result(self) -> None:
+        sess = _session("원문", 2, targets=["Phase 2 활성화 기준", "활성화 일정"])
+        proposal = sess.create_proposal(
+            0,
+            action="edit",
+            target="Phase 2 기준",
+            instruction=None,
+            propagate_identical=False,
+            model="stub",
+            provider="anthropic",
+        )
+        self.assertEqual(len(proposal.partial_candidates), 1)
+        candidate = proposal.partial_candidates[0]
+        self.assertEqual(candidate["old_phrase"], "활성화")
+        self.assertEqual(candidate["new_phrase"], "")
+        self.assertEqual(candidate["proposed_target"], "일정")
+
+        sess.apply_proposal(proposal.id, expected_revision=0)
+        changed = sess.apply_partial_candidates(
+            [candidate["index"]],
+            old_phrase=candidate["old_phrase"],
+            new_phrase=candidate["new_phrase"],
+            expected_revision=1,
+            model="stub",
+            provider="anthropic",
+        )
+        self.assertEqual(changed, [1])
+        self.assertEqual(sess.translated_texts[1], candidate["proposed_target"])
+
+    def test_identical_source_propagation_is_not_repeated_as_partial_candidate(self) -> None:
+        sess = _session("동일 원문", 3, targets=["Phase 2 활성화 기준"] * 3)
+        proposal = sess.create_proposal(
+            0,
+            action="edit",
+            target="Phase 2 운영 기준",
+            instruction=None,
+            propagate_identical=True,
+            model="stub",
+            provider="anthropic",
+        )
+        self.assertEqual(proposal.changed_indices, [0, 1, 2])
+        self.assertEqual(proposal.partial_candidates, [])
+
+    def test_ambiguous_repeated_phrase_in_one_target_is_not_suggested(self) -> None:
+        sess = _session("source", 2, targets=[
+            "field drop policy",
+            "field drop follows field drop rules",
+        ])
+        proposal = sess.create_proposal(
+            0,
+            action="edit",
+            target="World Spawn policy",
+            instruction=None,
+            propagate_identical=False,
+            model="stub",
+            provider="anthropic",
+        )
+        self.assertEqual(proposal.partial_candidates, [])
+
+
+class PartialMatchFixtureRegressionTestCase(unittest.TestCase):
+    """End-to-end candidate checks using the synthetic false-positive deck."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        fixture = Path(__file__).parent / "fixtures" / "partial-match-false-positive.pptx"
+        cls.source_pptx = fixture.read_bytes()
+        cls.paragraphs, cls.presentation = PPTParser().extract_paragraphs(
+            io.BytesIO(cls.source_pptx)
+        )
+        cls.scenario_texts = {
+            "활성화 기준",
+            "3개월 개발 + 6주 안정화, 11월 중순 베타 테스트",
+            "Phase 2 범위는 활성화, 명확성, 매치메이킹에 초점",
+            "원인이 방향성 실패인지 활성화 실패인지가 핵심 질문",
+            "전화 회의 결과를 문서화하고 시각화 자료를 정리",
+            "명확화 작업과 안정화 작업은 서로 다른 일정으로 관리",
+            "CAT policy",
+            "CONCAT function",
+            "The CAT schedule",
+            "SCATTER plot",
+            "CAT-based workflow",
+            "Category policy",
+            "Phase 2 활성화 기준",
+            "활성화 일정",
+            "다음 단계 활성화",
+            "비활성화 정책",
+            "활성화",
+            "활성화 여부와 활성화 일정",
+            "Adjusted field drop rates",
+            "The field drop table",
+            "field drop follows field drop rules",
+            "Unrelated text",
+        }
+
+    def _session(self) -> ReviewSession:
+        targets = [
+            text if (text := (paragraph.original_text or "").strip()) in self.scenario_texts else ""
+            for paragraph in self.paragraphs
+        ]
+        return ReviewSession(
+            presentation=deepcopy(self.presentation),
+            paragraphs=self.paragraphs,
+            translated_texts=targets,
+            findings=[],
+            source_lang="한국어",
+            target_lang="한국어",
+            model="stub",
+            source_pptx=self.source_pptx,
+        )
+
+    def _index(self, text: str, occurrence: int = 0) -> int:
+        matches = [
+            index
+            for index, paragraph in enumerate(self.paragraphs)
+            if (paragraph.original_text or "").strip() == text
+        ]
+        return matches[occurrence]
+
+    def test_fixture_blocks_false_positives_and_keeps_valid_candidates(self) -> None:
+        session = self._session()
+        hangul = session.create_proposal(
+            self._index("활성화 기준"),
+            action="edit",
+            target="활성총 기준",
+            instruction=None,
+            propagate_identical=False,
+            model="stub",
+            provider="anthropic",
+        )
+        self.assertEqual(hangul.partial_candidates, [])
+
+        latin = session.create_proposal(
+            self._index("CAT policy"),
+            action="edit",
+            target="DOG policy",
+            instruction=None,
+            propagate_identical=False,
+            model="stub",
+            provider="anthropic",
+        )
+        self.assertEqual(
+            [candidate["target"] for candidate in latin.partial_candidates],
+            ["The CAT schedule", "CAT-based workflow"],
+        )
+
+        valid_phrase = session.create_proposal(
+            self._index("Adjusted field drop rates"),
+            action="edit",
+            target="Adjusted World Spawn rates",
+            instruction=None,
+            propagate_identical=False,
+            model="stub",
+            provider="anthropic",
+        )
+        self.assertEqual(
+            [candidate["target"] for candidate in valid_phrase.partial_candidates],
+            ["The field drop table"],
+        )
+
+        deletion = session.create_proposal(
+            self._index("Phase 2 활성화 기준"),
+            action="edit",
+            target="Phase 2 기준",
+            instruction=None,
+            propagate_identical=True,
+            model="stub",
+            provider="anthropic",
+        )
+        deletion_by_target = {
+            candidate["target"]: candidate["proposed_target"]
+            for candidate in deletion.partial_candidates
+        }
+        self.assertNotIn("비활성화 정책", deletion_by_target)
+        self.assertNotIn("활성화 여부와 활성화 일정", deletion_by_target)
+        self.assertEqual(deletion_by_target["활성화 일정"], "일정")
+        self.assertEqual(deletion_by_target["다음 단계 활성화"], "다음 단계")
+
+        identical = session.create_proposal(
+            self._index("Phase 2 활성화 기준"),
+            action="edit",
+            target="Phase 2 운영 기준",
+            instruction=None,
+            propagate_identical=True,
+            model="stub",
+            provider="anthropic",
+        )
+        self.assertEqual(len(identical.changed_indices), 3)
+        self.assertTrue(
+            set(identical.changed_indices).isdisjoint(
+                candidate["index"] for candidate in identical.partial_candidates
+            )
+        )
+
 
 class LengthBudgetTestCase(unittest.TestCase):
     def test_note_has_no_budget(self) -> None:

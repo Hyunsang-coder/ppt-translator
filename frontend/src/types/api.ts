@@ -100,6 +100,7 @@ export interface PartialCandidate {
   index: number;
   slide: number;
   is_note: boolean;
+  source: string;
   target: string;
   proposed_target: string;
   old_phrase: string;

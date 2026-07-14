@@ -513,3 +513,14 @@
 .review-span-full {
   grid-column: 1 / -1;
 }
+
+/* PPT 글자색은 실제 파일에는 그대로 보존하되, 검토 카드 배경과 대비가
+   부족한 경우 화면에서만 기본 전경색으로 바꿔 번역문을 읽을 수 있게 한다. */
+.review-style-color {
+  color: var(--review-original-color);
+}
+
+:root:not(.dark) .review-style-color[data-low-contrast-light="true"],
+.dark .review-style-color[data-low-contrast-dark="true"] {
+  color: var(--foreground);
+}

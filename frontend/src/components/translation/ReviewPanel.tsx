@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { apiClient } from "@/lib/api-client";
@@ -93,6 +93,7 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
   const [proposal, setProposal] = useState<FragmentProposalResponse | null>(null);
   const [partialCandidates, setPartialCandidates] = useState<PartialCandidate[]>([]);
   const [selectedPartial, setSelectedPartial] = useState<Set<number>>(new Set());
+  const [applyingPartial, setApplyingPartial] = useState(false);
   const [committing, setCommitting] = useState(false);
 
   const load = useCallback(async () => {
@@ -154,6 +155,10 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
     () => slideGroups.find((g) => g.slide === activeSlide) ?? null,
     [slideGroups, activeSlide]
   );
+  const proposalFragment = useMemo(
+    () => fragments.find((fragment) => fragment.index === proposal?.index) ?? null,
+    [fragments, proposal]
+  );
 
   const startEdit = (frag: FragmentItem) => {
     setEditingIndex(frag.index);
@@ -204,7 +209,8 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
       setRevision(resp.revision);
       setDirty(resp.dirty);
       setPartialCandidates(resp.partial_candidates);
-      setSelectedPartial(new Set(resp.partial_candidates.map((item) => item.index)));
+      // 부분 일치는 문맥 검토가 필요한 보조 후보이므로 사용자가 직접 고른다.
+      setSelectedPartial(new Set());
       setProposal(null);
       setEditingIndex(null);
       await load();
@@ -222,8 +228,13 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
   };
 
   const applySelectedPartial = async () => {
-    if (selectedPartial.size === 0 || partialCandidates.length === 0) return;
+    if (
+      applyingPartial ||
+      selectedPartial.size === 0 ||
+      partialCandidates.length === 0
+    ) return;
     const first = partialCandidates[0];
+    setApplyingPartial(true);
     try {
       await apiClient.applyPartialCandidates(jobId, {
         indices: Array.from(selectedPartial),
@@ -238,6 +249,8 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
     } catch {
       toast.error("부분 일치 문구 적용에 실패했습니다.");
       await load();
+    } finally {
+      setApplyingPartial(false);
     }
   };
 
@@ -408,7 +421,7 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
                   onPropagateChange={setPropagate}
                   onStartEdit={() => startEdit(frag)}
                   onCancelEdit={() => setEditingIndex(null)}
-                  onApplyEdit={() => previewEdit(frag)}
+                  onPreviewManual={() => previewEdit(frag)}
                   onRetranslate={(instruction) => retranslate(frag, instruction)}
                   onIgnore={() => ignore(frag)}
                 />
@@ -437,6 +450,10 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
               <Button variant="ghost" size="icon-sm" onClick={() => setProposal(null)}>
                 <X className="w-4 h-4" />
               </Button>
+            </div>
+            <div className="rounded-lg border bg-muted/30 p-3">
+              <p className="text-[11px] font-bold text-muted-foreground mb-1">원문</p>
+              <p className="text-sm leading-snug">{proposalFragment?.source ?? ""}</p>
             </div>
             <div className="grid sm:grid-cols-2 gap-3">
               <div className="rounded-lg bg-muted/50 p-3">
@@ -467,7 +484,7 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
               <Button variant="outline" onClick={() => setProposal(null)}>취소</Button>
               <Button onClick={applyProposal} disabled={busyIndex === proposal.index}>
                 {busyIndex === proposal.index && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
-                초안에 적용
+                적용
               </Button>
             </div>
           </div>
@@ -479,9 +496,22 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
           <div className="flex items-start justify-between gap-3 mb-3">
             <div>
               <h3 className="text-sm font-bold">부분 일치 문구도 변경할까요?</h3>
-              <p className="text-xs text-muted-foreground">문장 구조가 다른 위치는 선택한 항목만 바꿉니다.</p>
+              <p className="text-xs text-muted-foreground">
+                문장 구조가 다른 위치는 원문을 확인하고 필요한 항목만 선택하세요.
+              </p>
+              {partialCandidates[0] && (
+                <p className="mt-1 text-xs font-medium">
+                  &ldquo;{partialCandidates[0].old_phrase}&rdquo; → &ldquo;
+                  {partialCandidates[0].new_phrase || "(삭제)"}&rdquo;
+                </p>
+              )}
             </div>
-            <Button variant="ghost" size="icon-sm" onClick={() => setPartialCandidates([])}>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              disabled={applyingPartial}
+              onClick={() => setPartialCandidates([])}
+            >
               <X className="w-4 h-4" />
             </Button>
           </div>
@@ -491,6 +521,7 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
                 <input
                   type="checkbox"
                   checked={selectedPartial.has(candidate.index)}
+                  disabled={applyingPartial}
                   onChange={(event) => {
                     setSelectedPartial((current) => {
                       const next = new Set(current);
@@ -500,14 +531,33 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
                     });
                   }}
                 />
-                <span><b>S{candidate.slide}</b> · {candidate.target}<br />→ {candidate.proposed_target}</span>
+                <span className="min-w-0 space-y-0.5">
+                  <span className="block text-muted-foreground">
+                    <b className="text-foreground">S{candidate.slide}</b>
+                    {candidate.is_note && " · 발표자 노트"} · 원문: {candidate.source}
+                  </span>
+                  <span className="block">{candidate.target}</span>
+                  <span className="block text-primary">→ {candidate.proposed_target}</span>
+                </span>
               </label>
             ))}
           </div>
           <div className="flex justify-end gap-2 mt-3">
-            <Button variant="outline" size="sm" onClick={() => setPartialCandidates([])}>건너뛰기</Button>
-            <Button size="sm" onClick={applySelectedPartial} disabled={selectedPartial.size === 0}>
-              선택한 {selectedPartial.size}건 적용
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={applyingPartial}
+              onClick={() => setPartialCandidates([])}
+            >
+              건너뛰기
+            </Button>
+            <Button
+              size="sm"
+              onClick={applySelectedPartial}
+              disabled={applyingPartial || selectedPartial.size === 0}
+            >
+              {applyingPartial && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {applyingPartial ? "적용 중" : `선택한 ${selectedPartial.size}건 적용`}
             </Button>
           </div>
         </div>
@@ -525,23 +575,72 @@ function styleStatusLabel(status: string): string {
   }
 }
 
+const LIGHT_REVIEW_BACKGROUND_LUMINANCE = 0.98;
+const DARK_REVIEW_BACKGROUND_LUMINANCE = 0.03;
+const MIN_REVIEW_TEXT_CONTRAST = 4.5;
+
+function relativeLuminance(color: string): number | null {
+  const match = color.match(/^#([0-9a-f]{6})$/i);
+  if (!match) return null;
+
+  const channels = match[1].match(/.{2}/g)?.map((value) => {
+    const srgb = Number.parseInt(value, 16) / 255;
+    return srgb <= 0.04045
+      ? srgb / 12.92
+      : ((srgb + 0.055) / 1.055) ** 2.4;
+  });
+  if (!channels || channels.length !== 3) return null;
+
+  return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+}
+
+function contrastRatio(first: number, second: number): number {
+  const lighter = Math.max(first, second);
+  const darker = Math.min(first, second);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function reviewColorContrast(color: string | null): {
+  lowOnLight: boolean;
+  lowOnDark: boolean;
+} {
+  if (!color) return { lowOnLight: false, lowOnDark: false };
+  const luminance = relativeLuminance(color);
+  if (luminance === null) return { lowOnLight: false, lowOnDark: false };
+
+  return {
+    lowOnLight:
+      contrastRatio(luminance, LIGHT_REVIEW_BACKGROUND_LUMINANCE) <
+      MIN_REVIEW_TEXT_CONTRAST,
+    lowOnDark:
+      contrastRatio(luminance, DARK_REVIEW_BACKGROUND_LUMINANCE) <
+      MIN_REVIEW_TEXT_CONTRAST,
+  };
+}
+
 function StyledText({ segments, fallback }: { segments: StyleSegment[]; fallback: string }) {
   if (segments.length === 0) return <span className="text-sm">{fallback}</span>;
   return (
     <span className="text-sm leading-snug">
-      {segments.map((segment, index) => (
-        <span
-          key={`${index}-${segment.group_index}`}
-          style={{
-            color: segment.color ?? undefined,
-            fontWeight: segment.bold ? 700 : undefined,
-            fontStyle: segment.italic ? "italic" : undefined,
-          }}
-          title={segment.color ?? (segment.scheme ? `테마 색상: ${segment.scheme}` : undefined)}
-        >
-          {segment.text}
-        </span>
-      ))}
+      {segments.map((segment, index) => {
+        const contrast = reviewColorContrast(segment.color);
+        return (
+          <span
+            key={`${index}-${segment.group_index}`}
+            className="review-style-color"
+            data-low-contrast-light={contrast.lowOnLight || undefined}
+            data-low-contrast-dark={contrast.lowOnDark || undefined}
+            style={{
+              "--review-original-color": segment.color ?? "var(--foreground)",
+              fontWeight: segment.bold ? 700 : undefined,
+              fontStyle: segment.italic ? "italic" : undefined,
+            } as CSSProperties}
+            title={segment.color ?? (segment.scheme ? `테마 색상: ${segment.scheme}` : undefined)}
+          >
+            {segment.text}
+          </span>
+        );
+      })}
     </span>
   );
 }
@@ -557,7 +656,7 @@ interface FragmentCardProps {
   onPropagateChange: (v: boolean) => void;
   onStartEdit: () => void;
   onCancelEdit: () => void;
-  onApplyEdit: () => void;
+  onPreviewManual: () => void;
   onRetranslate: (instruction?: string) => void;
   onIgnore: () => void;
 }
@@ -573,7 +672,7 @@ function FragmentCard({
   onPropagateChange,
   onStartEdit,
   onCancelEdit,
-  onApplyEdit,
+  onPreviewManual,
   onRetranslate,
   onIgnore,
 }: FragmentCardProps) {
@@ -581,14 +680,19 @@ function FragmentCard({
   // long/편집 = 원문|번역 2단 대조. short/med = 번역 크게 + 원문 흐리게.
   const twoCol = span === "long" || editing;
 
-  // 재번역 추가 요청 입력 토글. 카드 로컬 상태 — 카드마다 독립적으로 열린다.
-  const [showInstruct, setShowInstruct] = useState(false);
+  const [editMode, setEditMode] = useState<"manual" | "ai">("manual");
   const [instruct, setInstruct] = useState("");
+
+  useEffect(() => {
+    if (!editing) {
+      setEditMode("manual");
+      setInstruct("");
+    }
+  }, [editing]);
+
   const submitRetranslate = () => {
     const trimmed = instruct.trim();
     onRetranslate(trimmed || (overflow ? "더 짧게" : undefined));
-    setShowInstruct(false);
-    setInstruct("");
   };
 
   return (
@@ -607,21 +711,6 @@ function FragmentCard({
           <Button size="xs" variant="ghost" className="gap-1 h-6 px-1.5" onClick={onStartEdit}>
             <Pencil className="w-3 h-3" />
             수정
-          </Button>
-          <Button
-            size="xs"
-            variant="ghost"
-            className="gap-1 h-6 px-1.5"
-            disabled={busy}
-            onClick={() => setShowInstruct((v) => !v)}
-            title="추가 요청사항을 적어 재번역 (비워도 됨)"
-          >
-            {busy ? (
-              <Loader2 className="w-3 h-3 animate-spin" />
-            ) : (
-              <RefreshCw className="w-3 h-3" />
-            )}
-            재번역
           </Button>
           {frag.findings.length > 0 && (
             <Button
@@ -668,14 +757,82 @@ function FragmentCard({
       {twoCol ? (
         // 2단 대조 (긴 문단·편집 중)
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div className="text-sm text-foreground/70 leading-snug">{frag.source}</div>
+          <div>
+            {editing && (
+              <p className="text-[11px] font-bold text-muted-foreground mb-1">원문</p>
+            )}
+            <div className="text-sm text-foreground/70 leading-snug">{frag.source}</div>
+          </div>
           {editing ? (
-            <Textarea
-              value={editText}
-              onChange={(e) => onEditTextChange(e.target.value)}
-              className="min-h-[52px] text-sm"
-              autoFocus
-            />
+            <div className="min-w-0">
+              <div className="flex gap-1 rounded-lg bg-muted p-1 mb-2" role="tablist" aria-label="수정 방식">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={editMode === "manual"}
+                  disabled={busy}
+                  onClick={() => setEditMode("manual")}
+                  className={`flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
+                    editMode === "manual"
+                      ? "bg-card text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  직접 수정
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={editMode === "ai"}
+                  disabled={busy}
+                  onClick={() => setEditMode("ai")}
+                  className={`flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
+                    editMode === "ai"
+                      ? "bg-card text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  AI 재번역
+                </button>
+              </div>
+
+              {editMode === "manual" ? (
+                <div role="tabpanel">
+                  <Textarea
+                    value={editText}
+                    onChange={(e) => onEditTextChange(e.target.value)}
+                    className="min-h-[72px] text-sm"
+                    disabled={busy}
+                    autoFocus
+                  />
+                  <p className="mt-1 text-[10px] text-muted-foreground">
+                    번역문을 직접 고친 뒤 수정 후보를 확인합니다.
+                  </p>
+                </div>
+              ) : (
+                <div role="tabpanel" className="space-y-2">
+                  <div className="rounded-md bg-muted/50 px-2.5 py-2">
+                    <p className="text-[10px] font-bold text-muted-foreground mb-0.5">현재 번역</p>
+                    <p className="text-xs leading-snug">{frag.target}</p>
+                  </div>
+                  <input
+                    type="text"
+                    value={instruct}
+                    onChange={(e) => setInstruct(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !busy) submitRetranslate();
+                    }}
+                    placeholder="추가 요청사항 (선택) · 예: 더 격식있게, 존댓말로"
+                    disabled={busy}
+                    autoFocus
+                    className="w-full text-xs bg-card border rounded px-2.5 py-2 outline-none focus:border-primary disabled:opacity-50"
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    요청사항을 비우면 원문을 기준으로 다시 번역합니다.
+                  </p>
+                </div>
+              )}
+            </div>
           ) : (
             <div className="text-sm leading-snug">
               <StyledText segments={frag.style_segments} fallback={frag.target} />
@@ -713,45 +870,7 @@ function FragmentCard({
         </div>
       )}
 
-      {/* 재번역: 추가 요청사항(선택) 입력 후 실행 */}
-      {showInstruct && !editing && (
-        <div className="mt-2 flex gap-1.5 items-center">
-          <input
-            type="text"
-            value={instruct}
-            onChange={(e) => setInstruct(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") submitRetranslate();
-              if (e.key === "Escape") {
-                setShowInstruct(false);
-                setInstruct("");
-              }
-            }}
-            placeholder="추가 요청사항 (선택) · 예: 더 격식있게, 존댓말로"
-            autoFocus
-            disabled={busy}
-            className="flex-1 min-w-0 text-xs bg-card border rounded px-2 py-1 outline-none focus:border-primary"
-          />
-          <Button
-            size="xs"
-            variant="outline"
-            className="shrink-0"
-            disabled={busy}
-            onClick={() => {
-              setShowInstruct(false);
-              setInstruct("");
-            }}
-          >
-            취소
-          </Button>
-          <Button size="xs" className="gap-1 shrink-0" disabled={busy} onClick={submitRetranslate}>
-            {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-            재번역
-          </Button>
-        </div>
-      )}
-
-      {/* 편집 중 저장/취소 바 */}
+      {/* 직접 수정과 AI 재번역이 공유하는 적용 옵션/액션 바 */}
       {editing && (
         <div className="mt-2 flex gap-1.5 flex-wrap items-center">
           <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground mr-auto">
@@ -763,12 +882,23 @@ function FragmentCard({
             />
             동일 문구 함께 적용
           </label>
-          <Button size="xs" variant="outline" onClick={onCancelEdit}>
+          <Button size="xs" variant="outline" disabled={busy} onClick={onCancelEdit}>
             취소
           </Button>
-          <Button size="xs" className="gap-1" disabled={busy} onClick={onApplyEdit}>
-            {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
-            미리보기
+          <Button
+            size="xs"
+            className="gap-1"
+            disabled={busy}
+            onClick={editMode === "manual" ? onPreviewManual : submitRetranslate}
+          >
+            {busy ? (
+              <Loader2 className="w-3 h-3 animate-spin" />
+            ) : editMode === "manual" ? (
+              <Check className="w-3 h-3" />
+            ) : (
+              <RefreshCw className="w-3 h-3" />
+            )}
+            {editMode === "manual" ? "확인" : "AI 번역"}
           </Button>
         </div>
       )}

@@ -12,10 +12,11 @@ from __future__ import annotations
 import io
 import logging
 import math
+import re
 import uuid
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, Iterable, List, Optional
 
 from lxml import etree
 
@@ -27,6 +28,8 @@ from src.utils.repetition import RepetitionPlan, build_repetition_plan
 LOGGER = logging.getLogger(__name__)
 _EMU_PER_POINT = 12700
 _A_NS = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
+_CJK_CHARACTER = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7a3]")
+_HANGUL_CHARACTER = re.compile(r"[\u1100-\u11ff\u3130-\u318f\uac00-\ud7a3]")
 
 
 @dataclass
@@ -470,27 +473,110 @@ class ReviewSession:
         new_end = len(new) - suffix if suffix else len(new)
         return old[prefix:old_end].strip(), new[prefix:new_end].strip()
 
+    @staticmethod
+    def _is_meaningful_partial_phrase(phrase: str) -> bool:
+        """Reject fragments too weak to propagate safely across a deck."""
+        stripped = phrase.strip()
+        alphanumeric = [character for character in stripped if character.isalnum()]
+        if not alphanumeric or all(character.isdigit() for character in alphanumeric):
+            return False
+        if _CJK_CHARACTER.search(stripped):
+            # One- or two-character Hangul/CJK fragments are usually syllables,
+            # morphemes, or generic words rather than stable deck terminology.
+            return len(alphanumeric) >= 3
+        return len(alphanumeric) >= 4 or (
+            len(alphanumeric) >= 2 and stripped.isupper()
+        )
+
+    @staticmethod
+    def _partial_phrase_spans(target: str, phrase: str) -> List[tuple[int, int]]:
+        """Return exact occurrences with language-appropriate word boundaries."""
+
+        def has_blocking_neighbor(edge: str, neighbor: str) -> bool:
+            # Korean normally separates lexical words with spaces, so a Hangul
+            # neighbor means the match is embedded in a longer word (for
+            # example 활성화 inside 비활성화). Japanese and Chinese commonly do
+            # not use spaces, so their CJK characters intentionally remain
+            # exempt from this adjacency check.
+            if _HANGUL_CHARACTER.fullmatch(edge):
+                return bool(_HANGUL_CHARACTER.fullmatch(neighbor))
+            if _CJK_CHARACTER.fullmatch(edge):
+                return False
+            return (edge.isalnum() or edge == "_") and (
+                neighbor.isalnum() or neighbor == "_"
+            )
+
+        spans: List[tuple[int, int]] = []
+        offset = 0
+        while offset <= len(target) - len(phrase):
+            start = target.find(phrase, offset)
+            if start < 0:
+                break
+            end = start + len(phrase)
+            left_ok = not (
+                start > 0
+                and has_blocking_neighbor(phrase[0], target[start - 1])
+            )
+            right_ok = not (
+                end < len(target)
+                and has_blocking_neighbor(phrase[-1], target[end])
+            )
+            if left_ok and right_ok:
+                spans.append((start, end))
+            offset = start + 1
+        return spans
+
+    @classmethod
+    def _replace_partial_phrase_once(
+        cls, target: str, old_phrase: str, new_phrase: str
+    ) -> Optional[str]:
+        """Replace one unambiguous occurrence and keep deletion spacing tidy."""
+        spans = cls._partial_phrase_spans(target, old_phrase)
+        if len(spans) != 1:
+            return None
+        start, end = spans[0]
+        if not new_phrase:
+            if end < len(target) and target[end].isspace():
+                end += 1
+            elif start > 0 and target[start - 1].isspace():
+                start -= 1
+        return f"{target[:start]}{new_phrase}{target[end:]}"
+
     def partial_match_candidates(
-        self, index: int, old_phrase: str, new_phrase: Optional[str] = None
+        self,
+        index: int,
+        old_phrase: str,
+        new_phrase: Optional[str] = None,
+        *,
+        exclude_indices: Optional[Iterable[int]] = None,
     ) -> List[dict]:
         results: List[dict] = []
         needle = old_phrase.strip()
-        if not needle:
+        replacement = needle if new_phrase is None else new_phrase
+        if (
+            not self._is_meaningful_partial_phrase(needle)
+            or replacement == needle
+        ):
             return results
+        excluded = set(exclude_indices or ())
+        excluded.add(index)
         for other, target in enumerate(self.translated_texts):
-            if other == index or needle not in target:
+            if other in excluded:
+                continue
+            proposed = self._replace_partial_phrase_once(target, needle, replacement)
+            if proposed is None or proposed == target:
                 continue
             info = self.paragraphs[other]
-            proposed = target.replace(needle, new_phrase or needle, 1)
             results.append(
                 {
                     "index": other,
                     "slide": info.slide_index + 1,
                     "is_note": info.is_note,
+                    "source": info.original_text or "",
                     "target": target,
                     "proposed_target": proposed,
                     "old_phrase": needle,
-                    "new_phrase": new_phrase or needle,
+                    "new_phrase": replacement,
                 }
             )
         return results
@@ -534,7 +620,12 @@ class ReviewSession:
                 colors[other] = mapped
 
         old_phrase, new_phrase = self._changed_phrase(old_target, new_target)
-        partial = self.partial_match_candidates(index, old_phrase, new_phrase)
+        partial = self.partial_match_candidates(
+            index,
+            old_phrase,
+            new_phrase,
+            exclude_indices=indices,
+        )
         style_segments, style_status = self.style_preview(
             index, target=new_target, segments=colors.get(index, [])
         )
@@ -589,16 +680,27 @@ class ReviewSession:
     ) -> List[int]:
         if expected_revision != self.revision:
             raise RuntimeError("review revision conflict")
-        valid = [
-            idx for idx in indices
-            if 0 <= idx < len(self.translated_texts)
-            and old_phrase in self.translated_texts[idx]
-        ]
-        if not valid:
+        if (
+            not self._is_meaningful_partial_phrase(old_phrase)
+            or old_phrase == new_phrase
+        ):
             return []
+
+        replacements: Dict[int, str] = {}
+        for idx in indices:
+            if not (0 <= idx < len(self.translated_texts)):
+                continue
+            target = self._replace_partial_phrase_once(
+                self.translated_texts[idx], old_phrase, new_phrase
+            )
+            if target is not None and target != self.translated_texts[idx]:
+                replacements[idx] = target
+        if not replacements:
+            return []
+
+        valid = list(replacements)
         self._history.append(self._snapshot(valid))
-        for idx in valid:
-            target = self.translated_texts[idx].replace(old_phrase, new_phrase, 1)
+        for idx, target in replacements.items():
             self.translated_texts[idx] = target
             self.edited_indices.add(idx)
             mapped = self._map_color_distribution(idx, target, model=model, provider=provider)
