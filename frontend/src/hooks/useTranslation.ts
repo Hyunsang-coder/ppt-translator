@@ -6,6 +6,8 @@ import { useCallback, useEffect, useRef } from "react";
 import { apiClient } from "@/lib/api-client";
 import { saveBlob } from "@/lib/save-file";
 import { createSSEClient, SSEClient } from "@/lib/sse-client";
+import { glossaryToJsonPayload } from "@/lib/glossary";
+import { useGlossaryStore } from "@/stores/glossary-store";
 import { useTranslationStore } from "@/stores/translation-store";
 import type { JobProgress, SSEEvent } from "@/types/api";
 
@@ -30,7 +32,6 @@ function getProgressLogKey(progress: JobProgress): string {
 export function useTranslation() {
   const {
     pptFile,
-    glossaryFile,
     settings,
     jobId,
     status,
@@ -39,7 +40,6 @@ export function useTranslation() {
     resultFilename,
     logs,
     setPptFile,
-    setGlossaryFile,
     updateSettings,
     setJobId,
     setStatus,
@@ -81,8 +81,20 @@ export function useTranslation() {
       const abortController = new AbortController();
       abortControllerRef.current = abortController;
 
+      // Snapshot active glossary at start so mid-job edits don't race the upload.
+      const activeEntries = useGlossaryStore.getState().getActiveEntries();
+      const glossaryJson = glossaryToJsonPayload(activeEntries);
+      if (glossaryJson) {
+        addLog(`용어집 ${activeEntries.length}개 항목을 적용합니다.`, "info");
+      }
+
       // Create job
-      const response = await apiClient.createJob(pptFile, settings, glossaryFile ?? undefined, abortController.signal);
+      const response = await apiClient.createJob(
+        pptFile,
+        settings,
+        glossaryJson,
+        abortController.signal
+      );
       abortControllerRef.current = null;
       setJobId(response.job_id);
       addLog(`작업 생성 완료 (ID: ${response.job_id.slice(0, 8)}...)`, "info");
@@ -156,7 +168,6 @@ export function useTranslation() {
     }
   }, [
     pptFile,
-    glossaryFile,
     settings,
     setStatus,
     setErrorMessage,
@@ -227,7 +238,6 @@ export function useTranslation() {
   return {
     // State
     pptFile,
-    glossaryFile,
     settings,
     jobId,
     status,
@@ -257,7 +267,6 @@ export function useTranslation() {
 
     // Actions
     setPptFile: handleSetPptFile,
-    setGlossaryFile,
     updateSettings,
     startTranslation,
     cancelTranslation,

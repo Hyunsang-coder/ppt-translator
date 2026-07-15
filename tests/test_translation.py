@@ -69,6 +69,31 @@ class GlossaryLoaderTestCase(unittest.TestCase):
         updated = GlossaryLoader.apply_glossary_to_translation("the path here", glossary)
         self.assertEqual(updated, r"the C:\dir here")
 
+    def test_from_pairs_skips_template_header(self) -> None:
+        glossary = GlossaryLoader.from_pairs(
+            [("원문", "번역"), ("PUBG", "배틀그라운드")],
+            require_non_empty=True,
+        )
+        self.assertEqual(glossary, {"PUBG": "배틀그라운드"})
+
+    def test_from_json_object_and_array(self) -> None:
+        as_object = GlossaryLoader.from_json('{"PUBG": "배틀그라운드"}')
+        as_array = GlossaryLoader.from_json(
+            '[{"source": "PUBG", "target": "배틀그라운드"}]'
+        )
+        self.assertEqual(as_object, {"PUBG": "배틀그라운드"})
+        self.assertEqual(as_array, {"PUBG": "배틀그라운드"})
+
+    def test_from_json_empty_is_none(self) -> None:
+        self.assertIsNone(GlossaryLoader.from_json(""))
+        self.assertIsNone(GlossaryLoader.from_json("{}"))
+        self.assertIsNone(GlossaryLoader.from_json("[]"))
+
+    def test_from_json_rejects_oversized_payload(self) -> None:
+        huge = "x" * (GlossaryLoader.MAX_JSON_CHARS + 1)
+        with self.assertRaises(ValueError):
+            GlossaryLoader.from_json(huge)
+
 
 class HelperTestCase(unittest.TestCase):
     def test_chunk_paragraphs_preserves_order(self) -> None:

@@ -112,12 +112,27 @@ export const apiClient = {
   },
 
   /**
+   * Parse an Excel glossary into structured entries (for the in-app editor import).
+   */
+  async parseGlossaryFile(
+    glossaryFile: File
+  ): Promise<{ entries: { source: string; target: string }[]; count: number }> {
+    const formData = new FormData();
+    formData.append("glossary_file", glossaryFile);
+    const response = await fetch(await apiUrl("/api/v1/glossary/parse"), {
+      method: "POST",
+      body: formData,
+    });
+    return handleResponse(response);
+  },
+
+  /**
    * Create a translation job
    */
   async createJob(
     pptFile: File,
     settings: TranslationSettings,
-    glossaryFile?: File,
+    glossaryJson?: string | null,
     signal?: AbortSignal
   ): Promise<JobCreateResponse> {
     const formData = new FormData();
@@ -134,8 +149,8 @@ export const apiClient = {
     if (settings.instructions) {
       formData.append("instructions", settings.instructions);
     }
-    if (glossaryFile) {
-      formData.append("glossary_file", glossaryFile);
+    if (glossaryJson) {
+      formData.append("glossary_json", glossaryJson);
     }
     // Filename settings
     formData.append("filename_settings", JSON.stringify(settings.filenameSettings));

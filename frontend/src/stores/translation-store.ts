@@ -23,7 +23,6 @@ export type TranslationStatus =
 interface TranslationState {
   // File state
   pptFile: File | null;
-  glossaryFile: File | null;
 
   // Settings
   settings: TranslationSettings;
@@ -42,7 +41,6 @@ interface TranslationState {
 
   // Actions
   setPptFile: (file: File | null) => void;
-  setGlossaryFile: (file: File | null) => void;
   updateSettings: (settings: Partial<TranslationSettings>) => void;
   setJobId: (jobId: string | null) => void;
   setStatus: (status: TranslationStatus) => void;
@@ -86,7 +84,6 @@ const MAX_LOGS = 400;
 export const useTranslationStore = create<TranslationState>((set) => ({
   // Initial state
   pptFile: null,
-  glossaryFile: null,
   settings: DEFAULT_SETTINGS,
   jobId: null,
   status: "idle",
@@ -110,8 +107,6 @@ export const useTranslationStore = create<TranslationState>((set) => ({
           }
         : {}),
     })),
-
-  setGlossaryFile: (file) => set({ glossaryFile: file }),
 
   updateSettings: (newSettings) =>
     set((state) => ({
@@ -178,7 +173,6 @@ export const useTranslationStore = create<TranslationState>((set) => ({
   reset: () =>
     set({
       pptFile: null,
-      glossaryFile: null,
       jobId: null,
       status: "idle",
       progress: null,

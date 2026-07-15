@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import io
+import json
 import logging
 import re
-from typing import Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Mapping
 
 import pandas as pd
 
@@ -13,12 +14,19 @@ from src.utils.security import validate_excel_file
 
 LOGGER = logging.getLogger(__name__)
 
+# Header labels used by glossary_template.xlsx / OddEyes-style CSV exports.
+_HEADER_SOURCE_ALIASES = frozenset({"원문", "source", "소스", "용어", "term"})
+_HEADER_TARGET_ALIASES = frozenset({"번역", "target", "타겟", "번역어", "translation"})
+
 
 class GlossaryLoader:
-    """Load glossary definitions from Excel files for translation prompts."""
+    """Load glossary definitions from Excel files or JSON for translation prompts."""
 
     REQUIRED_COLUMNS = 2
     MAX_FILE_SIZE_MB = 10  # Maximum Excel file size: 10MB
+    MAX_ENTRIES = 5000
+    MAX_JSON_CHARS = 1_000_000
+    MAX_TERM_CHARS = 500
 
     def load_glossary(self, file_data: io.BytesIO) -> Dict[str, str]:
         """Load glossary entries from an uploaded Excel file.
@@ -57,19 +65,106 @@ class GlossaryLoader:
         if dataframe.empty or dataframe.shape[1] < self.REQUIRED_COLUMNS:
             raise ValueError("용어집 파일에 필요한 두 개의 열이 존재하지 않습니다.")
 
-        glossary: Dict[str, str] = {}
-        for _, row in dataframe.iterrows():
-            source = str(row.iloc[0]).strip()
-            target = str(row.iloc[1]).strip()
-            if not source or not target:
-                continue
-            glossary[source] = target
-
-        if not glossary:
-            raise ValueError("유효한 용어집 항목을 찾을 수 없습니다.")
+        rows = [
+            (str(row.iloc[0]).strip(), str(row.iloc[1]).strip())
+            for _, row in dataframe.iterrows()
+        ]
+        glossary = self.from_pairs(rows, require_non_empty=True)
 
         LOGGER.info("Loaded %d glossary entries.", len(glossary))
         return glossary
+
+    @classmethod
+    def from_pairs(
+        cls,
+        pairs: Iterable[tuple[str, str]],
+        *,
+        require_non_empty: bool = False,
+    ) -> Dict[str, str]:
+        """Build a glossary dict from (source, target) pairs.
+
+        Skips a leading header row when the first pair looks like column labels.
+        Duplicate sources upsert (last value wins). Enforces entry/term limits.
+        """
+        glossary: Dict[str, str] = {}
+        started = False
+        for source, target in pairs:
+            source = (source or "").strip()
+            target = (target or "").strip()
+            if not source or not target:
+                continue
+            if not started and cls._is_header_row(source, target):
+                started = True
+                continue
+            started = True
+            if len(source) > cls.MAX_TERM_CHARS or len(target) > cls.MAX_TERM_CHARS:
+                raise ValueError(
+                    f"용어 길이는 {cls.MAX_TERM_CHARS}자를 초과할 수 없습니다."
+                )
+            glossary[source] = target
+            if len(glossary) > cls.MAX_ENTRIES:
+                raise ValueError(
+                    f"용어집 항목은 최대 {cls.MAX_ENTRIES}개까지 지원합니다."
+                )
+
+        if require_non_empty and not glossary:
+            raise ValueError("유효한 용어집 항목을 찾을 수 없습니다.")
+        return glossary
+
+    @classmethod
+    def from_json(cls, raw: str | None) -> Dict[str, str] | None:
+        """Parse a glossary JSON payload into a mapping.
+
+        Accepted shapes:
+        - ``{"PUBG": "배틀그라운드", ...}``
+        - ``[{"source": "PUBG", "target": "배틀그라운드"}, ...]``
+
+        Empty / whitespace / ``{}`` / ``[]`` return ``None`` (no glossary).
+        """
+        if raw is None:
+            return None
+        text = raw.strip()
+        if not text:
+            return None
+        if len(text) > cls.MAX_JSON_CHARS:
+            raise ValueError(
+                f"용어집 JSON이 {cls.MAX_JSON_CHARS}자를 초과합니다."
+            )
+        try:
+            payload: Any = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ValueError("용어집 JSON 형식이 올바르지 않습니다.") from exc
+
+        if payload is None:
+            return None
+        if isinstance(payload, Mapping):
+            pairs = [(str(k), str(v)) for k, v in payload.items()]
+        elif isinstance(payload, list):
+            pairs = []
+            for item in payload:
+                if not isinstance(item, Mapping):
+                    raise ValueError(
+                        "용어집 배열 항목은 {source, target} 객체여야 합니다."
+                    )
+                source = item.get("source", item.get("src"))
+                target = item.get("target", item.get("tgt", item.get("dest")))
+                if source is None or target is None:
+                    raise ValueError(
+                        "용어집 배열 항목에 source/target이 필요합니다."
+                    )
+                pairs.append((str(source), str(target)))
+        else:
+            raise ValueError("용어집 JSON은 객체 또는 배열이어야 합니다.")
+
+        glossary = cls.from_pairs(pairs, require_non_empty=False)
+        return glossary or None
+
+    @staticmethod
+    def _is_header_row(source: str, target: str) -> bool:
+        return (
+            source.casefold() in _HEADER_SOURCE_ALIASES
+            and target.casefold() in _HEADER_TARGET_ALIASES
+        )
 
     @staticmethod
     def format_glossary_terms(glossary: Dict[str, str] | None) -> str:

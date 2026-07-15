@@ -19,7 +19,6 @@ export function TranslationForm() {
   const { config, getModelsForProvider } = useConfig();
   const {
     pptFile,
-    glossaryFile,
     settings,
     status,
     progress,
@@ -32,7 +31,6 @@ export function TranslationForm() {
     canStart,
     canCancel,
     setPptFile,
-    setGlossaryFile,
     updateSettings,
     startTranslation,
     cancelTranslation,
@@ -126,8 +124,6 @@ export function TranslationForm() {
               setFilenameError(null);
             }
           }}
-          glossaryFile={glossaryFile}
-          onGlossaryFileChange={setGlossaryFile}
           disabled={isTranslating}
         />
       </div>

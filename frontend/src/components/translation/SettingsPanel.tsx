@@ -11,10 +11,10 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
-import { FileUploader } from "@/components/shared/FileUploader";
+import { GlossarySection } from "@/components/glossary/GlossarySection";
 import { useConfig } from "@/hooks/useConfig";
 import type { TranslationSettings, FilenameSettings, TextFitMode, ImageCompression, LengthLimit } from "@/types/api";
-import { FileText, Type, ImageDown, ChevronDown, Info, Settings2 } from "lucide-react";
+import { FileText, ChevronDown, Info, Settings2 } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
 import {
   Tooltip,
@@ -28,16 +28,12 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 interface SettingsPanelProps {
   settings: TranslationSettings;
   onSettingsChange: (settings: Partial<TranslationSettings>) => void;
-  glossaryFile: File | null;
-  onGlossaryFileChange: (file: File | null) => void;
   disabled?: boolean;
 }
 
 export function SettingsPanel({
   settings,
   onSettingsChange,
-  glossaryFile,
-  onGlossaryFileChange,
   disabled = false,
 }: SettingsPanelProps) {
   const { languages, config, getModelsForProvider, isLoading, error } = useConfig();
@@ -404,20 +400,7 @@ export function SettingsPanel({
         )}
       </div>
 
-      {/* Glossary File - PPT 드롭존과 혼동하지 않도록 컴팩트 버튼형 */}
-      <FileUploader
-        variant="compact"
-        label="용어집 추가"
-        description="선택 · Excel (.xlsx, .xls)"
-        accept={{
-          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
-          "application/vnd.ms-excel": [".xls"],
-        }}
-        maxSizeMB={10}
-        selectedFile={glossaryFile}
-        onFileSelect={onGlossaryFileChange}
-        disabled={disabled}
-      />
+      <GlossarySection disabled={disabled} />
     </div>
   );
 }

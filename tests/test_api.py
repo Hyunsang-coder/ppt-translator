@@ -273,6 +273,46 @@ class TestJobEndpoints:
         assert response.status_code == 400
         assert "Invalid model" in response.json()["detail"]
 
+    def test_create_job_invalid_glossary_json(self, client, sample_pptx_bytes):
+        """Malformed glossary_json must 400 before the job starts translating."""
+        response = client.post(
+            "/api/v1/jobs",
+            files={"ppt_file": ("test.pptx", sample_pptx_bytes, "application/octet-stream")},
+            data={
+                "provider": "openai",
+                "model": "gpt-5.6-sol",
+                "glossary_json": "{not-json",
+            },
+        )
+        assert response.status_code == 400
+        assert "Glossary error" in response.json()["detail"]
+
+    def test_parse_glossary_excel(self, client):
+        """Excel import endpoint returns structured entries and skips header row."""
+        import pandas as pd
+
+        buffer = io.BytesIO()
+        pd.DataFrame(
+            [["원문", "번역"], ["PUBG", "배틀그라운드"], ["Stream", "스트리밍"]]
+        ).to_excel(buffer, index=False, header=False)
+        buffer.seek(0)
+
+        response = client.post(
+            "/api/v1/glossary/parse",
+            files={
+                "glossary_file": (
+                    "glossary.xlsx",
+                    buffer.getvalue(),
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] == 2
+        assert {"source": "PUBG", "target": "배틀그라운드"} in data["entries"]
+        assert all(e["source"] != "원문" for e in data["entries"])
+
     def test_get_job_not_found(self, client):
         """Test getting non-existent job."""
         response = client.get("/api/v1/jobs/non-existent-id")

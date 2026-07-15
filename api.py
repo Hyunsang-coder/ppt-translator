@@ -165,6 +165,16 @@ class ConfigResponse(BaseModel):
     default_model: str
 
 
+class GlossaryEntryResponse(BaseModel):
+    source: str
+    target: str
+
+
+class GlossaryParseResponse(BaseModel):
+    entries: List[GlossaryEntryResponse]
+    count: int
+
+
 class JobCreateResponse(BaseModel):
     """Job creation response."""
 
@@ -683,11 +693,51 @@ async def _run_translation_job(
             await job_manager.fail_job(job_id, "번역 중 오류가 발생했습니다.")
 
 
+@app.post("/api/v1/glossary/parse", response_model=GlossaryParseResponse)
+async def parse_glossary_file(
+    glossary_file: UploadFile = File(..., description="Excel glossary (.xlsx/.xls)"),
+) -> GlossaryParseResponse:
+    """Parse an Excel glossary into structured entries for the in-app editor.
+
+    Does not create a job. Used by the glossary manager import UI so existing
+    Excel templates keep working after the SettingsPanel file uploader is removed.
+    """
+    if not glossary_file.filename:
+        raise HTTPException(status_code=400, detail="No filename provided")
+
+    filename_lower = glossary_file.filename.lower()
+    if not (filename_lower.endswith(".xlsx") or filename_lower.endswith(".xls")):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid file type. Only .xlsx and .xls glossary files are supported.",
+        )
+
+    try:
+        content = await glossary_file.read()
+        glossary = GlossaryLoader().load_glossary(io.BytesIO(content))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Glossary error: {str(exc)}")
+    except Exception as exc:
+        LOGGER.exception("Failed to parse glossary file: %s", exc)
+        raise HTTPException(status_code=400, detail="Failed to parse glossary file")
+
+    entries = [
+        GlossaryEntryResponse(source=source, target=target)
+        for source, target in glossary.items()
+    ]
+    return GlossaryParseResponse(entries=entries, count=len(entries))
+
+
 @app.post("/api/v1/jobs", response_model=JobCreateResponse)
 async def create_job(
     background_tasks: BackgroundTasks,
     ppt_file: UploadFile = File(..., description="PPTX or PPT file to translate"),
     glossary_file: Optional[UploadFile] = File(None, description="Optional Excel glossary file"),
+    glossary_json: Optional[str] = Form(
+        None,
+        description="Optional glossary as JSON object {source:target} or [{source,target}]. "
+        "Takes precedence over glossary_file when both are provided.",
+    ),
     rules_file: Optional[UploadFile] = File(None, description="Optional team translation-rules JSON"),
     source_lang: str = Form("Auto", description="Source language"),
     target_lang: str = Form("Auto", description="Target language"),
@@ -779,20 +829,24 @@ async def create_job(
                 LOGGER.warning("Image compression failed, using original: %s", exc)
                 ppt_buffer.seek(0)
 
-        # Load glossary if provided
+        # Load glossary if provided. JSON takes precedence over Excel so the
+        # in-app editor path never races with a stale file upload.
         glossary = None
-        if glossary_file and glossary_file.filename:
-            try:
+        try:
+            if glossary_json and glossary_json.strip():
+                glossary = GlossaryLoader.from_json(glossary_json)
+                if glossary:
+                    LOGGER.info("Loaded glossary_json with %d terms", len(glossary))
+            elif glossary_file and glossary_file.filename:
                 glossary_content = await glossary_file.read()
                 glossary_buffer = io.BytesIO(glossary_content)
-                glossary_loader = GlossaryLoader()
-                glossary = glossary_loader.load_glossary(glossary_buffer)
-                LOGGER.info("Loaded glossary with %d terms", len(glossary))
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=f"Glossary error: {str(exc)}")
-            except Exception as exc:
-                LOGGER.exception("Failed to load glossary: %s", exc)
-                raise HTTPException(status_code=400, detail="Failed to load glossary file")
+                glossary = GlossaryLoader().load_glossary(glossary_buffer)
+                LOGGER.info("Loaded glossary file with %d terms", len(glossary))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"Glossary error: {str(exc)}")
+        except Exception as exc:
+            LOGGER.exception("Failed to load glossary: %s", exc)
+            raise HTTPException(status_code=400, detail="Failed to load glossary")
 
         # Load team translation rules if provided (WP-C1). No file -> feature
         # off, existing behavior unchanged. A malformed file surfaces as a 400
