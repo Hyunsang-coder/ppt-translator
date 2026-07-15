@@ -455,10 +455,6 @@ class ReviewSession:
         prepared_texts = GlossaryLoader.apply_glossary_to_texts(
             [source_text], self.glossary
         )
-        # Prompt gets only terms present in this fragment's original source.
-        prompt_glossary_terms = GlossaryLoader.format_matching_terms(
-            self.glossary, [source_text]
-        )
 
         def translate_once(strict: bool) -> str:
             extra: List[str] = []
@@ -482,11 +478,11 @@ class ReviewSession:
                 length_limit=self.length_limit,
                 team_rules=self.team_rules,
             )
+            # chunk_paragraphs filters glossary against original source for the prompt.
             batches = chunk_paragraphs(
                 [info],
                 batch_size=1,
                 ppt_context=self.ppt_context,
-                glossary_terms=prompt_glossary_terms,
                 prepared_texts=prepared_texts,
                 length_limit=self.length_limit,
                 glossary=self.glossary,

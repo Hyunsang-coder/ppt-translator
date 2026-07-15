@@ -69,7 +69,7 @@ class GlossaryLoader:
             (str(row.iloc[0]).strip(), str(row.iloc[1]).strip())
             for _, row in dataframe.iterrows()
         ]
-        glossary = self.from_pairs(rows, require_non_empty=True)
+        glossary = self.from_pairs(rows, require_non_empty=True, skip_header=True)
 
         LOGGER.info("Loaded %d glossary entries.", len(glossary))
         return glossary
@@ -80,14 +80,18 @@ class GlossaryLoader:
         pairs: Iterable[tuple[str, str]],
         *,
         require_non_empty: bool = False,
+        skip_header: bool = False,
     ) -> Dict[str, str]:
         """Build a glossary dict from (source, target) pairs.
 
-        Skips a leading header row when the first pair looks like column labels.
+        When ``skip_header`` is True (Excel/CSV file imports only), a leading
+        pair that looks like column labels is ignored. JSON/PATCH paths must
+        pass ``skip_header=False`` so legitimate terms like source→target are kept.
         Duplicate sources upsert (last value wins). Enforces entry/term limits.
         """
         glossary: Dict[str, str] = {}
-        started = False
+        # When not skipping headers, treat the stream as already past the header.
+        started = not skip_header
         for source, target in pairs:
             source = (source or "").strip()
             target = (target or "").strip()
@@ -156,7 +160,7 @@ class GlossaryLoader:
         else:
             raise ValueError("용어집 JSON은 객체 또는 배열이어야 합니다.")
 
-        glossary = cls.from_pairs(pairs, require_non_empty=False)
+        glossary = cls.from_pairs(pairs, require_non_empty=False, skip_header=False)
         return glossary or None
 
     @staticmethod

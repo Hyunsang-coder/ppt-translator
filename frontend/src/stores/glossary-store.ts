@@ -137,11 +137,12 @@ export const useGlossaryStore = create<GlossaryState>()(
         const { entries } = upsertEntries(glossary.entries, [
           { source: src, target: tgt, notes: notes?.trim() || undefined },
         ]);
+        // Do not touch activeGlossaryId — library edits must not re-enable a
+        // glossary the user explicitly cleared for the current job.
         set((state) => ({
           glossaries: state.glossaries.map((g) =>
             g.id === glossaryId ? touch(g, entries) : g
           ),
-          activeGlossaryId: glossaryId,
         }));
       },
 
@@ -194,7 +195,6 @@ export const useGlossaryStore = create<GlossaryState>()(
           glossaries: state.glossaries.map((g) =>
             g.id === glossaryId ? touch(g, entries) : g
           ),
-          activeGlossaryId: glossaryId,
         });
         return { inserted, updated };
       },

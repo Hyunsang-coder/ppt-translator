@@ -69,12 +69,24 @@ class GlossaryLoaderTestCase(unittest.TestCase):
         updated = GlossaryLoader.apply_glossary_to_translation("the path here", glossary)
         self.assertEqual(updated, r"the C:\dir here")
 
-    def test_from_pairs_skips_template_header(self) -> None:
+    def test_from_pairs_skips_template_header_when_enabled(self) -> None:
         glossary = GlossaryLoader.from_pairs(
             [("원문", "번역"), ("PUBG", "배틀그라운드")],
             require_non_empty=True,
+            skip_header=True,
         )
         self.assertEqual(glossary, {"PUBG": "배틀그라운드"})
+
+    def test_from_pairs_keeps_header_alias_terms_without_skip(self) -> None:
+        # JSON/PATCH must not treat source/target labels as Excel headers.
+        glossary = GlossaryLoader.from_pairs(
+            [("source", "target"), ("term", "translation")],
+            skip_header=False,
+        )
+        self.assertEqual(
+            glossary,
+            {"source": "target", "term": "translation"},
+        )
 
     def test_from_json_object_and_array(self) -> None:
         as_object = GlossaryLoader.from_json('{"PUBG": "배틀그라운드"}')
@@ -83,6 +95,12 @@ class GlossaryLoaderTestCase(unittest.TestCase):
         )
         self.assertEqual(as_object, {"PUBG": "배틀그라운드"})
         self.assertEqual(as_array, {"PUBG": "배틀그라운드"})
+
+    def test_from_json_keeps_header_alias_keys(self) -> None:
+        result = GlossaryLoader.from_json(
+            '{"source": "출처", "term": "번역어"}'
+        )
+        self.assertEqual(result, {"source": "출처", "term": "번역어"})
 
     def test_from_json_empty_is_none(self) -> None:
         self.assertIsNone(GlossaryLoader.from_json(""))

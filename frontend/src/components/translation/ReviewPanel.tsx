@@ -107,6 +107,7 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
 
   const ensureDefaultGlossary = useGlossaryStore((s) => s.ensureDefaultGlossary);
   const addEntry = useGlossaryStore((s) => s.addEntry);
+  const setActiveGlossaryId = useGlossaryStore((s) => s.setActiveGlossaryId);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -319,9 +320,13 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
     if (!src || !tgt || glossaryBusy) return;
     setGlossaryBusy(true);
     try {
+      // Server first so a validation failure does not leave a local-only term.
+      await apiClient.updateJobGlossary(jobId, { [src]: tgt });
       const glossaryId = ensureDefaultGlossary();
       addEntry(glossaryId, src, tgt);
-      await apiClient.updateJobGlossary(jobId, { [src]: tgt });
+      // Explicit activation: review-time add means the user wants glossary on
+      // subsequent jobs (unlike silent re-activation inside addEntry).
+      setActiveGlossaryId(glossaryId);
       setGlossarySource("");
       setGlossaryTarget("");
       await load();

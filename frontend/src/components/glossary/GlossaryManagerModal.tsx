@@ -152,6 +152,10 @@ export function GlossaryManagerModal({
 
   async function handleCsvFile(file: File | null) {
     if (!file || !selected || disabled) return;
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error("파일이 10MB를 초과합니다.");
+      return;
+    }
     setImporting(true);
     try {
       const text = await file.text();
@@ -172,6 +176,10 @@ export function GlossaryManagerModal({
 
   async function handleExcelFile(file: File | null) {
     if (!file || !selected || disabled) return;
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error("파일이 10MB를 초과합니다.");
+      return;
+    }
     setImporting(true);
     try {
       const { entries: parsed } = await apiClient.parseGlossaryFile(file);

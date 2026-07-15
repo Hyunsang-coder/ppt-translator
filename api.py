@@ -731,9 +731,24 @@ async def parse_glossary_file(
             detail="Invalid file type. Only .xlsx and .xls glossary files are supported.",
         )
 
+    max_bytes = GlossaryLoader.MAX_FILE_SIZE_MB * 1024 * 1024
+    # Prefer the multipart size hint when present so we reject before buffering.
+    if glossary_file.size is not None and glossary_file.size > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"용어집 파일 크기가 {GlossaryLoader.MAX_FILE_SIZE_MB}MB를 초과합니다.",
+        )
+
     try:
         content = await glossary_file.read()
+        if len(content) > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"용어집 파일 크기가 {GlossaryLoader.MAX_FILE_SIZE_MB}MB를 초과합니다.",
+            )
         glossary = GlossaryLoader().load_glossary(io.BytesIO(content))
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"Glossary error: {str(exc)}")
     except Exception as exc:
@@ -1102,11 +1117,21 @@ async def update_job_glossary(
         raise HTTPException(status_code=400, detail="Job has no editable review session")
 
     session = job.review_session
-    async with job.review_lock:
+    # Don't wait indefinitely if a long retranslate/apply holds the lock.
+    try:
+        await asyncio.wait_for(job.review_lock.acquire(), timeout=3.0)
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=409,
+            detail="다른 검토 작업이 진행 중입니다. 잠시 후 다시 시도해주세요.",
+        )
+    try:
         try:
             merged = session.merge_glossary(body.entries, resweep=True)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=f"Glossary error: {exc}")
+    finally:
+        job.review_lock.release()
 
     return JobGlossaryUpdateResponse(
         count=len(merged),
@@ -1157,24 +1182,36 @@ async def edit_job_fragment(
 
     # Compatibility path: create and immediately stage a server-side proposal.
     # The published output remains unchanged until /review/commit.
+    # Run the (possibly LLM-backed) proposal outside the lock so glossary PATCH
+    # and other review ops are not blocked for the full model call.
+    try:
+        loop = asyncio.get_running_loop()
+        proposal = await loop.run_in_executor(
+            None,
+            functools.partial(
+                session.create_proposal,
+                index,
+                action=body.action,
+                target=body.target,
+                instruction=body.instruction,
+                propagate_identical=body.propagate_identical,
+                model=session.model or DEFAULT_TRANSLATION_MODEL,
+                provider=session.provider,
+            ),
+        )
+    except Exception as exc:
+        LOGGER.exception("Failed to stage review edit: %s", exc)
+        raise HTTPException(status_code=500, detail="수정 준비에 실패했습니다.")
+
     async with job.review_lock:
         try:
-            loop = asyncio.get_running_loop()
-            proposal = await loop.run_in_executor(
-                None,
-                functools.partial(
-                    session.create_proposal,
-                    index,
-                    action=body.action,
-                    target=body.target,
-                    instruction=body.instruction,
-                    propagate_identical=body.propagate_identical,
-                    model=session.model or DEFAULT_TRANSLATION_MODEL,
-                    provider=session.provider,
-                ),
-            )
             session.apply_proposal(proposal.id, session.revision)
             session.run_final_sweep()
+        except RuntimeError:
+            raise HTTPException(
+                status_code=409,
+                detail="검토 내용이 변경되었습니다. 다시 확인해주세요.",
+            )
         except Exception as exc:
             LOGGER.exception("Failed to stage review edit: %s", exc)
             raise HTTPException(status_code=500, detail="수정 준비에 실패했습니다.")
@@ -1219,25 +1256,26 @@ async def propose_job_fragment_edit(
     if body.action == "edit" and body.target is None:
         raise HTTPException(status_code=400, detail="edit proposal requires target")
 
-    async with job.review_lock:
-        try:
-            loop = asyncio.get_running_loop()
-            proposal = await loop.run_in_executor(
-                None,
-                functools.partial(
-                    session.create_proposal,
-                    index,
-                    action=body.action,
-                    target=body.target,
-                    instruction=body.instruction,
-                    propagate_identical=body.propagate_identical,
-                    model=session.model or DEFAULT_TRANSLATION_MODEL,
-                    provider=session.provider,
-                ),
-            )
-        except Exception as exc:
-            LOGGER.exception("Fragment proposal failed: %s", exc)
-            raise HTTPException(status_code=500, detail="수정 후보 생성에 실패했습니다.")
+    # Proposal generation (esp. retranslate) may call the LLM — do not hold
+    # review_lock for that duration or glossary updates / applies will stall.
+    try:
+        loop = asyncio.get_running_loop()
+        proposal = await loop.run_in_executor(
+            None,
+            functools.partial(
+                session.create_proposal,
+                index,
+                action=body.action,
+                target=body.target,
+                instruction=body.instruction,
+                propagate_identical=body.propagate_identical,
+                model=session.model or DEFAULT_TRANSLATION_MODEL,
+                provider=session.provider,
+            ),
+        )
+    except Exception as exc:
+        LOGGER.exception("Fragment proposal failed: %s", exc)
+        raise HTTPException(status_code=500, detail="수정 후보 생성에 실패했습니다.")
 
     return FragmentProposalResponse(
         proposal_id=proposal.id,

@@ -397,6 +397,33 @@ class TestReviewEndpoints:
         # Draft translations stay as-is until the user retranslates or edits.
         assert review_job.review_session.translated_texts[0] == "OLD"
 
+    def test_update_job_glossary_upserts_into_existing(self, client, review_job):
+        """PATCH merges into an existing glossary instead of replacing it."""
+        review_job.review_session.glossary = {"기존": "existing"}
+        review_job.review_session.glossary_terms = '- 기존 => existing'
+        response = client.patch(
+            f"/api/v1/jobs/{review_job.id}/glossary",
+            json={"entries": {"신규": "new", "기존": "updated"}},
+        )
+        assert response.status_code == 200
+        assert response.json()["count"] == 2
+        assert review_job.review_session.glossary == {
+            "기존": "updated",
+            "신규": "new",
+        }
+
+    def test_update_job_glossary_keeps_header_alias_terms(self, client, review_job):
+        """Literal source/target keys must not be treated as Excel headers."""
+        response = client.patch(
+            f"/api/v1/jobs/{review_job.id}/glossary",
+            json={"entries": {"source": "target", "term": "translation"}},
+        )
+        assert response.status_code == 200
+        assert review_job.review_session.glossary == {
+            "source": "target",
+            "term": "translation",
+        }
+
     def test_proposal_is_previewed_then_staged_then_committed(self, client, review_job):
         response = client.get(f"/api/v1/jobs/{review_job.id}/fragments")
         assert response.status_code == 200
