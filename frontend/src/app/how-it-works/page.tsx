@@ -4,12 +4,17 @@ import Link from "next/link";
 import {
   ArrowRight,
   CheckCircle2,
+  Download,
   FileSearch,
+  FileText,
   Languages,
+  ListChecks,
   Palette,
   SearchCheck,
+  Settings2,
   ShieldCheck,
   Sparkles,
+  Upload,
 } from "lucide-react";
 import { DesktopShell } from "@/components/desktop-shell";
 import { Header } from "@/components/shared/Header";
@@ -24,48 +29,75 @@ import { Button } from "@/components/ui/button";
 
 const workflow = [
   {
-    icon: FileSearch,
-    title: "PPT를 먼저 분석합니다",
+    icon: Upload,
+    title: "파일을 올리고 설정을 고릅니다",
     description:
-      "슬라이드의 문장, 줄바꿈, 색상, 글자 스타일을 읽고 같은 문장이 반복되는 곳을 정리합니다.",
+      "PPT를 선택한 뒤 원문·번역 언어, AI 모델, 용어집, 글상자 맞춤 같은 옵션을 정합니다.",
   },
   {
     icon: Languages,
-    title: "문맥에 맞게 번역합니다",
+    title: "슬라이드를 읽고 번역합니다",
     description:
-      "앞뒤 슬라이드의 흐름, 용어집, 사용자가 입력한 톤 지침을 함께 참고해서 번역합니다.",
+      "문장과 서식을 분석한 뒤, 앞뒤 슬라이드 문맥과 용어집을 참고해 자연스럽게 옮깁니다.",
+  },
+  {
+    icon: ListChecks,
+    title: "검토 화면에서 다듬습니다",
+    description:
+      "번역이 끝나면 검토 & 수정이 열립니다. 표시된 항목을 고치거나 일부만 다시 번역할 수 있습니다.",
+  },
+  {
+    icon: Download,
+    title: "확정하고 저장합니다",
+    description:
+      "마음에 들면 최종 PPT로 반영해 다운로드합니다. 원본 서식은 가능한 한 그대로 유지됩니다.",
+  },
+];
+
+const helpers = [
+  {
+    icon: FileSearch,
+    title: "용어집",
+    description:
+      "고유 명사·게임 용어처럼 정해 둔 표현을 등록하면 번역에 우선 반영합니다. Excel/CSV로도 가져올 수 있습니다.",
+  },
+  {
+    icon: Settings2,
+    title: "글상자 맞춤",
+    description:
+      "번역문이 길어지면 글자 크기를 줄이거나 상자를 넓혀 넘치지 않게 맞춥니다. 글자 수 가이드도 켤 수 있습니다.",
   },
   {
     icon: Palette,
-    title: "강조 색상을 의미에 맞춥니다",
+    title: "색상·강조 보존",
     description:
-      "색이 섞인 문단은 색상 위치를 그대로 베끼지 않고, 원래 강조된 말이 번역문에서 어떤 표현이 되었는지 다시 찾습니다.",
+      "빨강·파랑처럼 강조된 말은 번역문에서 같은 뜻의 표현을 찾아 다시 칠합니다. 위치가 아니라 의미를 봅니다.",
   },
   {
-    icon: ShieldCheck,
-    title: "확실할 때만 적용합니다",
+    icon: FileText,
+    title: "텍스트 추출",
     description:
-      "강조 구간이 번역문과 정확히 맞을 때만 색을 입힙니다. 애매하면 엉뚱한 곳에 색칠하지 않도록 기본 스타일로 둡니다.",
+      "번역이 아니라 Markdown으로 뽑아 두고 싶을 때는 텍스트 추출 탭을 사용합니다.",
   },
 ];
 
 const checks = [
-  "번역된 조각들을 이어 붙였을 때 전체 문장과 정확히 같은지 확인합니다.",
-  "빨간색, 파란색, 초록색 같은 강조 색상이 원문의 의미와 맞는지 우선합니다.",
-  "한국어와 영어의 어순이 달라도 단순 위치가 아니라 표현의 뜻을 기준으로 봅니다.",
-  "확신이 낮으면 색이 빠질 수 있지만, 잘못된 위치에 강조가 붙는 것보다 안전합니다.",
+  "번역이 끝나면 바로 파일이 내려받아지지 않고, 검토 화면에서 한 번 더 확인할 수 있습니다.",
+  "용어가 어긋났거나, 문장이 넘치거나, 강조 색이 빠진 항목은 검토 화면에서 표시됩니다.",
+  "같은 문구가 여러 곳에 있으면, 한 곳만 고친 뒤 같은 표현에 함께 반영할 수 있습니다.",
+  "강조 색은 확실할 때만 입힙니다. 애매하면 잘못된 위치에 칠하지 않고 기본 스타일로 둡니다.",
 ];
 
 const caveats = [
   {
     title: "어순이 크게 바뀌는 문장",
     description:
-      "한국어의 뒤쪽 표현이 영어에서는 앞쪽으로 이동할 수 있어 색상 위치도 달라질 수 있습니다.",
+      "한국어의 뒤쪽 표현이 영어에서는 앞쪽으로 이동할 수 있어, 강조 색의 위치도 달라 보일 수 있습니다.",
   },
   {
-    title: "한 단어가 여러 단어로 늘어나는 경우",
+    title: "짧은 말이 길어지는 경우",
     description:
-      "예를 들어 짧은 원문 표현이 번역문에서는 설명형 문구가 되면 강조 범위가 넓어질 수 있습니다.",
+      "원문의 짧은 표현이 번역문에서는 설명형으로 늘어나면, 강조 범위가 넓어지거나 글상자가 넘칠 수 있습니다.",
   },
   {
     title: "강조 의미가 애매한 경우",
@@ -85,16 +117,16 @@ export default function HowItWorksPage() {
             <section className="space-y-4">
               <div className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-sm text-muted-foreground">
                 <Sparkles className="h-4 w-4 text-primary" />
-                번역 품질과 서식 보존을 함께 봅니다
+                번역 → 검토 → 저장까지 한 흐름
               </div>
               <div className="max-w-3xl space-y-3">
                 <h1 className="text-3xl font-bold tracking-normal text-foreground sm:text-4xl">
                   PPT 번역캣은 이렇게 작업합니다
                 </h1>
                 <p className="text-base leading-7 text-muted-foreground sm:text-lg">
-                  문장을 먼저 자연스럽게 옮기고, 원본의 색상과 강조는 번역문에서
-                  같은 의미를 가진 표현에 다시 붙입니다. 단순히 원본의 위치를
-                  따라 색을 칠하지 않습니다.
+                  파일을 올리면 슬라이드를 읽고 번역한 뒤, 검토 화면에서 다듬고
+                  저장합니다. 서식은 최대한 유지하고, 용어집·글상자 맞춤·강조
+                  색 보정으로 결과 품질을 높입니다.
                 </p>
               </div>
             </section>
@@ -127,16 +159,46 @@ export default function HowItWorksPage() {
               })}
             </section>
 
+            <section className="space-y-4">
+              <div className="flex items-center gap-2">
+                <Settings2 className="h-5 w-5 text-primary" />
+                <h2 className="text-xl font-semibold text-foreground">
+                  함께 쓰는 기능
+                </h2>
+              </div>
+              <div className="grid gap-4 md:grid-cols-2">
+                {helpers.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <div
+                      key={item.title}
+                      className="rounded-lg border border-border bg-card p-5"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Icon className="h-4 w-4 text-primary" />
+                        <h3 className="text-base font-semibold text-foreground">
+                          {item.title}
+                        </h3>
+                      </div>
+                      <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                        {item.description}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+
             <section className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
               <Card className="rounded-lg">
                 <CardHeader>
                   <div className="flex items-center gap-2">
                     <SearchCheck className="h-5 w-5 text-primary" />
-                    <CardTitle className="text-xl">색상 보정 방식</CardTitle>
+                    <CardTitle className="text-xl">검토할 때 보면 좋은 점</CardTitle>
                   </div>
                   <CardDescription>
-                    색이 여러 개 들어간 문단은 번역과 색상 매칭을 따로 보지 않고
-                    한 번에 판단합니다.
+                    번역이 끝난 뒤에도 바로 확정하지 않고, 문제 있는 항목부터
+                    확인할 수 있습니다.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -215,8 +277,8 @@ export default function HowItWorksPage() {
                   번역 결과를 확인할 때
                 </h2>
                 <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                  색이 들어간 문구를 먼저 훑어보세요. 색이 빠진 경우보다 엉뚱한
-                  단어에 색이 붙은 경우가 더 중요합니다.
+                  검토 화면의 표시 항목과 색이 들어간 문구를 먼저 훑어보세요.
+                  색이 빠진 경우보다 엉뚱한 단어에 색이 붙은 경우가 더 중요합니다.
                 </p>
               </div>
               <Button asChild className="gap-2 sm:shrink-0">
