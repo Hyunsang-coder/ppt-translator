@@ -104,6 +104,8 @@ class Finding:
     segment: Dict[str, Optional[str]]  # {source, output}
     ordinal: int
     suggested_fix: Optional[str] = None
+    # Glossary source term for terminology.* findings (review UI "용어집 등록").
+    term_source: Optional[str] = None
     # Optional cross-reference to the other fragment in a divergence pair.
     related_location: Optional[Dict[str, object]] = None
     # Index into the aligned paragraphs/translated_texts lists this finding
@@ -206,6 +208,7 @@ def _check_term_violations(
                         segment={"source": frag.source, "output": frag.target},
                         ordinal=counter.next(),
                         suggested_fix=dst,
+                        term_source=src_orig,
                         fragment_index=frag.index,
                     )
                 )

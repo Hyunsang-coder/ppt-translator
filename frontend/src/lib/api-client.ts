@@ -225,6 +225,21 @@ export const apiClient = {
   },
 
   /**
+   * Merge glossary terms into a completed job's review session (resweeps findings).
+   */
+  async updateJobGlossary(
+    jobId: string,
+    entries: Record<string, string>
+  ): Promise<{ count: number; revision: number; dirty: boolean }> {
+    const response = await fetch(await apiUrl(`/api/v1/jobs/${jobId}/glossary`), {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ entries }),
+    });
+    return handleResponse(response);
+  },
+
+  /**
    * Edit, re-translate, or ignore a single fragment (WP-C5).
    */
   async editJobFragment(

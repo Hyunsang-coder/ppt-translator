@@ -167,6 +167,7 @@ class ReviewSession:
                     "severity": finding.severity,
                     "description": finding.description,
                     "suggested_fix": finding.suggested_fix,
+                    "term_source": finding.term_source,
                     "related_location": finding.related_location,
                 }
             )
@@ -283,6 +284,7 @@ class ReviewSession:
                             "색상 미리보기를 확인하세요."
                         ),
                         "suggested_fix": None,
+                        "term_source": None,
                         "related_location": None,
                     }
                 )
@@ -401,6 +403,39 @@ class ReviewSession:
         )
         return distributions.get(0) if distributions else None
 
+    def merge_glossary(
+        self,
+        updates: Dict[str, str],
+        *,
+        resweep: bool = True,
+    ) -> Dict[str, str]:
+        """Merge source→target pairs into the session glossary.
+
+        Updates prompt text and optional post-apply map used by retranslate.
+        Does not mutate existing draft translations (detect-only on resweep).
+        """
+        from src.utils.glossary_loader import GlossaryLoader
+
+        incoming = GlossaryLoader.from_pairs(
+            [(str(src), str(tgt)) for src, tgt in updates.items()],
+            require_non_empty=False,
+        )
+        if not incoming:
+            return dict(self.glossary or {})
+
+        merged = dict(self.glossary or {})
+        merged.update(incoming)
+        if len(merged) > GlossaryLoader.MAX_ENTRIES:
+            raise ValueError(
+                f"용어집 항목은 최대 {GlossaryLoader.MAX_ENTRIES}개까지 지원합니다."
+            )
+
+        self.glossary = merged
+        self.glossary_terms = GlossaryLoader.format_glossary_terms(merged)
+        if resweep:
+            self.run_final_sweep()
+        return dict(merged)
+
     def retranslate_fragment(
         self,
         index: int,
@@ -416,6 +451,9 @@ class ReviewSession:
 
         info = self._source_paragraphs[index]
         budget = self.length_budget(index)
+        prepared_texts = GlossaryLoader.apply_glossary_to_texts(
+            [info.original_text or ""], self.glossary
+        )
 
         def translate_once(strict: bool) -> str:
             extra: List[str] = []
@@ -440,8 +478,11 @@ class ReviewSession:
                 team_rules=self.team_rules,
             )
             batches = chunk_paragraphs(
-                [info], batch_size=1, ppt_context=self.ppt_context,
+                [info],
+                batch_size=1,
+                ppt_context=self.ppt_context,
                 glossary_terms=self.glossary_terms,
+                prepared_texts=prepared_texts,
                 length_limit=self.length_limit,
             )
             results = translate_with_progress(chain, batches, None, max_concurrency=1)

@@ -58,6 +58,8 @@ export interface FragmentFinding {
   severity: "critical" | "major" | "minor";
   description: string;
   suggested_fix: string | null;
+  /** Glossary source term (terminology.* findings) for one-click register. */
+  term_source?: string | null;
   related_location: Record<string, unknown> | null;
 }
 

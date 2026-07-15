@@ -21,8 +21,12 @@ import {
   Loader2,
   AlertTriangle,
   Undo2,
+  ArrowRight,
+  Plus,
 } from "lucide-react";
 import { toast } from "sonner";
+import { Input } from "@/components/ui/input";
+import { useGlossaryStore } from "@/stores/glossary-store";
 
 // Finding type -> badge style. Mirrors the LOG_TYPE_STYLES lookup pattern.
 function badgeStyle(finding: FragmentFinding): { cls: string; label: string } {
@@ -97,6 +101,12 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
   const [selectedPartial, setSelectedPartial] = useState<Set<number>>(new Set());
   const [applyingPartial, setApplyingPartial] = useState(false);
   const [committing, setCommitting] = useState(false);
+  const [glossarySource, setGlossarySource] = useState("");
+  const [glossaryTarget, setGlossaryTarget] = useState("");
+  const [glossaryBusy, setGlossaryBusy] = useState(false);
+
+  const ensureDefaultGlossary = useGlossaryStore((s) => s.ensureDefaultGlossary);
+  const addEntry = useGlossaryStore((s) => s.addEntry);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -303,35 +313,116 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
     }
   };
 
+  const registerGlossaryTerm = async (source: string, target: string) => {
+    const src = source.trim();
+    const tgt = target.trim();
+    if (!src || !tgt || glossaryBusy) return;
+    setGlossaryBusy(true);
+    try {
+      const glossaryId = ensureDefaultGlossary();
+      addEntry(glossaryId, src, tgt);
+      await apiClient.updateJobGlossary(jobId, { [src]: tgt });
+      setGlossarySource("");
+      setGlossaryTarget("");
+      await load();
+      toast.success("용어집에 추가했습니다. 재번역 시 적용됩니다.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "용어집 추가에 실패했습니다.");
+    } finally {
+      setGlossaryBusy(false);
+    }
+  };
+
+  const handleQuickGlossaryAdd = () => {
+    void registerGlossaryTerm(glossarySource, glossaryTarget);
+  };
+
   return (
     <div className="fixed inset-0 z-50 bg-background/95 backdrop-blur-sm flex flex-col">
       {/* header */}
-      <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b bg-background/95 flex-wrap">
-        <div>
-          <h2 className="text-base font-bold leading-tight">번역 검토 &amp; 수정</h2>
-          <p className="text-xs text-muted-foreground">
-            {fragments.length}개 섹션 · 검출 {flaggedCount} · 수정됨 {editedCount}
-            {dirty && ` · 최종 r${committedRevision} → 초안 r${revision}`}
-          </p>
+      <div className="border-b bg-background/95">
+        <div className="flex items-center justify-between gap-3 px-4 py-2.5 flex-wrap">
+          <div>
+            <h2 className="text-base font-bold leading-tight">번역 검토 &amp; 수정</h2>
+            <p className="text-xs text-muted-foreground">
+              {fragments.length}개 섹션 · 검출 {flaggedCount} · 수정됨 {editedCount}
+              {dirty && ` · 최종 r${committedRevision} → 초안 r${revision}`}
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={undo}
+              disabled={!dirty || committing}
+              className="gap-2"
+            >
+              <Undo2 className="w-4 h-4" />
+              되돌리기
+            </Button>
+            <Button size="sm" onClick={commitAndDownload} disabled={committing} className="gap-2">
+              {committing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+              {dirty ? "최종 반영 후 저장" : "저장"}
+            </Button>
+            <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="닫기">
+              <X className="w-4 h-4" />
+            </Button>
+          </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-end gap-2 px-4 pb-2.5">
+          <div className="min-w-[100px] flex-1 space-y-1 max-w-[200px]">
+            <label className="text-[10px] text-muted-foreground" htmlFor="review-glossary-source">
+              용어 원문
+            </label>
+            <Input
+              id="review-glossary-source"
+              value={glossarySource}
+              onChange={(e) => setGlossarySource(e.target.value)}
+              disabled={glossaryBusy || committing}
+              className="h-8 text-sm"
+              placeholder="Source"
+            />
+          </div>
+          <ArrowRight className="mb-2 h-4 w-4 shrink-0 text-muted-foreground" />
+          <div className="min-w-[100px] flex-1 space-y-1 max-w-[200px]">
+            <label className="text-[10px] text-muted-foreground" htmlFor="review-glossary-target">
+              용어 번역
+            </label>
+            <Input
+              id="review-glossary-target"
+              value={glossaryTarget}
+              onChange={(e) => setGlossaryTarget(e.target.value)}
+              disabled={glossaryBusy || committing}
+              className="h-8 text-sm"
+              placeholder="Target"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleQuickGlossaryAdd();
+              }}
+            />
+          </div>
           <Button
-            variant="outline"
+            type="button"
             size="sm"
-            onClick={undo}
-            disabled={!dirty || committing}
-            className="gap-2"
+            variant="outline"
+            className="h-8 gap-1"
+            disabled={
+              glossaryBusy ||
+              committing ||
+              !glossarySource.trim() ||
+              !glossaryTarget.trim()
+            }
+            onClick={handleQuickGlossaryAdd}
           >
-            <Undo2 className="w-4 h-4" />
-            되돌리기
+            {glossaryBusy ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Plus className="h-3.5 w-3.5" />
+            )}
+            용어 추가
           </Button>
-          <Button size="sm" onClick={commitAndDownload} disabled={committing} className="gap-2">
-            {committing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-            {dirty ? "최종 반영 후 저장" : "저장"}
-          </Button>
-          <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="닫기">
-            <X className="w-4 h-4" />
-          </Button>
+          <p className="w-full text-[10px] text-muted-foreground sm:w-auto sm:ml-1 sm:mb-2">
+            라이브러리와 이 작업에 동시에 반영 · 기존 번역은 재번역 시 적용
+          </p>
         </div>
       </div>
 

@@ -384,6 +384,19 @@ class TestExtractionEndpoint:
 
 
 class TestReviewEndpoints:
+    def test_update_job_glossary_merges_into_review_session(self, client, review_job):
+        """PATCH glossary merges terms into the review session without rewriting drafts."""
+        response = client.patch(
+            f"/api/v1/jobs/{review_job.id}/glossary",
+            json={"entries": {"원문": "Source term"}},
+        )
+        assert response.status_code == 200
+        assert response.json()["count"] == 1
+        assert review_job.review_session.glossary == {"원문": "Source term"}
+        assert "원문" in review_job.review_session.glossary_terms
+        # Draft translations stay as-is until the user retranslates or edits.
+        assert review_job.review_session.translated_texts[0] == "OLD"
+
     def test_proposal_is_previewed_then_staged_then_committed(self, client, review_job):
         response = client.get(f"/api/v1/jobs/{review_job.id}/fragments")
         assert response.status_code == 200

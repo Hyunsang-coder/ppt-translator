@@ -94,12 +94,27 @@ class FragmentsTestCase(unittest.TestCase):
             location={"slide": 1, "shape": 0, "paragraph": 0},
             segment={"source": "s", "output": "o"}, ordinal=1,
             fragment_index=0, suggested_fix="Aim Punch",
+            term_source="저지력",
         )
         sess = _session("A", 2, findings=[finding])
         frags = sess.fragments()
         self.assertEqual(len(frags[0].findings), 1)
         self.assertEqual(frags[0].findings[0]["type"], "terminology.violation")
+        self.assertEqual(frags[0].findings[0]["term_source"], "저지력")
         self.assertEqual(frags[1].findings, [])
+
+    def test_merge_glossary_updates_terms_and_resweeps(self) -> None:
+        sess = _session("저지력 증가", 1, targets=["Increased flinch"])
+        self.assertIsNone(sess.glossary)
+        merged = sess.merge_glossary({"저지력": "Aim Punch"}, resweep=True)
+        self.assertEqual(merged, {"저지력": "Aim Punch"})
+        self.assertIn("저지력", sess.glossary_terms)
+        self.assertEqual(sess.glossary_terms.count("Aim Punch"), 1)
+        # Draft text is untouched; sweep should flag the missing preferred term.
+        self.assertEqual(sess.translated_texts[0], "Increased flinch")
+        violations = [f for f in sess.findings if f.type == "terminology.violation"]
+        self.assertEqual(len(violations), 1)
+        self.assertEqual(violations[0].term_source, "저지력")
 
 
 class EditPropagationTestCase(unittest.TestCase):

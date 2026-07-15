@@ -202,7 +202,26 @@ class FragmentFinding(BaseModel):
     severity: str
     description: str
     suggested_fix: Optional[str] = None
+    term_source: Optional[str] = None
     related_location: Optional[Dict[str, Any]] = None
+
+
+class JobGlossaryUpdateRequest(BaseModel):
+    """Merge glossary terms into a completed job's review session."""
+
+    entries: Dict[str, str] = Field(
+        ...,
+        description="source → preferred translation pairs to merge",
+        min_length=1,
+    )
+
+
+class JobGlossaryUpdateResponse(BaseModel):
+    """Updated glossary size after a merge."""
+
+    count: int
+    revision: int
+    dirty: bool
 
 
 class StyleSegment(BaseModel):
@@ -1060,6 +1079,38 @@ async def get_job_fragments(job_id: str) -> FragmentsResponse:
         fragments=items,
         revision=session.revision,
         committed_revision=session.committed_revision,
+        dirty=session.dirty,
+    )
+
+
+@app.patch("/api/v1/jobs/{job_id}/glossary", response_model=JobGlossaryUpdateResponse)
+async def update_job_glossary(
+    job_id: str, body: JobGlossaryUpdateRequest
+) -> JobGlossaryUpdateResponse:
+    """Merge glossary terms into a job review session and re-run the sweep.
+
+    Does not rewrite draft translations. Subsequent retranslate calls use the
+    updated glossary (prompt + pre/post apply). Clients should reload fragments
+    to refresh terminology violation badges.
+    """
+    job_manager = get_job_manager()
+    job = job_manager.get_job(job_id)
+
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.state != JobState.COMPLETED or job.review_session is None:
+        raise HTTPException(status_code=400, detail="Job has no editable review session")
+
+    session = job.review_session
+    async with job.review_lock:
+        try:
+            merged = session.merge_glossary(body.entries, resweep=True)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"Glossary error: {exc}")
+
+    return JobGlossaryUpdateResponse(
+        count=len(merged),
+        revision=session.revision,
         dirty=session.dirty,
     )
 
