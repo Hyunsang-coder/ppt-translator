@@ -94,6 +94,32 @@ class GlossaryLoaderTestCase(unittest.TestCase):
         with self.assertRaises(ValueError):
             GlossaryLoader.from_json(huge)
 
+    def test_filter_matching_terms_keeps_only_present_sources(self) -> None:
+        glossary = {
+            "PUBG": "배틀그라운드",
+            "Stream": "스트리밍",
+            "Unused": "미사용",
+        }
+        matched = GlossaryLoader.filter_matching_terms(
+            glossary, ["I love PUBG and Stream"]
+        )
+        self.assertEqual(
+            matched,
+            {"PUBG": "배틀그라운드", "Stream": "스트리밍"},
+        )
+
+    def test_filter_matching_terms_respects_word_boundaries(self) -> None:
+        glossary = {"game": "게임", "smart director": "스마트 디렉터"}
+        matched = GlossaryLoader.filter_matching_terms(
+            glossary, ["gameplay is fine", "The smart director spoke"]
+        )
+        self.assertEqual(matched, {"smart director": "스마트 디렉터"})
+
+    def test_filter_matching_terms_prefers_longer_cjk_term(self) -> None:
+        glossary = {"게임": "game", "게임팀": "game team"}
+        matched = GlossaryLoader.filter_matching_terms(glossary, ["게임팀 소개"])
+        self.assertEqual(matched, {"게임팀": "game team"})
+
 
 class HelperTestCase(unittest.TestCase):
     def test_chunk_paragraphs_preserves_order(self) -> None:
@@ -101,6 +127,44 @@ class HelperTestCase(unittest.TestCase):
         batches = chunk_paragraphs(paragraphs, batch_size=2, ppt_context="ctx", glossary_terms="glossary")
         self.assertEqual(len(batches), 2)
         self.assertIn("1. Paragraph 0", batches[0]["texts"])
+
+    def test_chunk_paragraphs_injects_per_batch_glossary_subset(self) -> None:
+        paragraphs = [
+            _fake_paragraph("PUBG announcement"),
+            _fake_paragraph("Stream schedule"),
+            _fake_paragraph("Unrelated slide"),
+        ]
+        glossary = {
+            "PUBG": "배틀그라운드",
+            "Stream": "스트리밍",
+            "Unused": "미사용",
+        }
+        batches = chunk_paragraphs(
+            paragraphs,
+            batch_size=1,
+            ppt_context="ctx",
+            glossary=glossary,
+        )
+        self.assertEqual(len(batches), 3)
+        self.assertIn("PUBG", batches[0]["glossary_terms"])
+        self.assertNotIn("Stream", batches[0]["glossary_terms"])
+        self.assertIn("Stream", batches[1]["glossary_terms"])
+        self.assertNotIn("PUBG", batches[1]["glossary_terms"])
+        self.assertEqual(batches[2]["glossary_terms"], "None")
+
+    def test_chunk_paragraphs_matches_original_not_prepared_text(self) -> None:
+        # PRE-apply replaces PUBG in prepared_texts; matching must still use original.
+        paragraphs = [_fake_paragraph("I love PUBG")]
+        batches = chunk_paragraphs(
+            paragraphs,
+            batch_size=1,
+            ppt_context="ctx",
+            prepared_texts=["I love 배틀그라운드"],
+            glossary={"PUBG": "배틀그라운드", "Unused": "미사용"},
+        )
+        self.assertIn("PUBG", batches[0]["glossary_terms"])
+        self.assertNotIn("Unused", batches[0]["glossary_terms"])
+        self.assertIn("I love 배틀그라운드", batches[0]["texts"])
 
     def test_chunk_paragraphs_builds_exact_per_item_length_limits(self) -> None:
         paragraphs = [_fake_paragraph("1234567890"), _fake_paragraph("12345")]

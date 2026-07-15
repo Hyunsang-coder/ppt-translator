@@ -183,6 +183,49 @@ class GlossaryLoader:
         return "\n".join(lines)
 
     @staticmethod
+    def filter_matching_terms(
+        glossary: Dict[str, str] | None,
+        texts: Iterable[str],
+    ) -> Dict[str, str]:
+        """Return only glossary entries whose source term appears in ``texts``.
+
+        Uses the same boundary rules as ``apply_glossary_to_*`` so prompt
+        injection stays aligned with PRE/POST replacement. Match against
+        *original* source text (before PRE substitution), otherwise already
+        replaced targets would hide the source terms.
+        """
+        if not glossary:
+            return {}
+
+        compiled = GlossaryLoader._compile_glossary(glossary)
+        if compiled is None:
+            return {}
+        pattern, lookup = compiled
+
+        matched: Dict[str, str] = {}
+        for text in texts:
+            if not text:
+                continue
+            for match in pattern.finditer(text):
+                source = match.group(0)
+                target = lookup.get(source)
+                if target is not None:
+                    matched[source] = target
+            if len(matched) == len(lookup):
+                break
+        return matched
+
+    @staticmethod
+    def format_matching_terms(
+        glossary: Dict[str, str] | None,
+        texts: Iterable[str],
+    ) -> str:
+        """Format the subset of glossary terms found in ``texts`` for prompts."""
+        return GlossaryLoader.format_glossary_terms(
+            GlossaryLoader.filter_matching_terms(glossary, texts)
+        )
+
+    @staticmethod
     def _is_word_char(ch: str) -> bool:
         """True when a character is a regex word character (\\w)."""
         return ch.isalnum() or ch == "_"

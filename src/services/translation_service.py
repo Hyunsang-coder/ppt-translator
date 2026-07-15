@@ -809,9 +809,11 @@ class TranslationService:
             target_paragraphs,
             batch_size=batch_size,
             ppt_context=ppt_context,
+            # Full terms kept on ReviewSession; prompts use per-batch matches.
             glossary_terms=glossary_terms,
             prepared_texts=target_prepared_texts,
             length_limit=request.length_limit,
+            glossary=glossary,
         )
 
         LOGGER.info(

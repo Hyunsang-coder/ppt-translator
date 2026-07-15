@@ -451,8 +451,13 @@ class ReviewSession:
 
         info = self._source_paragraphs[index]
         budget = self.length_budget(index)
+        source_text = info.original_text or ""
         prepared_texts = GlossaryLoader.apply_glossary_to_texts(
-            [info.original_text or ""], self.glossary
+            [source_text], self.glossary
+        )
+        # Prompt gets only terms present in this fragment's original source.
+        prompt_glossary_terms = GlossaryLoader.format_matching_terms(
+            self.glossary, [source_text]
         )
 
         def translate_once(strict: bool) -> str:
@@ -481,9 +486,10 @@ class ReviewSession:
                 [info],
                 batch_size=1,
                 ppt_context=self.ppt_context,
-                glossary_terms=self.glossary_terms,
+                glossary_terms=prompt_glossary_terms,
                 prepared_texts=prepared_texts,
                 length_limit=self.length_limit,
+                glossary=self.glossary,
             )
             results = translate_with_progress(chain, batches, None, max_concurrency=1)
             if not results:

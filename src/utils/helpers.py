@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, Dict, Iterable, List, Sequence
+from typing import TYPE_CHECKING, Dict, Iterable, List, Mapping, Optional, Sequence
+
+from src.utils.glossary_loader import GlossaryLoader
 
 if TYPE_CHECKING:  # pragma: no cover - import for typing only
     from src.core.ppt_parser import ParagraphInfo
@@ -31,9 +33,10 @@ def chunk_paragraphs(
     paragraphs: Iterable["ParagraphInfo"],
     batch_size: int,
     ppt_context: str,
-    glossary_terms: str,
+    glossary_terms: str = "None",
     prepared_texts: Sequence[str] | None = None,
     length_limit: int | None = None,
+    glossary: Optional[Mapping[str, str]] = None,
 ) -> List[Dict[str, object]]:
     """Split paragraphs into batches suitable for sequential translation.
 
@@ -41,10 +44,13 @@ def chunk_paragraphs(
         paragraphs: Iterable of paragraph metadata objects.
         batch_size: Desired maximum number of paragraphs per batch.
         ppt_context: Global presentation context string.
-        glossary_terms: Glossary string injected into prompts.
+        glossary_terms: Fallback glossary string when ``glossary`` is omitted
+            (tests / callers that pre-format the prompt block).
         prepared_texts: Optional list of preprocessed texts aligned with the
             paragraphs, used when glossary substitutions were already applied.
         length_limit: Optional target length as a percentage of each source.
+        glossary: Full glossary dict. When provided, each batch injects only
+            terms that appear in that batch's *original* source texts.
 
     Returns:
         A list of batch dictionaries ready for the translation chain.
@@ -53,6 +59,7 @@ def chunk_paragraphs(
     paragraph_list = list(paragraphs)
     batches: List[Dict[str, object]] = []
     total = len(paragraph_list)
+    glossary_map = dict(glossary) if glossary else None
 
     for start_idx in range(0, total, batch_size):
         chunk = paragraph_list[start_idx : start_idx + batch_size]
@@ -75,12 +82,21 @@ def chunk_paragraphs(
                     )
                 )
 
+        if glossary_map:
+            # Match against original source (not PRE-substituted prepared_texts).
+            batch_glossary_terms = GlossaryLoader.format_matching_terms(
+                glossary_map,
+                [paragraph.original_text or "" for paragraph in chunk],
+            )
+        else:
+            batch_glossary_terms = glossary_terms
+
         batches.append(
             {
                 "paragraphs": chunk,
                 "texts": "\n".join(lines),
                 "ppt_context": ppt_context,
-                "glossary_terms": glossary_terms,
+                "glossary_terms": batch_glossary_terms,
                 "start_idx": start_idx + 1,
                 "end_idx": start_idx + len(chunk),
                 "expected_count": len(chunk),
