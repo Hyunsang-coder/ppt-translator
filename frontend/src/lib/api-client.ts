@@ -20,6 +20,7 @@ import type {
   TranslationSettings,
 } from "@/types/api";
 import { ensureApiBase } from "@/lib/api-base";
+import type { GlossaryEntry } from "@/lib/glossary";
 
 class ApiError extends Error {
   constructor(
@@ -116,7 +117,7 @@ export const apiClient = {
    */
   async parseGlossaryFile(
     glossaryFile: File
-  ): Promise<{ entries: { source: string; target: string }[]; count: number }> {
+  ): Promise<{ entries: { source: string; target: string; notes?: string }[]; count: number }> {
     const formData = new FormData();
     formData.append("glossary_file", glossaryFile);
     const response = await fetch(await apiUrl("/api/v1/glossary/parse"), {
@@ -124,6 +125,25 @@ export const apiClient = {
       body: formData,
     });
     return handleResponse(response);
+  },
+
+  /** Export the browser-local glossary as a real spreadsheet file. */
+  async exportGlossaryFile(
+    name: string,
+    entries: GlossaryEntry[],
+    format: "csv" | "excel"
+  ): Promise<Blob> {
+    const response = await fetch(await apiUrl("/api/v1/glossary/export"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name,
+        format,
+        entries: entries.map(({ source, target, notes }) => ({ source, target, notes })),
+      }),
+    });
+    if (!response.ok) await handleResponse<unknown>(response);
+    return response.blob();
   },
 
   /**

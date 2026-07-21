@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import re
+import unicodedata
 from typing import Any, Dict, Iterable, List, Mapping
 
 import pandas as pd
@@ -41,6 +42,14 @@ class GlossaryLoader:
             ValueError: If the uploaded file is invalid or empty.
         """
 
+        entries = self.load_glossary_entries(file_data)
+        glossary = {entry["source"]: entry["target"] for entry in entries}
+        LOGGER.info("Loaded %d glossary entries.", len(glossary))
+        return glossary
+
+    def load_glossary_entries(self, file_data: io.BytesIO) -> List[Dict[str, str]]:
+        """Load source/target/notes rows for the in-app glossary editor."""
+
         # Validate file size
         file_data.seek(0, io.SEEK_END)
         file_size = file_data.tell()
@@ -65,14 +74,38 @@ class GlossaryLoader:
         if dataframe.empty or dataframe.shape[1] < self.REQUIRED_COLUMNS:
             raise ValueError("용어집 파일에 필요한 두 개의 열이 존재하지 않습니다.")
 
-        rows = [
-            (str(row.iloc[0]).strip(), str(row.iloc[1]).strip())
-            for _, row in dataframe.iterrows()
-        ]
-        glossary = self.from_pairs(rows, require_non_empty=True, skip_header=True)
+        entries: Dict[str, Dict[str, str]] = {}
+        started = False
+        for _, row in dataframe.iterrows():
+            source = str(row.iloc[0]).strip() if not pd.isna(row.iloc[0]) else ""
+            target = str(row.iloc[1]).strip() if not pd.isna(row.iloc[1]) else ""
+            notes = (
+                str(row.iloc[2]).strip()
+                if dataframe.shape[1] > 2 and not pd.isna(row.iloc[2])
+                else ""
+            )
+            if not source or not target:
+                continue
+            if not started and self._is_header_row(source, target):
+                started = True
+                continue
+            started = True
+            if len(source) > self.MAX_TERM_CHARS or len(target) > self.MAX_TERM_CHARS:
+                raise ValueError(
+                    f"용어 길이는 {self.MAX_TERM_CHARS}자를 초과할 수 없습니다."
+                )
+            if len(notes) > 2000:
+                raise ValueError("메모는 2000자를 초과할 수 없습니다.")
+            key = unicodedata.normalize("NFKC", source).casefold()
+            entries[key] = {"source": source, "target": target, "notes": notes}
+            if len(entries) > self.MAX_ENTRIES:
+                raise ValueError(
+                    f"용어집 항목은 최대 {self.MAX_ENTRIES}개까지 지원합니다."
+                )
 
-        LOGGER.info("Loaded %d glossary entries.", len(glossary))
-        return glossary
+        if not entries:
+            raise ValueError("유효한 용어집 항목을 찾을 수 없습니다.")
+        return list(entries.values())
 
     @classmethod
     def from_pairs(
@@ -90,6 +123,7 @@ class GlossaryLoader:
         Duplicate sources upsert (last value wins). Enforces entry/term limits.
         """
         glossary: Dict[str, str] = {}
+        source_keys: Dict[str, str] = {}
         # When not skipping headers, treat the stream as already past the header.
         started = not skip_header
         for source, target in pairs:
@@ -105,6 +139,11 @@ class GlossaryLoader:
                 raise ValueError(
                     f"용어 길이는 {cls.MAX_TERM_CHARS}자를 초과할 수 없습니다."
                 )
+            normalized_key = unicodedata.normalize("NFKC", source).casefold()
+            previous_source = source_keys.get(normalized_key)
+            if previous_source is not None and previous_source != source:
+                glossary.pop(previous_source, None)
+            source_keys[normalized_key] = source
             glossary[source] = target
             if len(glossary) > cls.MAX_ENTRIES:
                 raise ValueError(
@@ -204,6 +243,14 @@ class GlossaryLoader:
         compiled = GlossaryLoader._compile_glossary(glossary)
         if compiled is None:
             return {}
+        return GlossaryLoader._filter_matching_terms_compiled(compiled, texts)
+
+    @staticmethod
+    def _filter_matching_terms_compiled(
+        compiled: "tuple[re.Pattern[str], Dict[str, str]]",
+        texts: Iterable[str],
+    ) -> Dict[str, str]:
+        """Return matching terms while reusing an already compiled glossary."""
         pattern, lookup = compiled
 
         matched: Dict[str, str] = {}
@@ -212,7 +259,7 @@ class GlossaryLoader:
                 continue
             for match in pattern.finditer(text):
                 source = match.group(0)
-                target = lookup.get(source)
+                target = lookup.get(source.casefold())
                 if target is not None:
                     matched[source] = target
             if len(matched) == len(lookup):
@@ -266,11 +313,11 @@ class GlossaryLoader:
         sources.sort(key=len, reverse=True)
         combined = "|".join(GlossaryLoader._term_pattern(s) for s in sources)
         try:
-            pattern = re.compile(combined)
+            pattern = re.compile(combined, re.IGNORECASE)
         except re.error:  # pragma: no cover - defensive; escaped input is safe
             LOGGER.exception("Failed to compile glossary pattern; skipping replacement.")
             return None
-        return pattern, dict(glossary)
+        return pattern, {source.casefold(): target for source, target in glossary.items()}
 
     @staticmethod
     def _apply_compiled(text: str, compiled: "tuple[re.Pattern[str], Dict[str, str]]") -> str:
@@ -282,7 +329,7 @@ class GlossaryLoader:
         pattern, lookup = compiled
         # ``m.group(0)`` is the matched source; map it back to its target. A
         # ``\b``-anchored match returns the exact source text, so the lookup hits.
-        return pattern.sub(lambda m: lookup.get(m.group(0), m.group(0)), text)
+        return pattern.sub(lambda m: lookup.get(m.group(0).casefold(), m.group(0)), text)
 
     @staticmethod
     def apply_glossary_to_texts(texts: Iterable[str], glossary: Dict[str, str] | None) -> List[str]:
@@ -323,3 +370,40 @@ class GlossaryLoader:
         if compiled is None:
             return text
         return GlossaryLoader._apply_compiled(text, compiled)
+
+    @staticmethod
+    def apply_matching_glossary_to_translations(
+        source_texts: Iterable[str],
+        translated_texts: Iterable[str],
+        glossary: Dict[str, str] | None,
+    ) -> List[str]:
+        """Post-process each translation using only terms found in its source.
+
+        Keeping the source-matched subset prevents opposite-direction entries
+        (for example ``공지→Notice`` and ``Notice→공지``) from undoing one
+        another in translated output. The full glossary is compiled once, then
+        each usually-small matched subset is applied to its aligned target.
+        """
+        sources = list(source_texts)
+        translations = list(translated_texts)
+        if len(sources) != len(translations):
+            raise ValueError("원문과 번역문 개수가 일치하지 않습니다.")
+        if not glossary:
+            return translations
+
+        compiled = GlossaryLoader._compile_glossary(glossary)
+        if compiled is None:
+            return translations
+
+        results: List[str] = []
+        for source, translation in zip(sources, translations, strict=True):
+            matching = GlossaryLoader._filter_matching_terms_compiled(
+                compiled, [source]
+            )
+            matching_compiled = GlossaryLoader._compile_glossary(matching)
+            results.append(
+                GlossaryLoader._apply_compiled(translation, matching_compiled)
+                if matching_compiled is not None
+                else translation
+            )
+        return results

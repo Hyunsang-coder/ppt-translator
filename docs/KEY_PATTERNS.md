@@ -8,10 +8,19 @@
 4. `chunk_paragraphs()` creates batches with context/glossary
 5. `translate_with_progress()` → `_batch_translate_with_retry()` with tenacity retry
 6. `expand_translations()` maps unique results back to duplicates
-7. Glossary post-processing finalizes the aligned target strings
+7. Glossary post-processing finalizes each aligned target using only terms matched in that paragraph's original source
 8. `_fix_color_distributions()` maps those final strings onto source style groups without translating them a second time
 9. `run_sweep()` checks the actual final strings shown in review
 10. `PPTWriter.apply_translations()` writes back preserving formatting and applies text fit
+
+## Glossary Flow
+
+1. The browser store hydrates a versioned glossary library from `localStorage`; legacy single-active state is migrated automatically.
+2. Users can edit terms directly or import CSV/Excel data. Manual duplicates within one glossary are rejected; imports update the last matching normalized source term.
+3. Multiple glossaries may be active. Their explicit order is the precedence order, and the first normalized source match wins. Prompt injection and final enforcement use only terms found in each original source paragraph, so opposite-direction pairs cannot rewrite one another.
+4. Starting a job snapshots the merged active entries into the request so later local edits do not silently change an in-flight translation.
+5. Terms added during review are persisted locally and patched into the current job. If the server update fails, the local mutation is rolled back.
+6. Storage failures do not mutate in-memory state. Corrupt payloads are copied to a recovery key before valid rows are salvaged.
 
 ## Async Job Flow (FastAPI + Next.js)
 1. Frontend `POST /api/v1/jobs` with file, settings, filename_settings, compress_images, length_limit

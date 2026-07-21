@@ -310,8 +310,74 @@ class TestJobEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert data["count"] == 2
-        assert {"source": "PUBG", "target": "배틀그라운드"} in data["entries"]
+        assert {
+            "source": "PUBG", "target": "배틀그라운드", "notes": None
+        } in data["entries"]
         assert all(e["source"] != "원문" for e in data["entries"])
+
+    def test_parse_glossary_excel_preserves_notes(self, client):
+        """Excel export/import round-trip keeps the optional notes column."""
+        import pandas as pd
+
+        buffer = io.BytesIO()
+        pd.DataFrame(
+            [["원문", "번역", "메모"], ["API", "인터페이스", "제품 표준"]]
+        ).to_excel(buffer, index=False, header=False)
+        response = client.post(
+            "/api/v1/glossary/parse",
+            files={
+                "glossary_file": (
+                    "glossary.xlsx",
+                    buffer.getvalue(),
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()["entries"] == [
+            {"source": "API", "target": "인터페이스", "notes": "제품 표준"}
+        ]
+
+    def test_export_glossary_excel(self, client):
+        """Local glossary export returns a real XLSX including optional notes."""
+        import pandas as pd
+
+        response = client.post(
+            "/api/v1/glossary/export",
+            json={
+                "name": "제품 용어집",
+                "format": "excel",
+                "entries": [
+                    {"source": "API", "target": "인터페이스", "notes": "제품 표준"},
+                ],
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        exported = pd.read_excel(io.BytesIO(response.content), dtype=str).fillna("")
+        assert exported.to_dict("records") == [
+            {"원문": "API", "번역": "인터페이스", "메모": "제품 표준"}
+        ]
+
+    def test_export_glossary_rejects_case_insensitive_duplicate(self, client):
+        response = client.post(
+            "/api/v1/glossary/export",
+            json={
+                "name": "Duplicate",
+                "format": "csv",
+                "entries": [
+                    {"source": "API", "target": "first"},
+                    {"source": "api", "target": "second"},
+                ],
+            },
+        )
+
+        assert response.status_code == 400
+        assert "중복" in response.json()["detail"]
 
     def test_get_job_not_found(self, client):
         """Test getting non-existent job."""

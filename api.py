@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import csv
 import functools
 import io
 import json
 import logging
 import os
+import unicodedata
 
 try:
     import resource  # Unix-only stdlib module; absent on Windows.
@@ -168,11 +170,26 @@ class ConfigResponse(BaseModel):
 class GlossaryEntryResponse(BaseModel):
     source: str
     target: str
+    notes: Optional[str] = None
 
 
 class GlossaryParseResponse(BaseModel):
     entries: List[GlossaryEntryResponse]
     count: int
+
+
+class GlossaryExportEntryRequest(BaseModel):
+    source: str = Field(min_length=1, max_length=GlossaryLoader.MAX_TERM_CHARS)
+    target: str = Field(min_length=1, max_length=GlossaryLoader.MAX_TERM_CHARS)
+    notes: Optional[str] = Field(default=None, max_length=2000)
+
+
+class GlossaryExportRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    format: Literal["csv", "excel"]
+    entries: List[GlossaryExportEntryRequest] = Field(
+        max_length=GlossaryLoader.MAX_ENTRIES
+    )
 
 
 class JobCreateResponse(BaseModel):
@@ -746,7 +763,7 @@ async def parse_glossary_file(
                 status_code=413,
                 detail=f"용어집 파일 크기가 {GlossaryLoader.MAX_FILE_SIZE_MB}MB를 초과합니다.",
             )
-        glossary = GlossaryLoader().load_glossary(io.BytesIO(content))
+        entries = GlossaryLoader().load_glossary_entries(io.BytesIO(content))
     except HTTPException:
         raise
     except ValueError as exc:
@@ -755,11 +772,74 @@ async def parse_glossary_file(
         LOGGER.exception("Failed to parse glossary file: %s", exc)
         raise HTTPException(status_code=400, detail="Failed to parse glossary file")
 
-    entries = [
-        GlossaryEntryResponse(source=source, target=target)
-        for source, target in glossary.items()
+    response_entries = [
+        GlossaryEntryResponse(
+            source=entry["source"],
+            target=entry["target"],
+            notes=entry["notes"] or None,
+        )
+        for entry in entries
     ]
-    return GlossaryParseResponse(entries=entries, count=len(entries))
+    return GlossaryParseResponse(entries=response_entries, count=len(response_entries))
+
+
+@app.post("/api/v1/glossary/export")
+async def export_glossary_file(body: GlossaryExportRequest) -> Response:
+    """Export locally managed glossary entries as a real CSV or XLSX file."""
+
+    rows: List[Dict[str, str]] = []
+    seen_sources: set[str] = set()
+    for entry in body.entries:
+        source = entry.source.strip()
+        target = entry.target.strip()
+        notes = (entry.notes or "").strip()
+        if not source or not target:
+            raise HTTPException(status_code=400, detail="원문과 번역을 모두 입력해주세요.")
+        source_key = unicodedata.normalize("NFKC", source).casefold()
+        if source_key in seen_sources:
+            raise HTTPException(status_code=400, detail=f"중복된 원문 용어가 있습니다: {source}")
+        seen_sources.add(source_key)
+        rows.append({"원문": source, "번역": target, "메모": notes})
+
+    basename = sanitize_filename(body.name, max_length=80, fallback="glossary")
+    if body.format == "csv":
+        text_buffer = io.StringIO(newline="")
+        writer = csv.DictWriter(text_buffer, fieldnames=["원문", "번역", "메모"])
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({
+                key: f"\t{value}" if value.startswith(("=", "+", "-", "@")) else value
+                for key, value in row.items()
+            })
+        content = text_buffer.getvalue().encode("utf-8-sig")
+        extension = "csv"
+        media_type = "text/csv; charset=utf-8"
+    else:
+        import pandas as pd
+
+        excel_buffer = io.BytesIO()
+        safe_rows = [
+            {
+                key: f"\t{value}" if value.startswith(("=", "+", "-", "@")) else value
+                for key, value in row.items()
+            }
+            for row in rows
+        ]
+        pd.DataFrame(safe_rows, columns=["원문", "번역", "메모"]).to_excel(
+            excel_buffer, index=False, engine="openpyxl"
+        )
+        content = excel_buffer.getvalue()
+        extension = "xlsx"
+        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+    filename = f"{basename}.{extension}"
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename, safe='')}"
+        },
+    )
 
 
 @app.post("/api/v1/jobs", response_model=JobCreateResponse)

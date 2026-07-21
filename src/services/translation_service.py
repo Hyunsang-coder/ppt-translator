@@ -917,12 +917,15 @@ class TranslationService:
         else:
             translated_texts = translated_unique
 
-        # Phase 9: Apply glossary post-processing
+        # Phase 9: Apply only terms matched in each aligned source paragraph.
+        # Using the full glossary here lets opposite-direction entries rewrite
+        # one another in the translated output.
         if glossary:
-            translated_texts = [
-                GlossaryLoader.apply_glossary_to_translation(text, glossary)
-                for text in translated_texts
-            ]
+            translated_texts = GlossaryLoader.apply_matching_glossary_to_translations(
+                [paragraph.original_text or "" for paragraph in paragraphs],
+                translated_texts,
+                glossary,
+            )
 
         # C-1: skip the second expensive LLM stage if cancelled mid-run.
         if request.cancel_event is not None and request.cancel_event.is_set():

@@ -39,6 +39,19 @@ class GlossaryLoaderTestCase(unittest.TestCase):
         updated = GlossaryLoader.apply_glossary_to_texts(["I love PUBG"], glossary)
         self.assertEqual(updated[0], "I love 배틀그라운드")
 
+    def test_glossary_matching_is_case_insensitive(self) -> None:
+        glossary = {"Smart Director": "스마트 디렉터"}
+        updated = GlossaryLoader.apply_glossary_to_texts(
+            ["The smart director spoke"], glossary
+        )
+        self.assertEqual(updated[0], "The 스마트 디렉터 spoke")
+
+    def test_case_insensitive_duplicate_source_uses_last_value(self) -> None:
+        glossary = GlossaryLoader.from_pairs(
+            [("API", "first"), ("api", "second")]
+        )
+        self.assertEqual(glossary, {"api": "second"})
+
     def test_longer_term_wins_over_shorter(self) -> None:
         # "게임팀" must map to its own target, not be pre-empted by "게임".
         glossary = {"게임": "game", "게임팀": "game team"}
@@ -137,6 +150,24 @@ class GlossaryLoaderTestCase(unittest.TestCase):
         glossary = {"게임": "game", "게임팀": "game team"}
         matched = GlossaryLoader.filter_matching_terms(glossary, ["게임팀 소개"])
         self.assertEqual(matched, {"게임팀": "game team"})
+
+    def test_post_processing_uses_only_terms_matched_in_each_source(self) -> None:
+        glossary = {"공지": "Notice", "Notice": "공지"}
+        updated = GlossaryLoader.apply_matching_glossary_to_translations(
+            ["공지 확인", "Notice update", "관련 없는 문장"],
+            ["Notice check", "Notice 업데이트", "Notice is unrelated"],
+            glossary,
+        )
+        self.assertEqual(
+            updated,
+            ["Notice check", "공지 업데이트", "Notice is unrelated"],
+        )
+
+    def test_post_processing_rejects_unaligned_source_and_target_lists(self) -> None:
+        with self.assertRaisesRegex(ValueError, "개수가 일치하지 않습니다"):
+            GlossaryLoader.apply_matching_glossary_to_translations(
+                ["공지"], [], {"공지": "Notice"}
+            )
 
 
 class HelperTestCase(unittest.TestCase):

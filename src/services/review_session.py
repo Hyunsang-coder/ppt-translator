@@ -452,8 +452,11 @@ class ReviewSession:
         info = self._source_paragraphs[index]
         budget = self.length_budget(index)
         source_text = info.original_text or ""
+        matching_glossary = GlossaryLoader.filter_matching_terms(
+            self.glossary, [source_text]
+        )
         prepared_texts = GlossaryLoader.apply_glossary_to_texts(
-            [source_text], self.glossary
+            [source_text], matching_glossary
         )
 
         def translate_once(strict: bool) -> str:
@@ -478,21 +481,24 @@ class ReviewSession:
                 length_limit=self.length_limit,
                 team_rules=self.team_rules,
             )
-            # chunk_paragraphs filters glossary against original source for the prompt.
+            # Reuse the source-matched subset for prompt and post-processing so
+            # opposite-direction entries cannot rewrite the candidate.
             batches = chunk_paragraphs(
                 [info],
                 batch_size=1,
                 ppt_context=self.ppt_context,
                 prepared_texts=prepared_texts,
                 length_limit=self.length_limit,
-                glossary=self.glossary,
+                glossary=matching_glossary,
             )
             results = translate_with_progress(chain, batches, None, max_concurrency=1)
             if not results:
                 raise RuntimeError("re-translation returned no result")
             result = results[0]
-            if self.glossary:
-                result = GlossaryLoader.apply_glossary_to_translation(result, self.glossary)
+            if matching_glossary:
+                result = GlossaryLoader.apply_glossary_to_translation(
+                    result, matching_glossary
+                )
             return result
 
         new_target = translate_once(False)

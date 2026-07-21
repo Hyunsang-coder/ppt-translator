@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
+import { glossaryTermKey } from "@/lib/glossary";
 import { useGlossaryStore } from "@/stores/glossary-store";
 
 // Finding type -> badge style. Mirrors the LOG_TYPE_STYLES lookup pattern.
@@ -104,10 +105,27 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
   const [glossarySource, setGlossarySource] = useState("");
   const [glossaryTarget, setGlossaryTarget] = useState("");
   const [glossaryBusy, setGlossaryBusy] = useState(false);
+  const [reviewGlossaryId, setReviewGlossaryId] = useState("");
 
+  const glossaries = useGlossaryStore((s) => s.glossaries);
+  const activeGlossaryIds = useGlossaryStore((s) => s.activeGlossaryIds);
   const ensureDefaultGlossary = useGlossaryStore((s) => s.ensureDefaultGlossary);
   const addEntry = useGlossaryStore((s) => s.addEntry);
-  const setActiveGlossaryId = useGlossaryStore((s) => s.setActiveGlossaryId);
+  const updateEntry = useGlossaryStore((s) => s.updateEntry);
+  const deleteEntry = useGlossaryStore((s) => s.deleteEntry);
+  const setActiveGlossaryIds = useGlossaryStore((s) => s.setActiveGlossaryIds);
+
+  const activeGlossaries = useMemo(() => {
+    const byId = new Map(glossaries.map((glossary) => [glossary.id, glossary]));
+    return activeGlossaryIds
+      .map((id) => byId.get(id))
+      .filter((glossary): glossary is NonNullable<typeof glossary> => Boolean(glossary));
+  }, [activeGlossaryIds, glossaries]);
+
+  useEffect(() => {
+    if (activeGlossaryIds.includes(reviewGlossaryId)) return;
+    setReviewGlossaryId(activeGlossaryIds[0] ?? "");
+  }, [activeGlossaryIds, reviewGlossaryId]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -319,19 +337,48 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
     const tgt = target.trim();
     if (!src || !tgt || glossaryBusy) return;
     setGlossaryBusy(true);
+    const previousActiveIds = [...useGlossaryStore.getState().activeGlossaryIds];
+    let localRollback: (() => void) | null = null;
     try {
-      // Server first so a validation failure does not leave a local-only term.
+      // Validate and persist locally first. If the job update fails, compensate
+      // the local mutation so the current review and future jobs do not diverge.
+      const glossaryId = reviewGlossaryId || ensureDefaultGlossary();
+      const glossary = useGlossaryStore.getState().glossaries.find((item) => item.id === glossaryId);
+      const existing = glossary?.entries.find((entry) => (
+        glossaryTermKey(entry.source) === glossaryTermKey(src)
+      ));
+      if (existing) {
+        const previous = { ...existing };
+        updateEntry(glossaryId, existing.id, { source: src, target: tgt });
+        localRollback = () => {
+          updateEntry(glossaryId, existing.id, previous);
+          setActiveGlossaryIds(previousActiveIds);
+        };
+        if (!previousActiveIds.includes(glossaryId)) {
+          setActiveGlossaryIds([...previousActiveIds, glossaryId]);
+        }
+      } else {
+        const result = addEntry(glossaryId, src, tgt);
+        localRollback = () => {
+          deleteEntry(glossaryId, result.entry.id);
+          setActiveGlossaryIds(previousActiveIds);
+        };
+      }
       await apiClient.updateJobGlossary(jobId, { [src]: tgt });
-      const glossaryId = ensureDefaultGlossary();
-      addEntry(glossaryId, src, tgt);
-      // Explicit activation: review-time add means the user wants glossary on
-      // subsequent jobs (unlike silent re-activation inside addEntry).
-      setActiveGlossaryId(glossaryId);
       setGlossarySource("");
       setGlossaryTarget("");
       await load();
       toast.success("용어집에 추가했습니다. 재번역 시 적용됩니다.");
     } catch (err) {
+      if (localRollback) {
+        try {
+          localRollback();
+        } catch {
+          toast.error("현재 작업 반영에 실패했고 로컬 용어집 복구도 완료하지 못했습니다.");
+          setGlossaryBusy(false);
+          return;
+        }
+      }
       toast.error(err instanceof Error ? err.message : "용어집 추가에 실패했습니다.");
     } finally {
       setGlossaryBusy(false);
@@ -375,6 +422,24 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
           </div>
         </div>
         <div className="flex flex-wrap items-end gap-2 px-4 pb-2.5">
+          {activeGlossaries.length > 1 && (
+            <div className="min-w-[150px] space-y-1">
+              <label className="text-[10px] text-muted-foreground" htmlFor="review-glossary-select">
+                저장할 용어집
+              </label>
+              <select
+                id="review-glossary-select"
+                value={reviewGlossaryId}
+                onChange={(event) => setReviewGlossaryId(event.target.value)}
+                disabled={glossaryBusy || committing}
+                className="h-8 w-full rounded-md border border-border bg-background px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+              >
+                {activeGlossaries.map((glossary) => (
+                  <option key={glossary.id} value={glossary.id}>{glossary.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
           <div className="min-w-[100px] flex-1 space-y-1 max-w-[200px]">
             <label className="text-[10px] text-muted-foreground" htmlFor="review-glossary-source">
               용어 원문

@@ -81,11 +81,17 @@ export function useTranslation() {
       const abortController = new AbortController();
       abortControllerRef.current = abortController;
 
-      // Snapshot active glossary at start so mid-job edits don't race the upload.
+      // Hydrate and snapshot the ordered active glossaries so mid-job edits do
+      // not race the upload and duplicate sources keep their priority winner.
+      useGlossaryStore.getState().hydrate();
+      const activeGlossaries = useGlossaryStore.getState().getActiveGlossaries();
       const activeEntries = useGlossaryStore.getState().getActiveEntries();
       const glossaryJson = glossaryToJsonPayload(activeEntries);
       if (glossaryJson) {
-        addLog(`용어집 ${activeEntries.length}개 항목을 적용합니다.`, "info");
+        addLog(
+          `용어집 ${activeGlossaries.length}개에서 ${activeEntries.length}개 항목을 적용합니다.`,
+          "info"
+        );
       }
 
       // Create job

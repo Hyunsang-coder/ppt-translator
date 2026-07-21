@@ -21,6 +21,9 @@
   - `POST /api/v1/extract`: Text extraction
   - `POST /api/v1/summarize`: Context summary generation
   - `POST /api/v1/generate-instructions`: Translation style instructions
+  - `POST /api/v1/glossary/parse`: Parse CSV/Excel glossary files
+  - `POST /api/v1/glossary/export`: Export glossary entries as CSV/Excel
+  - `PATCH /api/v1/jobs/{job_id}/glossary`: Add or update a term in an active review job
 - `main.py`: Placeholder entry point (uv/pyproject.toml default)
 - `glossary_template.xlsx`: Sample glossary file
 
@@ -49,7 +52,7 @@
 
 ## Utilities (`src/utils/`)
 - `config.py`: Settings from environment
-- `glossary_loader.py`: Excel glossary with `\b` matching for Latin terms, plain replace for CJK
+- `glossary_loader.py`: Normalized, case-insensitive glossary loading and longest-first single-pass replacement
 - `language_detector.py`: langdetect with Korean↔English rules
 - `repetition.py`: Deduplication to reduce API calls
 - `helpers.py`: Batch chunking, text segmentation
@@ -68,6 +71,7 @@ Next.js 16, React 19, TypeScript 5, Tailwind CSS 4, Zustand 5.
 ### Components (`src/components/`)
 - **shared/**: `Header.tsx`, `FileUploader.tsx`
 - **translation/**: `TranslationForm.tsx`, `SettingsPanel.tsx`, `ProgressPanel.tsx`, `LogViewer.tsx`
+- **glossary/**: Local glossary library, quick-add summary, and the management modal for manual editing/import/export
 - **extraction/**: `ExtractionForm.tsx`, `MarkdownPreview.tsx`
 - `desktop-shell.tsx`: Desktop-only route wrapper; redirects hosted web app routes back to the public root. Mounts the auto-update gate (`AutoUpdateGate`) in Tauri — shows `UpdateModal` on startup-check or manual `app:update-found` event
 - `sidecar-provider.tsx`: Tauri sidecar port bootstrap for desktop app screens
@@ -76,7 +80,8 @@ Next.js 16, React 19, TypeScript 5, Tailwind CSS 4, Zustand 5.
 ### State & Hooks
 - `stores/translation-store.ts`: Zustand store. `resetJobState()` preserves file/settings. Defaults: `textFitMode: "expand_box"`, `imageCompression: "medium"`, `lengthLimit: null`. Text fitting is geometry-aware; length guides are retained in review retranslations and surfaced as findings when exceeded
 - `stores/extraction-store.ts`: Extraction state
-- `hooks/useTranslation.ts`: Translation workflow with `retranslate()`. Uses `getState()` to avoid stale closures
+- `stores/glossary-store.ts`: Versioned `localStorage` glossary library with ordered active sets, migration/recovery, quota-safe writes, and cross-tab synchronization
+- `hooks/useTranslation.ts`: Translation workflow with `retranslate()`. Snapshots the ordered active glossary set when a job starts and uses `getState()` to avoid stale closures
 - `hooks/useExtraction.ts`: Extraction workflow
 - `hooks/useConfig.ts`: Config fetching with graceful fallback
 - `hooks/useAutoUpdate.ts`: Tauri auto-update lifecycle — startup check (production only), download/install with progress + relaunch, skip-version via localStorage. No-op outside Tauri
@@ -98,3 +103,5 @@ CSS variables in OKLch color space with light/dark mode variants. Semantic token
 - `test_batch_size.py`: Batch size edge cases
 - `test_security_fix.py`: HTML sanitization, XSS prevention
 - `test_image_compressor.py`: Image compression, transparency
+
+Frontend Vitest coverage lives beside the implementation in `frontend/src/lib/glossary.test.ts` and `frontend/src/stores/glossary-store.test.ts`.
