@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  body { margin:0; background:#e6e5e3; font-family:"Geist", system-ui, sans-serif; -webkit-font-smoothing:antialiased; }
+  a { color: oklch(0.55 0.15 270); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+</style>
+</helmet>
+
+<section style="display:flex; flex-direction:column; gap:56px; padding:56px 64px 96px; align-items:flex-start;">
+
+  <div style="display:flex; flex-direction:column; gap:8px; max-width:900px;">
+    <div style="font-size:12px; font-weight:600; letter-spacing:0.08em; text-transform:uppercase; color:#8a8781;">Turn 1 · 번역 검토 &amp; 수정 화면</div>
+    <h1 style="margin:0; font-size:30px; font-weight:700; letter-spacing:-0.02em; color:oklch(0.205 0.015 60);">검토 화면 재현 + 개선 두 방향</h1>
+    <p style="margin:0; font-size:15px; line-height:1.6; color:oklch(0.45 0.012 60); text-wrap:pretty;">
+      <a href="#1a">1a</a>는 현재 <code style="font-family:'Geist Mono',monospace; font-size:13px;">ReviewPanel.tsx</code>를 그대로 옮긴 것,
+      <a href="#1b">1b</a>는 구조를 유지한 채 다듬은 보수안, <a href="#1c">1c</a>는 “한 건씩 처리하는 큐”로 흐름을 다시 짠 과감안입니다.
+      토큰·컴포넌트는 모두 이 앱의 것(shadcn + globals.css)을 그대로 씁니다.
+    </p>
+  </div>
+
+  <div style="display:flex; flex-wrap:wrap; gap:64px; align-items:flex-start;">
+
+    <!-- ══════════════════ 1a 현재 화면 재현 ══════════════════ -->
+    <div id="1a" style="display:flex; flex-direction:column; gap:14px;">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <span style="display:inline-flex; align-items:center; justify-content:center; height:24px; padding:0 10px; border-radius:999px; background:oklch(0.205 0.015 60); color:#fff; font-size:12px; font-weight:600;">1a</span>
+        <span style="font-size:15px; font-weight:600; color:oklch(0.205 0.015 60);">현재 화면 (재현)</span>
+        <span style="font-size:13px; color:#8a8781;">ReviewPanel.tsx · 1280×860</span>
+      </div>
+
+      <div style="width:1280px; height:860px; overflow:hidden; display:flex; flex-direction:column; background:oklch(0.985 0.005 80); color:oklch(0.205 0.015 60); border:1px solid oklch(0.88 0.01 80); box-shadow:0 18px 48px rgba(0,0,0,0.14);">
+
+        <!-- header -->
+        <div style="border-bottom:1px solid oklch(0.88 0.01 80);">
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 16px; flex-wrap:wrap;">
+            <div>
+              <h2 style="margin:0; font-size:16px; font-weight:700; line-height:1.25;">번역 검토 &amp; 수정</h2>
+              <p style="margin:2px 0 0; font-size:12px; line-height:16px; color:oklch(0.45 0.012 60);">37개 섹션 · 검출 5 · 수정됨 2 · 최종 r0 → 초안 r3</p>
+            </div>
+            <div style="display:flex; gap:8px;">
+              <button style="display:inline-flex; align-items:center; justify-content:center; gap:6px; height:32px; padding:0 10px; border-radius:6px; border:1px solid oklch(0.88 0.01 80); background:oklch(0.985 0.005 80); box-shadow:0 1px 2px rgba(0,0,0,0.04); font-family:inherit; font-size:14px; font-weight:500; color:inherit;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5 5.5 5.5 0 0 1-5.5 5.5H11"/></svg>
+                되돌리기
+              </button>
+              <button style="display:inline-flex; align-items:center; justify-content:center; gap:6px; height:32px; padding:0 10px; border-radius:6px; border:none; background:oklch(0.55 0.15 270); color:oklch(0.985 0.005 80); font-family:inherit; font-size:14px; font-weight:500;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+                최종 반영 후 저장
+              </button>
+              <button style="display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:6px; border:none; background:transparent; color:inherit;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+              </button>
+            </div>
+          </div>
+          <div style="display:flex; flex-wrap:wrap; align-items:flex-end; gap:8px; padding:0 16px 10px;">
+            <div style="min-width:150px; display:flex; flex-direction:column; gap:4px;">
+              <label style="font-size:10px; color:oklch(0.45 0.012 60);">저장할 용어집</label>
+              <select style="height:32px; width:100%; border-radius:6px; border:1px solid oklch(0.88 0.01 80); background:oklch(0.985 0.005 80); padding:0 8px; font-family:inherit; font-size:12px; color:inherit;">
+                <option>게임 공통 용어집</option>
+              </select>
+            </div>
+            <div style="min-width:100px; flex:1; max-width:200px; display:flex; flex-direction:column; gap:4px;">
+              <label style="font-size:10px; color:oklch(0.45 0.012 60);">용어 원문</label>
+              <input placeholder="Source" style="height:32px; width:100%; box-sizing:border-box; border-radius:6px; border:1px solid oklch(0.88 0.01 80); background:oklch(0.985 0.005 80); padding:0 12px; font-family:inherit; font-size:14px; box-shadow:0 1px 2px rgba(0,0,0,0.04);">
+            </div>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="oklch(0.45 0.012 60)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom:8px; flex-shrink:0;"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+            <div style="min-width:100px; flex:1; max-width:200px; display:flex; flex-direction:column; gap:4px;">
+              <label style="font-size:10px; color:oklch(0.45 0.012 60);">용어 번역</label>
+              <input placeholder="Target" style="height:32px; width:100%; box-sizing:border-box; border-radius:6px; border:1px solid oklch(0.88 0.01 80); background:oklch(0.985 0.005 80); padding:0 12px; font-family:inherit; font-size:14px; box-shadow:0 1px 2px rgba(0,0,0,0.04);">
+            </div>
+            <button style="display:inline-flex; align-items:center; gap:4px; height:32px; padding:0 10px; border-radius:6px; border:1px solid oklch(0.88 0.01 80); background:oklch(0.985 0.005 80); box-shadow:0 1px 2px rgba(0,0,0,0.04); font-family:inherit; font-size:14px; font-weight:500; color:inherit;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+              용어 추가
+            </button>
+            <p style="margin:0 0 8px 4px; font-size:10px; color:oklch(0.45 0.012 60);">라이브러리와 이 작업에 동시에 반영 · 기존 번역은 재번역 시 적용</p>
+          </div>
+        </div>
+
+        <!-- body -->
+        <div style="display:flex; flex:1; min-height:0;">
+          <nav style="width:160px; flex-shrink:0; border-right:1px solid oklch(0.88 0.01 80); overflow-y:auto; padding:8px 0;">
+            <div style="padding:8px 12px; border-left:2px solid transparent;">
+              <div style="display:flex; align-items:center; gap:6px;"><span style="font-size:12px; font-weight:700; color:oklch(0.45 0.012 60);">S1</span></div>
+              <div style="font-size:11px; color:oklch(0.45 0.012 60); margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">표지</div>
+              <div style="font-size:10px; color:oklch(0.45 0.012 60 / 70%);">섹션 2</div>
+            </div>
+            <div style="padding:8px 12px; border-left:2px solid transparent;">
+              <div style="display:flex; align-items:center; gap:6px;"><span style="font-size:12px; font-weight:700; color:oklch(0.45 0.012 60);">S2</span><span style="font-size:10px; color:oklch(0.769 0.188 70.08);">⚠️1</span></div>
+              <div style="font-size:11px; color:oklch(0.45 0.012 60); margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">목차</div>
+              <div style="font-size:10px; color:oklch(0.45 0.012 60 / 70%);">섹션 5</div>
+            </div>
+            <div style="padding:8px 12px; border-left:2px solid transparent;">
+              <div style="display:flex; align-items:center; gap:6px;"><span style="font-size:12px; font-weight:700; color:oklch(0.45 0.012 60);">S3</span><span style="font-size:10px; color:oklch(0.723 0.191 142.5);">✎1</span></div>
+              <div style="font-size:11px; color:oklch(0.45 0.012 60); margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">시장 개요</div>
+              <div style="font-size:10px; color:oklch(0.45 0.012 60 / 70%);">섹션 7</div>
+            </div>
+            <div style="padding:8px 12px; border-left:2px solid oklch(0.55 0.15 270); background:oklch(0.55 0.15 270 / 10%);">
+              <div style="display:flex; align-items:center; gap:6px;"><span style="font-size:12px; font-weight:700; color:oklch(0.55 0.15 270);">S4</span><span style="font-size:10px; color:oklch(0.769 0.188 70.08);">⚠️2</span><span style="font-size:10px; color:oklch(0.723 0.191 142.5);">✎1</span></div>
+              <div style="font-size:11px; color:oklch(0.45 0.012 60); margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">라이브 서비스 성과</div>
+              <div style="font-size:10px; color:oklch(0.45 0.012 60 / 70%);">섹션 6</div>
+            </div>
+            <div style="padding:8px 12px; border-left:2px solid transparent;">
+              <div style="display:flex; align-items:center; gap:6px;"><span style="font-size:12px; font-weight:700; color:oklch(0.45 0.012 60);">S5</span><span style="font-size:10px; color:oklch(0.769 0.188 70.08);">⚠️1</span></div>
+              <div style="font-size:11px; color:oklch(0.45 0.012 60); margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">지역별 매출</div>
+              <div style="font-size:10px; color:oklch(0.45 0.012 60 / 70%);">섹션 9</div>
+            </div>
+            <div style="padding:8px 12px; border-left:2px solid transparent;">
+              <div style="display:flex; align-items:center; gap:6px;"><span style="font-size:12px; font-weight:700; color:oklch(0.45 0.012 60);">S6</span></div>
+              <div style="font-size:11px; color:oklch(0.45 0.012 60); margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">하반기 로드맵</div>
+              <div style="font-size:10px; color:oklch(0.45 0.012 60 / 70%);">섹션 8</div>
+            </div>
+          </nav>
+
+          <div style="flex:1; overflow-y:auto; padding:12px 16px;">
+            <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+              <span style="font-size:12px; font-weight:700; color:oklch(0.55 0.15 270); background:oklch(0.55 0.15 270 / 10%); border-radius:4px; padding:4px 8px;">S4</span>
+              <h3 style="margin:0; font-size:14px; font-weight:700;">라이브 서비스 성과</h3>
+              <span style="font-size:12px; color:oklch(0.45 0.012 60);">섹션 6개</span>
+            </div>
+
+            <div style="display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:6px; align-items:start;">
+
+              <!-- short -->
+              <div style="grid-column:span 1; position:relative; background:oklch(0.995 0.003 80 / 80%); backdrop-filter:blur(12px); border:1px solid oklch(0.88 0.01 80); border-radius:12px; box-shadow:0 4px 24px oklch(0.205 0.015 60 / 6%); padding:10px;">
+                <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px; font-size:10px; font-weight:600; color:oklch(0.45 0.012 60); flex-wrap:wrap;"><span>섹션 2</span></div>
+                <div style="font-size:14px; line-height:1.375;">Live Service Review</div>
+                <div style="font-size:11px; line-height:1.375; color:oklch(0.205 0.015 60 / 45%); margin-top:2px;">라이브 서비스 리뷰</div>
+              </div>
+
+              <!-- short with hover panel -->
+              <div style="grid-column:span 1; position:relative; background:oklch(0.995 0.003 80 / 80%); backdrop-filter:blur(12px); border:1px solid oklch(0.55 0.15 270); border-radius:12px; box-shadow:0 4px 24px oklch(0.205 0.015 60 / 6%); padding:10px;">
+                <div style="position:absolute; top:4px; right:6px; display:flex; gap:2px; background:oklch(0.995 0.003 80); border:1px solid oklch(0.88 0.01 80); border-radius:8px; padding:2px; box-shadow:0 4px 6px rgba(0,0,0,0.1); z-index:10;">
+                  <span style="display:inline-flex; align-items:center; gap:4px; height:24px; padding:0 6px; border-radius:6px; font-size:12px; font-weight:500;">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/></svg>수정
+                  </span>
+                </div>
+                <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px; font-size:10px; font-weight:600; color:oklch(0.45 0.012 60); flex-wrap:wrap;"><span>섹션 3</span><span style="background:oklch(0.94 0.008 80); border-radius:999px; padding:2px 6px;">×2</span></div>
+                <div style="font-size:14px; line-height:1.375;">H1 2026</div>
+                <div style="font-size:11px; line-height:1.375; color:oklch(0.205 0.015 60 / 45%); margin-top:2px;">2026 상반기</div>
+              </div>
+
+              <!-- med -->
+              <div style="grid-column:span 2; position:relative; background:oklch(0.995 0.003 80 / 80%); backdrop-filter:blur(12px); border:1px solid oklch(0.88 0.01 80); border-radius:12px; box-shadow:0 4px 24px oklch(0.205 0.015 60 / 6%); padding:10px;">
+                <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px; font-size:10px; font-weight:600; color:oklch(0.45 0.012 60); flex-wrap:wrap;"><span>섹션 4</span><span style="color:oklch(0.723 0.191 142.5); background:oklch(0.723 0.191 142.5 / 10%); border-radius:999px; padding:2px 6px;">수정됨</span></div>
+                <div style="font-size:14px; line-height:1.375;">Monthly Active Users (MAU)</div>
+                <div style="font-size:11px; line-height:1.375; color:oklch(0.205 0.015 60 / 45%); margin-top:2px;">월간 활성 이용자(MAU)</div>
+              </div>
+
+              <!-- med with finding -->
+              <div style="grid-column:span 2; position:relative; background:oklch(0.995 0.003 80 / 80%); backdrop-filter:blur(12px); border:1px solid oklch(0.88 0.01 80); border-radius:12px; box-shadow:0 4px 24px oklch(0.205 0.015 60 / 6%); padding:10px;">
+                <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px; font-size:10px; font-weight:600; color:oklch(0.45 0.012 60); flex-wrap:wrap;"><span>섹션 5</span><span style="color:oklch(0.577 0.245 27.325); background:oklch(0.577 0.245 27.325 / 10%); border-radius:999px; padding:2px 6px;">용어집 위반</span></div>
+                <div style="font-size:14px; line-height:1.375;">Combat Pass adoption rate</div>
+                <div style="font-size:11px; line-height:1.375; color:oklch(0.205 0.015 60 / 45%); margin-top:2px;">배틀 패스 도입률</div>
+                <div style="margin-top:6px; font-size:11px; color:oklch(0.45 0.012 60); background:oklch(0.94 0.008 80 / 50%); border-radius:4px; padding:4px 8px;">용어집에 등록된 &lsquo;배틀 패스&rsquo;가 다르게 번역되었습니다.<span style="color:oklch(0.205 0.015 60);"> · 제안: Battle Pass</span></div>
+              </div>
+
+              <!-- short overflow -->
+              <div style="grid-column:span 1; position:relative; background:oklch(0.995 0.003 80 / 80%); backdrop-filter:blur(12px); border:1px solid oklch(0.88 0.01 80); border-radius:12px; box-shadow:0 4px 24px oklch(0.205 0.015 60 / 6%); padding:10px;">
+                <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px; font-size:10px; font-weight:600; color:oklch(0.45 0.012 60); flex-wrap:wrap;"><span>섹션 6</span><span style="color:oklch(0.769 0.188 70.08); background:oklch(0.769 0.188 70.08 / 10%); border-radius:999px; padding:2px 6px;">공간 초과</span></div>
+                <div style="font-size:14px; line-height:1.375;">Up 18% year over year</div>
+                <div style="font-size:11px; line-height:1.375; color:oklch(0.205 0.015 60 / 45%); margin-top:2px;">전년 대비 +18%</div>
+                <div style="margin-top:4px; font-size:10px; color:oklch(0.45 0.012 60);">📐 14자 · 21자<span style="color:oklch(0.577 0.245 27.325); font-weight:600;"> (초과)</span></div>
+              </div>
+
+              <!-- short -->
+              <div style="grid-column:span 1; position:relative; background:oklch(0.995 0.003 80 / 80%); backdrop-filter:blur(12px); border:1px solid oklch(0.88 0.01 80); border-radius:12px; box-shadow:0 4px 24px oklch(0.205 0.015 60 / 6%); padding:10px;">
+                <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px; font-size:10px; font-weight:600; color:oklch(0.45 0.012 60); flex-wrap:wrap;"><span>섹션 7</span><span style="color:oklch(0.769 0.188 70.08); background:oklch(0.769 0.188 70.08 / 10%); border-radius:999px; padding:2px 6px;">색상 일부 확인 필요</span></div>
+                <div style="font-size:14px; line-height:1.375;"><span style="color:#c0392b; font-weight:700;">Retention</span> <span>improved</span></div>
+                <div style="font-size:11px; line-height:1.375; color:oklch(0.205 0.015 60 / 45%); margin-top:2px;">잔존율 개선</div>
+              </div>
+
+              <!-- long two-col -->
+              <div style="grid-column:1 / -1; position:relative; background:oklch(0.995 0.003 80 / 80%); backdrop-filter:blur(12px); border:1px solid oklch(0.88 0.01 80); border-radius:12px; box-shadow:0 4px 24px oklch(0.205 0.015 60 / 6%); padding:10px;">
+                <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px; font-size:10px; font-weight:600; color:oklch(0.45 0.012 60); flex-wrap:wrap;"><span>섹션 8</span></div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                  <div style="font-size:14px; line-height:1.375; color:oklch(0.205 0.015 60 / 70%);">신규 시즌 패스 도입 이후 재방문율이 크게 개선되었으며, 특히 동남아시아 지역에서 두 자릿수 성장을 기록했습니다.</div>
+                  <div style="font-size:14px; line-height:1.375;">Since the new season pass launched, return rates have improved markedly, with double-digit growth in Southeast Asia in particular.</div>
+                </div>
+              </div>
+
+              <!-- note -->
+              <div style="grid-column:1 / -1; position:relative; background:oklch(0.995 0.003 80 / 80%); backdrop-filter:blur(12px); border:1px solid oklch(0.88 0.01 80); border-radius:12px; box-shadow:0 4px 24px oklch(0.205 0.015 60 / 6%); padding:10px;">
+                <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px; font-size:10px; font-weight:600; color:oklch(0.45 0.012 60); flex-wrap:wrap;"><span>발표자 노트</span></div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                  <div style="font-size:14px; line-height:1.375; color:oklch(0.205 0.015 60 / 70%);">이 장표는 3분 내로 마무리하고, 질문은 마지막 Q&amp;A로 넘긴다.</div>
+                  <div style="font-size:14px; line-height:1.375;">Keep this slide under three minutes and defer questions to the final Q&amp;A.</div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="width:1280px; box-sizing:border-box; display:flex; flex-wrap:wrap; gap:10px; padding:14px 16px; background:#fff; border:1px solid oklch(0.88 0.01 80); border-radius:12px;">
+        <div style="font-size:13px; font-weight:600; color:oklch(0.205 0.015 60); width:100%;">읽으면서 확인한 문제</div>
+        <div style="flex:1; min-width:200px; font-size:13px; line-height:1.55; color:oklch(0.45 0.012 60);">① 상단이 <b style="color:oklch(0.205 0.015 60);">용어집 입력폼</b>에 절반을 내주고, 정작 “지금 뭘 해야 하는지”는 안 보임</div>
+        <div style="flex:1; min-width:200px; font-size:13px; line-height:1.55; color:oklch(0.45 0.012 60);">② <b style="color:oklch(0.205 0.015 60);">수정·무시 버튼이 hover에만</b> 존재 — 처음 쓰는 사람은 발견 못 함</div>
+        <div style="flex:1; min-width:200px; font-size:13px; line-height:1.55; color:oklch(0.45 0.012 60);">③ 문제 5건이 <b style="color:oklch(0.205 0.015 60);">37개 타일에 흩어져</b> 있어 슬라이드를 하나씩 뒤져야 함</div>
+        <div style="flex:1; min-width:200px; font-size:13px; line-height:1.55; color:oklch(0.45 0.012 60);">④ 수정 1건 = 카드 → 탭 → 확인 → <b style="color:oklch(0.205 0.015 60);">비교 모달</b> → 적용 → 부분일치 시트, 5단계</div>
+        <div style="flex:1; min-width:200px; font-size:13px; line-height:1.55; color:oklch(0.45 0.012 60);">⑤ <b style="color:oklch(0.205 0.015 60);">“최종 반영 후 저장 / r0 → r3”</b> — 저장하면 무슨 일이 벌어지는지 알 수 없음</div>
+      </div>
+    </div>
+
+    <!-- ══════════════════ 1b 보수안 ══════════════════ -->
+    <div id="1b" style="display:flex; flex-direction:column; gap:14px;">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <span style="display:inline-flex; align-items:center; justify-content:center; height:24px; padding:0 10px; border-radius:999px; background:oklch(0.55 0.15 270); color:#fff; font-size:12px; font-weight:600;">1b</span>
+        <span style="font-size:15px; font-weight:600; color:oklch(0.205 0.015 60);">보수안 — 같은 구조, 흐름만 정리</span>
+        <span style="font-size:13px; color:#8a8781;">사이드바 + 카드 그리드 유지</span>
+      </div>
+
+      <div style="width:1280px; height:860px; overflow:hidden; display:flex; flex-direction:column; background:oklch(0.985 0.005 80); color:oklch(0.205 0.015 60); border:1px solid oklch(0.88 0.01 80); box-shadow:0 18px 48px rgba(0,0,0,0.14);">
+
+        <!-- header: 한 줄로 -->
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; padding:12px 16px; border-bottom:1px solid oklch(0.88 0.01 80); background:oklch(0.995 0.003 80);">
+          <div style="display:flex; align-items:center; gap:14px; min-width:0;">
+            <h2 style="margin:0; font-size:16px; font-weight:700; line-height:1.25; white-space:nowrap;">번역 검토</h2>
+            <span style="width:1px; height:20px; background:oklch(0.88 0.01 80);"></span>
+            <div style="display:flex; align-items:center; gap:10px;">
+              <span style="font-size:13px; color:oklch(0.45 0.012 60);">확인할 항목</span>
+              <div style="width:180px; height:6px; border-radius:999px; background:oklch(0.94 0.008 80); overflow:hidden;">
+                <div style="width:40%; height:100%; background:oklch(0.55 0.15 270);"></div>
+              </div>
+              <span style="font-size:13px; font-weight:600;">2 / 5 처리</span>
+            </div>
+            <span style="font-size:13px; color:oklch(0.45 0.012 60);">·  직접 수정 3곳</span>
+          </div>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <button style="display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 10px; border-radius:6px; border:1px solid oklch(0.88 0.01 80); background:oklch(0.985 0.005 80); font-family:inherit; font-size:13px; font-weight:500; color:inherit;">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v6"/><path d="M9 10h6"/><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20"/></svg>
+              용어집
+            </button>
+            <button style="display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 10px; border-radius:6px; border:1px solid oklch(0.88 0.01 80); background:oklch(0.985 0.005 80); font-family:inherit; font-size:13px; font-weight:500; color:inherit;">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5 5.5 5.5 0 0 1-5.5 5.5H11"/></svg>
+              되돌리기
+            </button>
+            <button style="display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:6px; border:none; background:transparent; color:inherit;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div style="display:flex; flex:1; min-height:0;">
+          <!-- sidebar -->
+          <nav style="width:212px; flex-shrink:0; border-right:1px solid oklch(0.88 0.01 80); display:flex; flex-direction:column; background:oklch(0.995 0.003 80);">
+            <div style="display:flex; gap:4px; padding:10px 10px 8px;">
+              <span style="flex:1; text-align:center; height:26px; line-height:26px; border-radius:999px; background:oklch(0.205 0.015 60); color:oklch(0.985 0.005 80); font-size:12px; font-weight:600;">전체 37</span>
+              <span style="flex:1; text-align:center; height:26px; line-height:26px; border-radius:999px; background:oklch(0.985 0.005 80); border:1px solid oklch(0.88 0.01 80); font-size:12px; font-weight:500; color:oklch(0.45 0.012 60);">문제 5</span>
+              <span style="flex:1; text-align:center; height:26px; line-height:26px; border-radius:999px; background:oklch(0.985 0.005 80); border:1px solid oklch(0.88 0.01 80); font-size:12px; font-weight:500; color:oklch(0.45 0.012 60);">수정 3</span>
+            </div>
+            <div style="flex:1; overflow-y:auto; padding:2px 8px 8px; display:flex; flex-direction:column; gap:2px;">
+              <div style="display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:8px;">
+                <span style="font-size:12px; font-weight:700; color:oklch(0.45 0.012 60); width:22px;">1</span>
+                <span style="flex:1; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:oklch(0.45 0.012 60);">표지</span>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="oklch(0.723 0.191 142.5)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:8px;">
+                <span style="font-size:12px; font-weight:700; color:oklch(0.45 0.012 60); width:22px;">2</span>
+                <span style="flex:1; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:oklch(0.45 0.012 60);">목차</span>
+                <span style="min-width:18px; height:18px; padding:0 5px; border-radius:999px; background:oklch(0.769 0.188 70.08 / 18%); color:oklch(0.52 0.14 70); font-size:11px; font-weight:700; display:inline-flex; align-items:center; justify-content:center;">1</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:8px;">
+                <span style="font-size:12px; font-weight:700; color:oklch(0.45 0.012 60); width:22px;">3</span>
+                <span style="flex:1; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:oklch(0.45 0.012 60);">시장 개요</span>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="oklch(0.723 0.191 142.5)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:8px; background:oklch(0.55 0.15 270 / 12%);">
+                <span style="font-size:12px; font-weight:700; color:oklch(0.55 0.15 270); width:22px;">4</span>
+                <span style="flex:1; font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">라이브 서비스 성과</span>
+                <span style="min-width:18px; height:18px; padding:0 5px; border-radius:999px; background:oklch(0.577 0.245 27.325 / 15%); color:oklch(0.52 0.22 27); font-size:11px; font-weight:700; display:inline-flex; align-items:center; justify-content:center;">2</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:8px;">
+                <span style="font-size:12px; font-weight:700; color:oklch(0.45 0.012 60); width:22px;">5</span>
+                <span style="flex:1; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:oklch(0.45 0.012 60);">지역별 매출</span>
+                <span style="min-width:18px; height:18px; padding:0 5px; border-radius:999px; background:oklch(0.769 0.188 70.08 / 18%); color:oklch(0.52 0.14 70); font-size:11px; font-weight:700; display:inline-flex; align-items:center; justify-content:center;">1</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:8px;">
+                <span style="font-size:12px; font-weight:700; color:oklch(0.45 0.012 60); width:22px;">6</span>
+                <span style="flex:1; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:oklch(0.45 0.012 60);">하반기 로드맵</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:8px;">
+                <span style="font-size:12px; font-weight:700; color:oklch(0.45 0.012 60); width:22px;">7</span>
+                <span style="flex:1; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:oklch(0.45 0.012 60);">감사합니다</span>
+              </div>
+            </div>
+          </nav>
+
+          <!-- content -->
+          <div style="flex:1; display:flex; flex-direction:column; min-width:0;">
+            <div style="flex:1; overflow-y:auto; padding:16px 20px 20px;">
+              <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:14px;">
+                <h3 style="margin:0; font-size:17px; font-weight:700; letter-spacing:-0.01em;">슬라이드 4 · 라이브 서비스 성과</h3>
+                <span style="font-size:13px; color:oklch(0.45 0.012 60);">텍스트 8개 · 확인 필요 2개</span>
+              </div>
+
+              <!-- 문제 있는 카드 -->
+              <div style="display:flex; flex-direction:column; gap:10px;">
+
+                <div style="border:1px solid oklch(0.577 0.245 27.325 / 35%); border-radius:12px; background:oklch(0.995 0.003 80); overflow:hidden;">
+                  <div style="display:flex; align-items:center; gap:8px; padding:8px 14px; background:oklch(0.577 0.245 27.325 / 8%); border-bottom:1px solid oklch(0.577 0.245 27.325 / 18%);">
+                    <span style="font-size:12px; font-weight:700; color:oklch(0.52 0.22 27);">용어집과 다름</span>
+                    <span style="font-size:12px; color:oklch(0.45 0.012 60);">‘배틀 패스’는 <b style="color:oklch(0.205 0.015 60);">Battle Pass</b>로 등록되어 있습니다</span>
+                    <button style="margin-left:auto; display:inline-flex; align-items:center; gap:5px; height:28px; padding:0 10px; border-radius:6px; border:none; background:oklch(0.55 0.15 270); color:#fff; font-family:inherit; font-size:12px; font-weight:600;">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+                      제안대로 바꾸기
+                    </button>
+                  </div>
+                  <div style="display:grid; grid-template-columns:1fr 1fr; gap:0;">
+                    <div style="padding:12px 14px; border-right:1px solid oklch(0.88 0.01 80);">
+                      <div style="font-size:11px; font-weight:600; color:oklch(0.45 0.012 60); margin-bottom:5px;">원문 · 제목 텍스트</div>
+                      <div style="font-size:15px; line-height:1.5; color:oklch(0.205 0.015 60 / 72%);">배틀 패스 도입률</div>
+                    </div>
+                    <div style="padding:12px 14px;">
+                      <div style="font-size:11px; font-weight:600; color:oklch(0.45 0.012 60); margin-bottom:5px;">번역</div>
+                      <div style="font-size:15px; line-height:1.5;"><span style="background:oklch(0.577 0.245 27.325 / 12%); border-radius:3px; padding:0 2px;">Combat Pass</span> adoption rate</div>
+                    </div>
+                  </div>
+                  <div style="display:flex; align-items:center; gap:6px; padding:8px 14px; border-top:1px solid oklch(0.88 0.01 80); background:oklch(0.985 0.005 80);">
+                    <button style="display:inline-flex; align-items:center; gap:5px; height:28px; padding:0 10px; border-radius:6px; border:1px solid oklch(0.88 0.01 80); background:oklch(0.995 0.003 80); font-family:inherit; font-size:12px; font-weight:500; color:inherit;">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/></svg>
+                      직접 수정
+                    </button>
+                    <button style="display:inline-flex; align-items:center; gap:5px; height:28px; padding:0 10px; border-radius:6px; border:1px solid oklch(0.88 0.01 80); background:oklch(0.995 0.003 80); font-family:inherit; font-size:12px; font-weight:500; color:inherit;">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>
+                      AI 재번역
+                    </button>
+                    <button style="display:inline-flex; align-items:center; gap:5px; height:28px; padding:0 10px; border-radius:6px; border:none; background:transparent; font-family:inherit; font-size:12px; font-weight:500; color:oklch(0.45 0.012 60);">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></svg>
+                      문제 없음
+                    </button>
+                    <span style="margin-left:auto; font-size:11px; color:oklch(0.45 0.012 60);">이 문구는 덱 안에서 2곳에 반복됩니다</span>
+                  </div>
+                </div>
+
+                <!-- 편집 중 카드 (인라인 미리보기) -->
+                <div style="border:1px solid oklch(0.55 0.15 270); border-radius:12px; background:oklch(0.995 0.003 80); overflow:hidden; box-shadow:0 4px 20px oklch(0.55 0.15 270 / 12%);">
+                  <div style="display:flex; align-items:center; gap:8px; padding:8px 14px; background:oklch(0.769 0.188 70.08 / 10%); border-bottom:1px solid oklch(0.88 0.01 80);">
+                    <span style="font-size:12px; font-weight:700; color:oklch(0.52 0.14 70);">박스에 넘침</span>
+                    <span style="font-size:12px; color:oklch(0.45 0.012 60);">21자 / 권장 14자 — 슬라이드에서 두 줄로 밀립니다</span>
+                  </div>
+                  <div style="display:grid; grid-template-columns:1fr 1fr; gap:0;">
+                    <div style="padding:12px 14px; border-right:1px solid oklch(0.88 0.01 80);">
+                      <div style="font-size:11px; font-weight:600; color:oklch(0.45 0.012 60); margin-bottom:5px;">원문 · 본문 텍스트</div>
+                      <div style="font-size:15px; line-height:1.5; color:oklch(0.205 0.015 60 / 72%);">전년 대비 +18%</div>
+                    </div>
+                    <div style="padding:12px 14px;">
+                      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:5px;">
+                        <div style="font-size:11px; font-weight:600; color:oklch(0.45 0.012 60);">번역 수정 중</div>
+                        <div style="display:flex; align-items:center; gap:6px;">
+                          <span style="font-size:11px; color:oklch(0.723 0.191 142.5); font-weight:600;">13자 · 박스에 맞음</span>
+                          <div style="width:60px; height:4px; border-radius:999px; background:oklch(0.94 0.008 80); overflow:hidden;"><div style="width:64%; height:100%; background:oklch(0.723 0.191 142.5);"></div></div>
+                        </div>
+                      </div>
+                      <div style="border:1px solid oklch(0.55 0.15 270); border-radius:8px; padding:8px 10px; font-size:15px; line-height:1.5; background:oklch(0.985 0.005 80);">+18% YoY<span style="display:inline-block; width:1.5px; height:16px; background:oklch(0.55 0.15 270); vertical-align:-3px; margin-left:1px;"></span></div>
+                      <div style="margin-top:6px; font-size:12px; color:oklch(0.45 0.012 60);">이전: <span style="text-decoration:line-through; color:oklch(0.205 0.015 60 / 50%);">Up 18% year over year</span></div>
+                    </div>
+                  </div>
+                  <div style="display:flex; align-items:center; gap:8px; padding:8px 14px; border-top:1px solid oklch(0.88 0.01 80); background:oklch(0.985 0.005 80);">
+                    <label style="display:flex; align-items:center; gap:6px; font-size:12px; color:oklch(0.45 0.012 60);">
+                      <span style="width:14px; height:14px; border-radius:3px; background:oklch(0.55 0.15 270); display:inline-flex; align-items:center; justify-content:center;">
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+                      </span>
+                      똑같은 문구 2곳도 함께 바꾸기
+                    </label>
+                    <div style="margin-left:auto; display:flex; gap:8px;">
+                      <button style="height:30px; padding:0 12px; border-radius:6px; border:1px solid oklch(0.88 0.01 80); background:oklch(0.995 0.003 80); font-family:inherit; font-size:13px; font-weight:500; color:inherit;">취소</button>
+                      <button style="height:30px; padding:0 14px; border-radius:6px; border:none; background:oklch(0.55 0.15 270); color:#fff; font-family:inherit; font-size:13px; font-weight:600;">적용</button>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 확인 끝난 문구들 (접힌 목록) -->
+                <div style="border:1px solid oklch(0.88 0.01 80); border-radius:12px; background:oklch(0.995 0.003 80); overflow:hidden;">
+                  <div style="display:flex; align-items:center; gap:8px; padding:10px 14px; border-bottom:1px solid oklch(0.88 0.01 80);">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="oklch(0.45 0.012 60)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+                    <span style="font-size:13px; font-weight:600;">문제 없는 텍스트 6개</span>
+                    <span style="font-size:12px; color:oklch(0.45 0.012 60);">훑어보려면 펼치세요</span>
+                  </div>
+                  <div style="display:flex; flex-direction:column;">
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:0; border-bottom:1px solid oklch(0.88 0.01 80 / 60%);">
+                      <div style="padding:9px 14px; font-size:14px; color:oklch(0.205 0.015 60 / 70%); border-right:1px solid oklch(0.88 0.01 80 / 60%);">라이브 서비스 리뷰</div>
+                      <div style="padding:9px 14px; font-size:14px;">Live Service Review</div>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:0; border-bottom:1px solid oklch(0.88 0.01 80 / 60%);">
+                      <div style="padding:9px 14px; font-size:14px; color:oklch(0.205 0.015 60 / 70%); border-right:1px solid oklch(0.88 0.01 80 / 60%);">2026 상반기</div>
+                      <div style="padding:9px 14px; font-size:14px;">H1 2026</div>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:0; border-bottom:1px solid oklch(0.88 0.01 80 / 60%);">
+                      <div style="padding:9px 14px; font-size:14px; color:oklch(0.205 0.015 60 / 70%); border-right:1px solid oklch(0.88 0.01 80 / 60%);">월간 활성 이용자(MAU)</div>
+                      <div style="padding:9px 14px; font-size:14px; display:flex; align-items:center; gap:8px;">Monthly Active Users (MAU)<span style="font-size:11px; font-weight:600; color:oklch(0.723 0.191 142.5); background:oklch(0.723 0.191 142.5 / 12%); border-radius:999px; padding:2px 7px;">직접 수정함</span></div>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:0; border-bottom:1px solid oklch(0.88 0.01 80 / 60%);">
+                      <div style="padding:9px 14px; font-size:14px; color:oklch(0.205 0.015 60 / 70%); border-right:1px solid oklch(0.88 0.01 80 / 60%);">잔존율 개선</div>
+                      <div style="padding:9px 14px; font-size:14px;"><span style="color:#c0392b; font-weight:700;">Retention</span> improved</div>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:0; border-bottom:1px solid oklch(0.88 0.01 80 / 60%);">
+                      <div style="padding:9px 14px; font-size:14px; color:oklch(0.205 0.015 60 / 70%); border-right:1px solid oklch(0.88 0.01 80 / 60%); line-height:1.5;">신규 시즌 패스 도입 이후 재방문율이 크게 개선되었으며, 특히 동남아시아 지역에서 두 자릿수 성장을 기록했습니다.</div>
+                      <div style="padding:9px 14px; font-size:14px; line-height:1.5;">Since the new season pass launched, return rates have improved markedly, with double-digit growth in Southeast Asia in particular.</div>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:0;">
+                      <div style="padding:9px 14px; font-size:14px; color:oklch(0.205 0.015 60 / 70%); border-right:1px solid oklch(0.88 0.01 80 / 60%); line-height:1.5;"><span style="font-size:11px; font-weight:600; color:oklch(0.45 0.012 60); display:block; margin-bottom:2px;">발표자 노트</span>이 장표는 3분 내로 마무리하고, 질문은 마지막 Q&amp;A로 넘긴다.</div>
+                      <div style="padding:9px 14px; font-size:14px; line-height:1.5; padding-top:24px;">Keep this slide under three minutes and defer questions to the final Q&amp;A.</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 하단 저장 바 -->
+            <div style="display:flex; align-items:center; gap:14px; padding:12px 20px; border-top:1px solid oklch(0.88 0.01 80); background:oklch(0.995 0.003 80);">
+              <div style="display:flex; align-items:center; gap:8px;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="oklch(0.55 0.15 270)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/></svg>
+                <span style="font-size:13px;"><b>3곳</b>을 고쳤습니다. 아직 PPT 파일에는 반영되지 않았어요.</span>
+              </div>
+              <span style="margin-left:auto; font-size:13px; color:oklch(0.45 0.012 60);">남은 확인 항목 3건</span>
+              <button style="display:inline-flex; align-items:center; gap:7px; height:38px; padding:0 18px; border-radius:8px; border:none; background:oklch(0.55 0.15 270); color:#fff; font-family:inherit; font-size:14px; font-weight:600;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+                수정 반영해서 PPT 저장
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="width:1280px; box-sizing:border-box; display:flex; flex-wrap:wrap; gap:10px; padding:14px 16px; background:#fff; border:1px solid oklch(0.88 0.01 80); border-radius:12px;">
+        <div style="font-size:13px; font-weight:600; width:100%;">바뀐 점</div>
+        <div style="flex:1; min-width:180px; font-size:13px; line-height:1.55; color:oklch(0.45 0.012 60);">헤더의 용어집 폼 → <b style="color:oklch(0.205 0.015 60);">‘용어집’ 버튼</b>으로 접고, 그 자리에 <b style="color:oklch(0.205 0.015 60);">처리 진행률</b></div>
+        <div style="flex:1; min-width:180px; font-size:13px; line-height:1.55; color:oklch(0.45 0.012 60);">문제 있는 항목이 <b style="color:oklch(0.205 0.015 60);">맨 위로</b>, 나머지는 접힌 대조 표로</div>
+        <div style="flex:1; min-width:180px; font-size:13px; line-height:1.55; color:oklch(0.45 0.012 60);">액션은 <b style="color:oklch(0.205 0.015 60);">항상 표시</b>. 문제마다 <b style="color:oklch(0.205 0.015 60);">‘제안대로 바꾸기’</b> 한 번으로 끝</div>
+        <div style="flex:1; min-width:180px; font-size:13px; line-height:1.55; color:oklch(0.45 0.012 60);">비교 모달 삭제 → <b style="color:oklch(0.205 0.015 60);">카드 안에서 이전/이후</b>를 바로 확인</div>
+        <div style="flex:1; min-width:180px; font-size:13px; line-height:1.55; color:oklch(0.45 0.012 60);">r0→r3 대신 <b style="color:oklch(0.205 0.015 60);">“아직 PPT에 반영되지 않았어요”</b> 평문 안내</div>
+      </div>
+    </div>
+
+    <!-- ══════════════════ 1c 과감안 ══════════════════ -->
+    <div id="1c" style="display:flex; flex-direction:column; gap:14px;">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <span style="display:inline-flex; align-items:center; justify-content:center; height:24px; padding:0 10px; border-radius:999px; background:oklch(0.55 0.15 270); color:#fff; font-size:12px; font-weight:600;">1c</span>
+        <span style="font-size:15px; font-weight:600; color:oklch(0.205 0.015 60);">과감안 — 한 건씩 처리하는 검토 큐</span>
+        <span style="font-size:13px; color:#8a8781;">“다음 →”만 누르면 끝나는 흐름</span>
+      </div>
+
+      <div style="width:1280px; height:860px; overflow:hidden; display:flex; flex-direction:column; background:oklch(0.985 0.005 80); color:oklch(0.205 0.015 60); border:1px solid oklch(0.88 0.01 80); box-shadow:0 18px 48px rgba(0,0,0,0.14);">
+
+        <!-- step header -->
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; padding:12px 20px; border-bottom:1px solid oklch(0.88 0.01 80); background:oklch(0.995 0.003 80);">
+          <div style="display:flex; align-items:center; gap:10px;">
+            <div style="display:flex; align-items:center; gap:7px; font-size:13px; color:oklch(0.45 0.012 60);">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="oklch(0.723 0.191 142.5)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>
+              번역
+            </div>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="oklch(0.88 0.01 80)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+            <div style="display:flex; align-items:center; gap:7px; font-size:13px; font-weight:700; color:oklch(0.55 0.15 270);">
+              <span style="width:18px; height:18px; border-radius:999px; background:oklch(0.55 0.15 270); color:#fff; font-size:11px; display:inline-flex; align-items:center; justify-content:center;">2</span>
+              검토
+            </div>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="oklch(0.88 0.01 80)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+            <div style="display:flex; align-items:center; gap:7px; font-size:13px; color:oklch(0.45 0.012 60 / 70%);">
+              <span style="width:18px; height:18px; border-radius:999px; border:1.5px solid oklch(0.88 0.01 80); font-size:11px; display:inline-flex; align-items:center; justify-content:center;">3</span>
+              저장
+            </div>
+          </div>
+          <div style="display:flex; align-items:center; gap:12px;">
+            <span style="font-size:13px; color:oklch(0.45 0.012 60);">2026_상반기_라이브서비스_EN.pptx</span>
+            <button style="display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 12px; border-radius:6px; border:1px solid oklch(0.88 0.01 80); background:oklch(0.985 0.005 80); font-family:inherit; font-size:13px; font-weight:500; color:inherit;">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5 5.5 5.5 0 0 1-5.5 5.5H11"/></svg>
+              되돌리기
+            </button>
+            <button style="display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:6px; border:none; background:transparent; color:inherit;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div style="display:flex; flex:1; min-height:0;">
+
+          <!-- left: 슬라이드 진행 레일 -->
+          <div style="width:230px; flex-shrink:0; border-right:1px solid oklch(0.88 0.01 80); display:flex; flex-direction:column; background:oklch(0.995 0.003 80);">
+            <div style="padding:16px 16px 12px; border-bottom:1px solid oklch(0.88 0.01 80);">
+              <div style="font-size:12px; font-weight:600; color:oklch(0.45 0.012 60); margin-bottom:8px;">검토 진행</div>
+              <div style="display:flex; align-items:baseline; gap:6px;">
+                <span style="font-size:30px; font-weight:700; letter-spacing:-0.03em; line-height:1;">3</span>
+                <span style="font-size:15px; color:oklch(0.45 0.012 60);">/ 12건</span>
+              </div>
+              <div style="margin-top:10px; height:6px; border-radius:999px; background:oklch(0.94 0.008 80); overflow:hidden;">
+                <div style="width:25%; height:100%; background:oklch(0.55 0.15 270);"></div>
+              </div>
+              <div style="margin-top:8px; font-size:12px; color:oklch(0.45 0.012 60);">약 4분 남음</div>
+            </div>
+            <div style="flex:1; overflow-y:auto; padding:10px 10px 14px; display:flex; flex-direction:column; gap:2px;">
+              <div style="font-size:11px; font-weight:600; color:oklch(0.45 0.012 60); padding:4px 8px 6px;">슬라이드별 남은 항목</div>
+              <div style="display:flex; align-items:center; gap:9px; padding:8px 10px; border-radius:8px;">
+                <span style="width:20px; font-size:12px; font-weight:700; color:oklch(0.45 0.012 60);">2</span>
+                <span style="flex:1; font-size:13px; color:oklch(0.45 0.012 60); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">목차</span>
+                <span style="width:20px; height:20px; border-radius:999px; background:oklch(0.94 0.008 80); font-size:11px; font-weight:700; color:oklch(0.45 0.012 60); display:inline-flex; align-items:center; justify-content:center;">1</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:9px; padding:8px 10px; border-radius:8px; background:oklch(0.55 0.15 270 / 12%);">
+                <span style="width:20px; font-size:12px; font-weight:700; color:oklch(0.55 0.15 270);">4</span>
+                <span style="flex:1; font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">라이브 서비스 성과</span>
+                <span style="width:20px; height:20px; border-radius:999px; background:oklch(0.55 0.15 270); color:#fff; font-size:11px; font-weight:700; display:inline-flex; align-items:center; justify-content:center;">4</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:9px; padding:8px 10px; border-radius:8px;">
+                <span style="width:20px; font-size:12px; font-weight:700; color:oklch(0.45 0.012 60);">5</span>
+                <span style="flex:1; font-size:13px; color:oklch(0.45 0.012 60); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">지역별 매출</span>
+                <span style="width:20px; height:20px; border-radius:999px; background:oklch(0.94 0.008 80); font-size:11px; font-weight:700; color:oklch(0.45 0.012 60); display:inline-flex; align-items:center; justify-content:center;">3</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:9px; padding:8px 10px; border-radius:8px;">
+                <span style="width:20px; font-size:12px; font-weight:700; color:oklch(0.45 0.012 60);">8</span>
+                <span style="flex:1; font-size:13px; color:oklch(0.45 0.012 60); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">하반기 로드맵</span>
+                <span style="width:20px; height:20px; border-radius:999px; background:oklch(0.94 0.008 80); font-size:11px; font-weight:700; color:oklch(0.45 0.012 60); display:inline-flex; align-items:center; justify-content:center;">1</span>
+              </div>
+              <div style="height:1px; background:oklch(0.88 0.01 80); margin:10px 8px;"></div>
+              <div style="display:flex; align-items:center; gap:8px; padding:6px 10px; font-size:12px; color:oklch(0.45 0.012 60);">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="oklch(0.723 0.191 142.5)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+                확인 끝난 슬라이드 4개
+              </div>
+              <div style="padding:6px 10px;">
+                <span style="font-size:12px; color:oklch(0.55 0.15 270); font-weight:500;">전체 37개 문구 보기</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- center: 현재 처리 중인 한 건 -->
+          <div style="flex:1; min-width:0; display:flex; flex-direction:column;">
+
+            <div style="display:flex; align-items:center; gap:10px; padding:14px 28px 0;">
+              <span style="font-size:12px; font-weight:700; color:oklch(0.52 0.22 27); background:oklch(0.577 0.245 27.325 / 10%); border-radius:999px; padding:5px 11px;">용어집과 다름</span>
+              <span style="font-size:13px; color:oklch(0.45 0.012 60);">슬라이드 4 · 제목 텍스트 · 덱 안 2곳에 반복</span>
+              <div style="margin-left:auto; display:flex; align-items:center; gap:6px;">
+                <button style="display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; border-radius:6px; border:1px solid oklch(0.88 0.01 80); background:oklch(0.995 0.003 80); color:oklch(0.45 0.012 60);">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+                </button>
+                <span style="font-size:13px; color:oklch(0.45 0.012 60); min-width:64px; text-align:center;">4번째 / 12</span>
+                <button style="display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; border-radius:6px; border:1px solid oklch(0.88 0.01 80); background:oklch(0.995 0.003 80); color:oklch(0.45 0.012 60);">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+                </button>
+              </div>
+            </div>
+
+            <div style="flex:1; overflow-y:auto; padding:18px 28px 20px;">
+
+              <div style="font-size:13px; line-height:1.6; color:oklch(0.45 0.012 60); margin-bottom:18px;">
+                용어집에 <b style="color:oklch(0.205 0.015 60);">배틀 패스 → Battle Pass</b>로 등록되어 있는데, 번역에는 <b style="color:oklch(0.205 0.015 60);">Combat Pass</b>가 쓰였습니다.
+              </div>
+
+              <div style="display:flex; flex-direction:column; gap:14px;">
+                <div>
+                  <div style="font-size:11px; font-weight:600; letter-spacing:0.04em; color:oklch(0.45 0.012 60); margin-bottom:7px;">원문</div>
+                  <div style="font-size:22px; line-height:1.45; letter-spacing:-0.01em; color:oklch(0.205 0.015 60 / 62%);">배틀 패스 도입률</div>
+                </div>
+
+                <div>
+                  <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:7px;">
+                    <div style="font-size:11px; font-weight:600; letter-spacing:0.04em; color:oklch(0.45 0.012 60);">현재 번역</div>
+                    <div style="display:flex; align-items:center; gap:8px; font-size:12px; color:oklch(0.45 0.012 60);">
+                      <span>25자 / 박스 권장 28자</span>
+                      <div style="width:80px; height:4px; border-radius:999px; background:oklch(0.94 0.008 80); overflow:hidden;"><div style="width:89%; height:100%; background:oklch(0.723 0.191 142.5);"></div></div>
+                    </div>
+                  </div>
+                  <div style="font-size:22px; line-height:1.45; letter-spacing:-0.01em;"><span style="background:oklch(0.577 0.245 27.325 / 13%); border-radius:4px; padding:1px 4px;">Combat Pass</span> adoption rate</div>
+                </div>
+
+                <div style="border:1px solid oklch(0.55 0.15 270 / 40%); background:oklch(0.55 0.15 270 / 6%); border-radius:12px; padding:14px 16px;">
+                  <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+                    <div style="font-size:11px; font-weight:700; letter-spacing:0.04em; color:oklch(0.55 0.15 270);">추천 수정</div>
+                    <span style="font-size:11px; color:oklch(0.45 0.012 60);">용어집 기준</span>
+                  </div>
+                  <div style="font-size:22px; line-height:1.45; letter-spacing:-0.01em; margin-bottom:14px;"><span style="background:oklch(0.723 0.191 142.5 / 16%); border-radius:4px; padding:1px 4px;">Battle Pass</span> adoption rate</div>
+                  <div style="display:flex; align-items:center; gap:10px;">
+                    <button style="display:inline-flex; align-items:center; gap:7px; height:38px; padding:0 18px; border-radius:8px; border:none; background:oklch(0.55 0.15 270); color:#fff; font-family:inherit; font-size:14px; font-weight:600;">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+                      적용하고 다음
+                    </button>
+                    <span style="font-size:12px; color:oklch(0.45 0.012 60);">반복되는 2곳도 함께 바뀝니다 ·  <b style="font-family:'Geist Mono',monospace; font-size:11px; background:oklch(0.94 0.008 80); border-radius:4px; padding:2px 5px;">⏎</b></span>
+                  </div>
+                </div>
+
+                <div style="display:flex; align-items:center; gap:8px; padding-top:2px;">
+                  <button style="display:inline-flex; align-items:center; gap:6px; height:34px; padding:0 13px; border-radius:8px; border:1px solid oklch(0.88 0.01 80); background:oklch(0.995 0.003 80); font-family:inherit; font-size:13px; font-weight:500; color:inherit;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/></svg>
+                    직접 고치기
+                  </button>
+                  <button style="display:inline-flex; align-items:center; gap:6px; height:34px; padding:0 13px; border-radius:8px; border:1px solid oklch(0.88 0.01 80); background:oklch(0.995 0.003 80); font-family:inherit; font-size:13px; font-weight:500; color:inherit;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>
+                    AI에게 다시 맡기기
+                  </button>
+                  <button style="display:inline-flex; align-items:center; gap:6px; height:34px; padding:0 13px; border-radius:8px; border:none; background:transparent; font-family:inherit; font-size:13px; font-weight:500; color:oklch(0.45 0.012 60);">
+                    이대로 두기
+                    <b style="font-family:'Geist Mono',monospace; font-size:11px; background:oklch(0.94 0.008 80); border-radius:4px; padding:2px 5px; font-weight:500;">S</b>
+                  </button>
+                </div>
+              </div>
+
+              <div style="height:1px; background:oklch(0.88 0.01 80); margin:22px 0 16px;"></div>
+
+              <div style="font-size:12px; font-weight:600; color:oklch(0.45 0.012 60); margin-bottom:9px;">같은 슬라이드의 다른 문구</div>
+              <div style="display:flex; flex-direction:column; gap:1px; border:1px solid oklch(0.88 0.01 80); border-radius:10px; overflow:hidden; background:oklch(0.88 0.01 80);">
+                <div style="display:grid; grid-template-columns:1fr 1fr; background:oklch(0.995 0.003 80);">
+                  <div style="padding:9px 13px; font-size:13px; color:oklch(0.205 0.015 60 / 65%);">라이브 서비스 리뷰</div>
+                  <div style="padding:9px 13px; font-size:13px;">Live Service Review</div>
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; background:oklch(0.995 0.003 80);">
+                  <div style="padding:9px 13px; font-size:13px; color:oklch(0.205 0.015 60 / 65%);">월간 활성 이용자(MAU)</div>
+                  <div style="padding:9px 13px; font-size:13px;">Monthly Active Users (MAU)</div>
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; background:oklch(0.995 0.003 80);">
+                  <div style="padding:9px 13px; font-size:13px; color:oklch(0.205 0.015 60 / 65%);">전년 대비 +18%</div>
+                  <div style="padding:9px 13px; font-size:13px; display:flex; align-items:center; gap:8px;">+18% YoY<span style="font-size:11px; font-weight:600; color:oklch(0.723 0.191 142.5);">방금 수정함</span></div>
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; background:oklch(0.995 0.003 80);">
+                  <div style="padding:9px 13px; font-size:13px; color:oklch(0.205 0.015 60 / 65%); line-height:1.5;">신규 시즌 패스 도입 이후 재방문율이 크게 개선되었으며…</div>
+                  <div style="padding:9px 13px; font-size:13px; line-height:1.5;">Since the new season pass launched, return rates have improved markedly…</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 하단 마무리 바 -->
+            <div style="display:flex; align-items:center; gap:14px; padding:12px 28px; border-top:1px solid oklch(0.88 0.01 80); background:oklch(0.995 0.003 80);">
+              <span style="font-size:13px; color:oklch(0.45 0.012 60);">남은 9건은 <b style="color:oklch(0.205 0.015 60);">지금 저장</b>해도 됩니다 — 파일을 다시 열어 이어서 검토할 수 있어요.</span>
+              <div style="margin-left:auto; display:flex; align-items:center; gap:10px;">
+                <button style="height:38px; padding:0 16px; border-radius:8px; border:1px solid oklch(0.88 0.01 80); background:oklch(0.995 0.003 80); font-family:inherit; font-size:14px; font-weight:500; color:inherit;">남은 항목 모두 넘기기</button>
+                <button style="display:inline-flex; align-items:center; gap:7px; height:38px; padding:0 18px; border-radius:8px; border:none; background:oklch(0.55 0.15 270); color:#fff; font-family:inherit; font-size:14px; font-weight:600;">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+                  PPT 저장
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- right: 용어집/컨텍스트 -->
+          <div style="width:264px; flex-shrink:0; border-left:1px solid oklch(0.88 0.01 80); background:oklch(0.995 0.003 80); display:flex; flex-direction:column;">
+            <div style="padding:16px 16px 14px; border-bottom:1px solid oklch(0.88 0.01 80);">
+              <div style="font-size:13px; font-weight:700; margin-bottom:4px;">이 덱의 용어집</div>
+              <div style="font-size:12px; color:oklch(0.45 0.012 60); line-height:1.5;">게임 공통 용어집 · 42개</div>
+            </div>
+            <div style="flex:1; overflow-y:auto; padding:12px 16px; display:flex; flex-direction:column; gap:9px;">
+              <div style="display:flex; flex-direction:column; gap:2px; padding-bottom:9px; border-bottom:1px solid oklch(0.88 0.01 80 / 70%);">
+                <div style="font-size:13px; font-weight:600;">배틀 패스</div>
+                <div style="font-size:13px; color:oklch(0.45 0.012 60);">Battle Pass</div>
+              </div>
+              <div style="display:flex; flex-direction:column; gap:2px; padding-bottom:9px; border-bottom:1px solid oklch(0.88 0.01 80 / 70%);">
+                <div style="font-size:13px; font-weight:600;">잔존율</div>
+                <div style="font-size:13px; color:oklch(0.45 0.012 60);">Retention rate</div>
+              </div>
+              <div style="display:flex; flex-direction:column; gap:2px; padding-bottom:9px; border-bottom:1px solid oklch(0.88 0.01 80 / 70%);">
+                <div style="font-size:13px; font-weight:600;">시즌 패스</div>
+                <div style="font-size:13px; color:oklch(0.45 0.012 60);">Season Pass</div>
+              </div>
+              <div style="display:flex; flex-direction:column; gap:2px;">
+                <div style="font-size:13px; font-weight:600;">라이브 서비스</div>
+                <div style="font-size:13px; color:oklch(0.45 0.012 60);">Live service</div>
+              </div>
+            </div>
+            <div style="padding:12px 16px 16px; border-top:1px solid oklch(0.88 0.01 80);">
+              <div style="font-size:12px; font-weight:600; color:oklch(0.45 0.012 60); margin-bottom:8px;">고른 문구를 용어집에 추가</div>
+              <div style="display:flex; flex-direction:column; gap:6px;">
+                <input placeholder="원문" style="height:32px; box-sizing:border-box; border-radius:6px; border:1px solid oklch(0.88 0.01 80); background:oklch(0.985 0.005 80); padding:0 10px; font-family:inherit; font-size:13px;">
+                <input placeholder="번역" style="height:32px; box-sizing:border-box; border-radius:6px; border:1px solid oklch(0.88 0.01 80); background:oklch(0.985 0.005 80); padding:0 10px; font-family:inherit; font-size:13px;">
+                <button style="height:32px; border-radius:6px; border:1px solid oklch(0.88 0.01 80); background:oklch(0.985 0.005 80); font-family:inherit; font-size:13px; font-weight:500; color:inherit;">추가</button>
+              </div>
+              <p style="margin:8px 0 0; font-size:11px; line-height:1.5; color:oklch(0.45 0.012 60);">다음 번역부터 자동 적용됩니다.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="width:1280px; box-sizing:border-box; display:flex; flex-wrap:wrap; gap:10px; padding:14px 16px; background:#fff; border:1px solid oklch(0.88 0.01 80); border-radius:12px;">
+        <div style="font-size:13px; font-weight:600; width:100%;">바뀐 점</div>
+        <div style="flex:1; min-width:180px; font-size:13px; line-height:1.55; color:oklch(0.45 0.012 60);">37개를 훑는 대신 <b style="color:oklch(0.205 0.015 60);">확인이 필요한 12건만 큐로</b> — 끝나면 화면이 “끝났습니다”로 바뀜</div>
+        <div style="flex:1; min-width:180px; font-size:13px; line-height:1.55; color:oklch(0.45 0.012 60);">한 건마다 <b style="color:oklch(0.205 0.015 60);">원문 / 현재 / 추천</b> 세 줄만 크게 — 처음 쓰는 사람도 판단 가능</div>
+        <div style="flex:1; min-width:180px; font-size:13px; line-height:1.55; color:oklch(0.45 0.012 60);"><b style="color:oklch(0.205 0.015 60);">⏎ 적용하고 다음 / S 넘기기</b> — 대형 덱을 손 안 떼고 처리</div>
+        <div style="flex:1; min-width:180px; font-size:13px; line-height:1.55; color:oklch(0.45 0.012 60);">상단 <b style="color:oklch(0.205 0.015 60);">번역 → 검토 → 저장</b> 단계 표시로 “지금 어디쯤인지”가 항상 보임</div>
+        <div style="flex:1; min-width:180px; font-size:13px; line-height:1.55; color:oklch(0.45 0.012 60);">우측 용어집 상시 노출 — 헤더 폼이 사라지고 <b style="color:oklch(0.205 0.015 60);">맥락 있는 자리</b>로 이동</div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+</x-dc>
+</body>
+</html>
