@@ -426,6 +426,8 @@ export type QueueAction =
   | { type: "move"; delta: number }
   | { type: "focus"; key: string }
   | { type: "resolve"; entry: ReviewLogEntry }
+  /** Take back an optimistic `resolve` whose server call then failed. */
+  | { type: "rollback"; entry: ReviewLogEntry }
   | { type: "undo" }
   | { type: "editor"; editor: EditorMode }
   | { type: "mode"; mode: ReviewMode };
@@ -487,6 +489,22 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
           focused && action.entry.keys.includes(focused)
             ? nextUnresolved(state.order, resolved, state.cursor)
             : state.cursor,
+        editor: "none",
+      };
+    }
+    case "rollback": {
+      // Identity, not position: the cursor moved on optimistically, so a later
+      // action may already sit on top of the one that failed.
+      const log = state.log.filter((item) => item !== action.entry);
+      if (log.length === state.log.length) return state;
+      const resolved = { ...state.resolved };
+      for (const key of action.entry.keys) delete resolved[key];
+      const at = state.order.indexOf(action.entry.keys[0]);
+      return {
+        ...state,
+        log,
+        resolved,
+        cursor: at >= 0 ? at : state.cursor,
         editor: "none",
       };
     }

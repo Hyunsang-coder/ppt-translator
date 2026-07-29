@@ -2,14 +2,17 @@
 
 import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { apiClient } from "@/lib/api-client";
+import { ApiError, apiClient } from "@/lib/api-client";
 import { FinishBar } from "@/components/translation/review/FinishBar";
 import { GlossaryPane } from "@/components/translation/review/GlossaryPane";
 import { QueueItem } from "@/components/translation/review/QueueItem";
 import { SlideRail, type SlideProgress } from "@/components/translation/review/SlideRail";
 import { StepHeader } from "@/components/translation/review/StepHeader";
 import { StyledText } from "@/components/translation/review/StyledText";
-import { styleStatusLabel } from "@/components/translation/review/finding-labels";
+import {
+  stylePreviewNote,
+  styleStatusLabel,
+} from "@/components/translation/review/finding-labels";
 import {
   blockFindings,
   buildQueue,
@@ -18,7 +21,9 @@ import {
   primaryFinding,
   queueReducer,
   remainingCount,
+  suggestFix,
   type EditorMode,
+  type ReviewLogEntry,
 } from "@/lib/review-queue";
 import type {
   FragmentItem,
@@ -115,6 +120,10 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
   const total = queueState.order.length;
   const remaining = remainingCount(queueState);
   const undoable = lastAction(queueState) !== null;
+  const suggestion = useMemo(
+    () => (subject && currentFinding ? suggestFix(subject.target, currentFinding.finding) : null),
+    [subject, currentFinding]
+  );
 
   const slides = useMemo<SlideProgress[]>(() => {
     const bySlide = new Map<number, SlideProgress>();
@@ -175,6 +184,53 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
       toast.error("처리에 실패했습니다.");
     } finally {
       setBusy(false);
+    }
+  };
+
+  /**
+   * propose → apply with no comparison modal in between. A 409 means another
+   * change landed first; the proposal is bound to the revision it was made
+   * against and cannot be reused, so re-read and propose once more.
+   */
+  const proposeAndApply = async (index: number, target: string) => {
+    let expected = revision;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const proposed = await apiClient.proposeJobFragment(jobId, index, {
+        action: "edit",
+        target,
+        propagate_identical: propagate,
+      });
+      try {
+        return await apiClient.applyJobFragmentProposal(jobId, proposed.proposal_id, expected);
+      } catch (err) {
+        if (attempt > 0 || !(err instanceof ApiError) || err.status !== 409) throw err;
+        const fresh = await apiClient.getJobFragments(jobId);
+        setFragments(fresh.fragments);
+        setRevision(fresh.revision);
+        setDirty(fresh.dirty);
+        expected = fresh.revision;
+      }
+    }
+    throw new Error("apply conflicted twice");
+  };
+
+  const applySuggestion = async () => {
+    if (!current || !subject || !suggestion) return;
+    const entry: ReviewLogEntry = { kind: "edit", keys: [current.key], revision };
+    // 적용 1회에 서버가 스윕을 다시 돌아 큰 덱에서 1~2초가 걸린다. 커서는 응답을
+    // 기다리지 않고 넘기고, 실패하면 그 항목만 되돌린다.
+    dispatch({ type: "resolve", entry });
+    try {
+      const resp = await proposeAndApply(subject.index, suggestion.target);
+      setRevision(resp.revision);
+      setDirty(resp.dirty);
+      setPartialCandidates(resp.partial_candidates);
+      setSelectedPartial(new Set());
+      await refresh();
+    } catch {
+      dispatch({ type: "rollback", entry });
+      toast.error("추천 수정을 적용하지 못했습니다.");
+      await refresh();
     }
   };
 
@@ -359,6 +415,7 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
                 block={current}
                 finding={currentFinding}
                 subject={subject}
+                suggestion={suggestion}
                 position={queueState.cursor + 1}
                 total={total}
                 handled={current.key in queueState.resolved}
@@ -373,6 +430,7 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
                 onPrevious={() => dispatch({ type: "move", delta: -1 })}
                 onNext={() => dispatch({ type: "move", delta: 1 })}
                 onEditor={setEditor}
+                onApplySuggestion={applySuggestion}
                 onPreviewEdit={previewEdit}
                 onRetranslate={retranslate}
                 onSkip={skip}
@@ -419,7 +477,9 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
               </div>
               <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
                 <p className="mb-1 text-[11px] font-bold text-muted-foreground">
-                  수정 후보 · 색상 미리보기
+                  수정 후보
+                  {stylePreviewNote(proposal.style_status) &&
+                    ` · ${stylePreviewNote(proposal.style_status)}`}
                 </p>
                 <StyledText segments={proposal.style_segments} fallback={proposal.target} />
               </div>

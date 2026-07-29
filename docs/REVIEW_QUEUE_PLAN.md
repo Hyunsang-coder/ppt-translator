@@ -288,7 +288,7 @@ python3 scripts/analyze_fragments.py <덱.pptx> --notes --list-blocks
 |---|---|
 | 0 ✅ | 순수 헬퍼(`lib/review-queue.ts`: **병합 규칙** + 큐 정렬 + 제안문) + **큐 리듀서** + vitest, `StyledText` 모듈 분리 (동작 무변경) |
 | 1 ✅ | 3분할 셸 + StepHeader + SlideRail + **블록 큐** + 페이저 + `이대로 두기` + `refresh()` 분리 |
-| 2 | 추천 수정 원클릭 (propose→apply, 409 재-propose, **낙관적 커서 전진**) + 서식 미리보기 라벨 정정 |
+| 2 ✅ | 추천 수정 원클릭 (propose→apply, 409 재-propose, **낙관적 커서 전진**) + 서식 미리보기 라벨 정정 |
 | 3 | 직접 고치기 / AI 재번역 인플레이스 (블록 일괄 적용 API, 다문단은 게이지 1개) |
 | 4 | `partial_candidates` 큐 카드 (플로팅 시트 제거) |
 | 5 | FinishBar + 완료 화면 + `PPT 저장` + `남은 항목 모두 넘기기`(벌크) |
@@ -314,6 +314,16 @@ Phase 1에서 **의도적으로 계획을 벗어난 것** (기능 공백을 만�
 - SlideRail의 `전체 N개 문구 보기`는 Phase 7(전체 목록 모드)과 함께 넣는다
 - **버그 수정**: `style.mapping_dropped`는 무시 필터 뒤에서 다시 붙어 `이대로 두기`가 먹지 않았다
   (`review_session.fragments()`). Phase 1이 그 버튼을 만드는 단계라 함께 고치고 테스트를 추가했다
+
+**Phase 2 검증**: `npx tsc --noEmit` 통과 · `npm test` 38 passed · `npm run build` 성공.
+낙관적 전진의 실패 복구는 `queueReducer`의 `rollback`이 맡는다 — 커서가 이미 넘어간 뒤라
+스택 맨 위가 아닐 수 있어 **위치가 아니라 액션 식별자로** 찾아서 뺀다.
+
+Phase 2에서 **넣지 않은 것**:
+- 현재 번역에서 문제 구간을 `bg-destructive`로 하이라이트: 번역문은 `StyledText`의 색상
+  세그먼트로 쪼개져 렌더되므로 하이라이트 범위를 겹치려면 세그먼트를 잘라 재조립해야 한다.
+  추천 카드가 바뀌는 부분을 보여주므로 비용 대비 이득이 없다
+- `⏎` 키 힌트 칩: 단축키는 Phase 8. 동작하지 않는 키를 광고하지 않는다
 
 **서식 미리보기 라벨** (Phase 2에서 정정, 실사용 피드백): `색상 미리보기`라는 고정 라벨이
 색이 없는 문단에서 "색이 안 나온다"로 읽힌다. 실제로는 `style_status`에 따라 보여주는 것이 다르다 —

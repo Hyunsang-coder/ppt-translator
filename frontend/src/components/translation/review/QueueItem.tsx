@@ -3,8 +3,11 @@
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { StyledText } from "@/components/translation/review/StyledText";
-import { findingBadge } from "@/components/translation/review/finding-labels";
-import type { BlockFinding, EditorMode, ReviewBlock } from "@/lib/review-queue";
+import {
+  findingBadge,
+  stylePreviewNote,
+} from "@/components/translation/review/finding-labels";
+import type { BlockFinding, EditorMode, FixSuggestion, ReviewBlock } from "@/lib/review-queue";
 import type { FragmentItem } from "@/types/api";
 import {
   Ban,
@@ -21,6 +24,8 @@ interface QueueItemProps {
   /** The finding this card speaks about, and the fragment carrying it. */
   finding: BlockFinding | null;
   subject: FragmentItem;
+  /** Ready-made replacement, when the wrong wording could be located. */
+  suggestion: FixSuggestion | null;
   position: number;
   total: number;
   handled: boolean;
@@ -35,6 +40,7 @@ interface QueueItemProps {
   onPrevious: () => void;
   onNext: () => void;
   onEditor: (mode: EditorMode) => void;
+  onApplySuggestion: () => void;
   onPreviewEdit: () => void;
   onRetranslate: () => void;
   onSkip: () => void;
@@ -73,6 +79,7 @@ export function QueueItem({
   block,
   finding,
   subject,
+  suggestion,
   position,
   total,
   handled,
@@ -87,6 +94,7 @@ export function QueueItem({
   onPrevious,
   onNext,
   onEditor,
+  onApplySuggestion,
   onPreviewEdit,
   onRetranslate,
   onSkip,
@@ -95,6 +103,10 @@ export function QueueItem({
   const longest = Math.max(...block.items.map((item) => item.target.length));
   const textClass = bodyTextClass("x".repeat(longest), subject.is_note);
   const noteClamp = subject.is_note ? "max-h-40 overflow-y-auto" : "";
+  const styleNote = stylePreviewNote(subject.style_status);
+  // Without a located replacement there is nothing to one-click, so the
+  // re-translation becomes the obvious move instead of a secondary one.
+  const promoteAi = !suggestion && !handled;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -158,9 +170,12 @@ export function QueueItem({
           ))}
         </div>
 
-        <div className="mb-[7px] flex items-center justify-between gap-3">
+        <div className="mb-[7px] flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
           <p className="text-[11px] font-semibold tracking-[0.04em] text-muted-foreground">
             현재 번역
+            {styleNote && (
+              <span className="ml-2 font-normal tracking-normal">· {styleNote}</span>
+            )}
           </p>
           <LengthGauge fragment={subject} />
         </div>
@@ -171,6 +186,43 @@ export function QueueItem({
             </p>
           ))}
         </div>
+
+        {suggestion && editor === "none" && !handled && (
+          <div className="mt-4 rounded-xl border border-primary/40 bg-primary/[0.06] px-4 py-3.5">
+            <p className="mb-2 flex items-baseline gap-2">
+              <span className="text-[11px] font-bold tracking-[0.04em] text-primary">
+                추천 수정
+              </span>
+              <span className="text-[11px] text-muted-foreground">{suggestion.basis}</span>
+            </p>
+            <p className={`mb-3.5 ${textClass} leading-[1.45] tracking-[-0.01em]`}>
+              {suggestion.target.slice(0, suggestion.span.start)}
+              <mark className="rounded bg-success/[0.16] px-1 text-foreground">
+                {suggestion.target.slice(suggestion.span.start, suggestion.span.end)}
+              </mark>
+              {suggestion.target.slice(suggestion.span.end)}
+            </p>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <Button
+                className="h-[38px] gap-2 px-[18px] text-sm font-semibold"
+                disabled={busy}
+                onClick={onApplySuggestion}
+              >
+                {busy ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Check className="size-4" />
+                )}
+                적용하고 다음
+              </Button>
+              {subject.repeat_count > 1 && (
+                <span className="text-xs text-muted-foreground">
+                  반복되는 {subject.repeat_count}곳도 함께 바뀝니다
+                </span>
+              )}
+            </div>
+          </div>
+        )}
 
         {editor === "manual" && (
           <div className="mt-4 rounded-xl border border-primary/40 bg-primary/[0.06] px-4 py-3.5">
@@ -263,9 +315,9 @@ export function QueueItem({
               직접 고치기
             </Button>
             <Button
-              variant="outline"
+              variant={promoteAi ? "default" : "outline"}
               size="sm"
-              className="h-[34px] gap-1.5"
+              className={promoteAi ? "h-[38px] gap-1.5 px-[18px] font-semibold" : "h-[34px] gap-1.5"}
               disabled={busy}
               onClick={() => onEditor("ai")}
             >

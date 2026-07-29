@@ -12,6 +12,7 @@ import {
   suggestFix,
   type QueueAction,
   type QueueState,
+  type ReviewLogEntry,
   type ReviewOutcome,
 } from "@/lib/review-queue";
 import type { FragmentFinding, FragmentItem } from "@/types/api";
@@ -316,6 +317,23 @@ describe("queueReducer", () => {
     expect(restored.resolved).toEqual({});
     expect(restored.log).toEqual([]);
     expect(focusedKey(restored)).toBe("a");
+  });
+
+  it("takes back a failed optimistic apply without disturbing later ones", () => {
+    // The cursor advances before the server answers, so by the time an apply
+    // fails the user may already have handled the next item.
+    const failed: ReviewLogEntry = { kind: "edit", keys: ["a"], revision: 3 };
+    const later: ReviewLogEntry = { kind: "dismiss", keys: ["b"], entries: [] };
+    const state = reduce(
+      synced,
+      { type: "resolve", entry: failed },
+      { type: "resolve", entry: later },
+      { type: "rollback", entry: failed }
+    );
+
+    expect(state.resolved).toEqual({ b: "skipped" });
+    expect(state.log).toEqual([later]);
+    expect(focusedKey(state)).toBe("a");
   });
 
   it("leaves the state alone when there is nothing to undo", () => {

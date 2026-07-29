@@ -25,6 +25,20 @@ export function findingBadge(finding: FragmentFinding): { cls: string; label: st
   }
 }
 
+/**
+ * What a style preview is actually showing. A fixed "색상 미리보기" label reads
+ * as broken on a paragraph that has no colour: the dropped case is not a colour
+ * preview at all, it is a warning that the original emphasis did not survive.
+ */
+export function stylePreviewNote(status: string): string | null {
+  switch (status) {
+    case "preserved": return "원문 색상 그대로";
+    case "partial": return "원문 색상 일부만 확인됨";
+    case "dropped": return "원문 강조를 잃고 첫 서식으로 통일됨";
+    default: return null;
+  }
+}
+
 export function styleStatusLabel(status: string): string {
   switch (status) {
     case "preserved": return "보존됨";
