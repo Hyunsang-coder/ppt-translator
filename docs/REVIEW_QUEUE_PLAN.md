@@ -287,8 +287,8 @@ python3 scripts/analyze_fragments.py <덱.pptx> --notes --list-blocks
 | Phase | 내용 |
 |---|---|
 | 0 ✅ | 순수 헬퍼(`lib/review-queue.ts`: **병합 규칙** + 큐 정렬 + 제안문) + **큐 리듀서** + vitest, `StyledText` 모듈 분리 (동작 무변경) |
-| 1 | 3분할 셸 + StepHeader + SlideRail + **블록 큐** + 페이저 + `이대로 두기` + `refresh()` 분리 |
-| 2 | 추천 수정 원클릭 (propose→apply, 409 재-propose, **낙관적 커서 전진**) |
+| 1 ✅ | 3분할 셸 + StepHeader + SlideRail + **블록 큐** + 페이저 + `이대로 두기` + `refresh()` 분리 |
+| 2 | 추천 수정 원클릭 (propose→apply, 409 재-propose, **낙관적 커서 전진**) + 서식 미리보기 라벨 정정 |
 | 3 | 직접 고치기 / AI 재번역 인플레이스 (블록 일괄 적용 API, 다문단은 게이지 1개) |
 | 4 | `partial_candidates` 큐 카드 (플로팅 시트 제거) |
 | 5 | FinishBar + 완료 화면 + `PPT 저장` + `남은 항목 모두 넘기기`(벌크) |
@@ -300,6 +300,26 @@ python3 scripts/analyze_fragments.py <덱.pptx> --notes --list-blocks
 `pytest tests/ -q` 343 passed. 병합 규칙은 Step 2 실측 반영본이며 `scripts/analyze_fragments.py`와
 동일하게 유지한다 (한쪽만 고치지 말 것). 큐 순서는 리듀서가 처음 본 순서로 **동결**한다
 (처리한 항목이 검출을 잃어도 자리를 지켜 `이전`이 성립).
+
+**Phase 1 검증**: `npx tsc --noEmit` 통과 · `npm test` 37 passed · `npm run build` 성공 ·
+`pytest tests/ -q` 344 passed. 신규 컴포넌트 `review/{StepHeader,SlideRail,QueueItem,GlossaryPane,
+FinishBar,finding-labels}`, `ReviewPanel`은 컨테이너로 축소, `.review-grid`/`.review-span-*` 삭제.
+
+Phase 1에서 **의도적으로 계획을 벗어난 것** (기능 공백을 만들지 않기 위해):
+- 편집(`직접 고치기` / `AI에게 다시 맡기기`)과 `partial_candidates` 시트를 **기존 propose→모달→apply
+  경로 그대로** 큐 카드 안으로 옮겼다. Phase 2·3·4가 각각 원클릭·인플레이스·큐 카드로 대체한다.
+  이대로 두지 않으면 Phase 3까지 검토 화면에서 번역을 고칠 수 없다
+- `FinishBar`(저장)와 `GlossaryPane`(빠른 추가 폼)을 최소 형태로 먼저 넣었다.
+  `남은 항목 모두 넘기기`는 Phase 5, 용어 목록·선택 자동 채움은 Phase 6
+- SlideRail의 `전체 N개 문구 보기`는 Phase 7(전체 목록 모드)과 함께 넣는다
+- **버그 수정**: `style.mapping_dropped`는 무시 필터 뒤에서 다시 붙어 `이대로 두기`가 먹지 않았다
+  (`review_session.fragments()`). Phase 1이 그 버튼을 만드는 단계라 함께 고치고 테스트를 추가했다
+
+**서식 미리보기 라벨** (Phase 2에서 정정, 실사용 피드백): `색상 미리보기`라는 고정 라벨이
+색이 없는 문단에서 "색이 안 나온다"로 읽힌다. 실제로는 `style_status`에 따라 보여주는 것이 다르다 —
+`preserved`/`partial`이면 원문 색이 그대로 보이지만, `dropped`는 **전체가 첫 서식 그룹으로 덮인
+결과**(예: 전부 굵게)를 보여준다. 라벨을 상태에 맞춰 갈라 쓴다. 미리보기 자체는 유지한다:
+색 강조를 쓰는 덱에서 번역 후 강조가 엉뚱한 단어에 붙었는지가 실제 검토 포인트다.
 
 **긴 문단 대응** (목업은 짧은 제목 조각 기준): `≤60자 22px / ≤160자 18px / 그 이상 15px`,
 노트는 항상 15px + `max-h` 클램프. **추천 카드가 항상 첫 화면 안에** 들어오는 것이 우선.

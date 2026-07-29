@@ -279,7 +279,12 @@ class ReviewSession:
             target = self.translated_texts[idx] if idx < len(self.translated_texts) else ""
             style_segments, style_status = self.style_preview(idx, target=target)
             findings = list(by_index.get(idx, []))
-            if style_status in {"dropped", "partial"}:
+            # This one is derived from the style preview rather than the sweep,
+            # so it never passed through the dismissal filter above.
+            style_dismissed = (
+                self._finding_key(idx, "style.mapping_dropped") in self.dismissed_findings
+            )
+            if style_status in {"dropped", "partial"} and not style_dismissed:
                 findings.append(
                     {
                         "type": "style.mapping_dropped",

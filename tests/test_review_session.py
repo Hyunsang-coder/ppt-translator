@@ -281,6 +281,23 @@ class DismissRestoreTestCase(unittest.TestCase):
         self.assertEqual(sess.revision, 0)
         self.assertFalse(sess.dirty)
 
+    def test_dismiss_hides_the_style_finding_too(self) -> None:
+        # This one is derived from the style preview instead of the sweep, so it
+        # bypasses the dismissal filter unless fragments() checks it directly.
+        sess = _multicolor_session()
+        sess.color_distributions = {}
+        self.assertEqual(
+            [f["type"] for f in sess.fragments()[0].findings], ["style.mapping_dropped"]
+        )
+
+        self.assertTrue(sess.dismiss_finding(0, "style.mapping_dropped"))
+        self.assertEqual(sess.fragments()[0].findings, [])
+
+        self.assertTrue(sess.restore_finding(0, "style.mapping_dropped"))
+        self.assertEqual(
+            [f["type"] for f in sess.fragments()[0].findings], ["style.mapping_dropped"]
+        )
+
     def test_dismissal_survives_a_resweep(self) -> None:
         sess = _session("저지력 증가", 1, targets=["Increased flinch"])
         sess.merge_glossary({"저지력": "Aim Punch"}, resweep=True)
