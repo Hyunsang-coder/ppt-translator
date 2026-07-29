@@ -40,6 +40,13 @@ NON_MERGING_KINDS = frozenset({"body", "notes"})
 MAX_MERGE_PARAGRAPHS = 4
 # If the previous line already ended the sentence, the next one is a new thought.
 SENTENCE_END = re.compile(r"[.!?。！？…:;]['\"”’)\]]*$")
+# A continuation starts mid-sentence, i.e. lowercase. Measured over four real
+# decks: without this, 370 of 377 merges were a heading with its description, a
+# label/value pair, or a bullet list inside a plain text box. Scripts without
+# letter case never merge — no genuine wrap was observed in them to calibrate a
+# replacement signal against — except a trailing comma, which breaks a clause in
+# any script (Korean decks close their list lines 개조식, on a noun or `~함`).
+ENDS_MID_CLAUSE = re.compile(r"[,،、]$")
 
 LENGTH_BUCKETS: Sequence[tuple[str, int]] = (
     ("1-5", 5),
@@ -77,7 +84,11 @@ def _merge_block(previous: ParagraphInfo, current: ParagraphInfo, size: int) -> 
         return "kind"
     if size >= MAX_MERGE_PARAGRAPHS:
         return "cap"
-    if SENTENCE_END.search((previous.original_text or "").strip()):
+    previous_text = (previous.original_text or "").strip()
+    head = (current.original_text or "").lstrip()[:1]
+    if not head.islower() and not ENDS_MID_CLAUSE.search(previous_text):
+        return "not_continuation"
+    if SENTENCE_END.search(previous_text):
         return "sentence_end"
     return ""
 
