@@ -35,7 +35,7 @@ export function SlideRail({
   const percent = total > 0 ? (resolved / total) * 100 : 0;
 
   return (
-    <nav className="flex w-[230px] shrink-0 flex-col border-r border-border bg-card">
+    <nav className="hidden w-[230px] shrink-0 flex-col border-r border-border bg-card md:flex">
       <div className="border-b border-border px-4 pb-3 pt-4">
         <p className="mb-2 text-xs font-semibold text-muted-foreground">검토 진행</p>
         <p className="flex items-baseline gap-1.5">

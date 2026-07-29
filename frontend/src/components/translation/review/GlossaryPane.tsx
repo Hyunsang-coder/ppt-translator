@@ -152,7 +152,9 @@ export function GlossaryPane({
   return (
     <aside
       ref={paneRef}
-      className="flex w-[264px] shrink-0 flex-col border-l border-border bg-card"
+      // The window opens at 1100 and can shrink to 800: below ~1024 the three
+      // columns leave the item too narrow to read, and the item is the point.
+      className="hidden w-[264px] shrink-0 flex-col border-l border-border bg-card lg:flex"
     >
       <div className="border-b border-border px-4 pb-3.5 pt-4">
         <p className="text-[13px] font-bold">이 덱의 용어집</p>
