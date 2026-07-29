@@ -96,6 +96,22 @@ export interface FragmentsResponse {
   revision: number;
   committed_revision: number;
   dirty: boolean;
+  /** Name the deck will be saved as, shown in the review header. */
+  output_filename: string | null;
+}
+
+/** One (fragment, finding type) pair to hide from — or return to — the queue. */
+export interface ReviewDismissalEntry {
+  index: number;
+  finding_type: string;
+}
+
+export interface ReviewDismissalResponse {
+  /** Only the entries this call actually changed, so undo can target them. */
+  changed: ReviewDismissalEntry[];
+  revision: number;
+  committed_revision: number;
+  dirty: boolean;
 }
 
 export interface PartialCandidate {

@@ -781,8 +781,29 @@ class ReviewSession:
         self.revision += 1
         return sorted(snapshot.texts)
 
-    def dismiss_finding(self, index: int, finding_type: str) -> None:
-        self.dismissed_findings.add(self._finding_key(index, finding_type))
+    def dismiss_finding(self, index: int, finding_type: str) -> bool:
+        """Hide a finding from the review screen.
+
+        Returns True when this call is what dismissed it, so callers can record
+        the dismissal once and offer a precise undo.
+        """
+        key = self._finding_key(index, finding_type)
+        if key in self.dismissed_findings:
+            return False
+        self.dismissed_findings.add(key)
+        return True
+
+    def restore_finding(self, index: int, finding_type: str) -> bool:
+        """Undo a dismissal so the finding reappears while the sweep still finds it.
+
+        The review queue dismisses with a single keystroke, so dismissals have to
+        be reversible. Returns True when a dismissal was actually removed.
+        """
+        key = self._finding_key(index, finding_type)
+        if key not in self.dismissed_findings:
+            return False
+        self.dismissed_findings.discard(key)
+        return True
 
     def replace_findings(self, findings: List[Finding]) -> None:
         self.findings = findings

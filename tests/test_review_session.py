@@ -117,6 +117,56 @@ class FragmentsTestCase(unittest.TestCase):
         self.assertEqual(violations[0].term_source, "저지력")
 
 
+class DismissRestoreTestCase(unittest.TestCase):
+    """The queue dismisses with one keystroke, so dismissals must be undoable."""
+
+    @staticmethod
+    def _flagged_session() -> ReviewSession:
+        finding = Finding(
+            type="terminology.violation", severity="major", description="x",
+            location={"slide": 1, "shape": 0, "paragraph": 0},
+            segment={"source": "s", "output": "o"}, ordinal=1,
+            fragment_index=0,
+        )
+        return _session("A", 1, findings=[finding])
+
+    def test_dismiss_hides_finding_and_restore_brings_it_back(self) -> None:
+        sess = self._flagged_session()
+        self.assertEqual(len(sess.fragments()[0].findings), 1)
+
+        self.assertTrue(sess.dismiss_finding(0, "terminology.violation"))
+        self.assertEqual(sess.fragments()[0].findings, [])
+
+        self.assertTrue(sess.restore_finding(0, "terminology.violation"))
+        self.assertEqual(len(sess.fragments()[0].findings), 1)
+
+    def test_repeat_calls_report_no_change(self) -> None:
+        sess = self._flagged_session()
+        self.assertTrue(sess.dismiss_finding(0, "terminology.violation"))
+        # Already dismissed / already restored: nothing for the client to undo.
+        self.assertFalse(sess.dismiss_finding(0, "terminology.violation"))
+        self.assertTrue(sess.restore_finding(0, "terminology.violation"))
+        self.assertFalse(sess.restore_finding(0, "terminology.violation"))
+
+    def test_dismissal_does_not_touch_draft_or_revision(self) -> None:
+        sess = self._flagged_session()
+        sess.dismiss_finding(0, "terminology.violation")
+        self.assertEqual(sess.revision, 0)
+        self.assertFalse(sess.dirty)
+
+    def test_dismissal_survives_a_resweep(self) -> None:
+        sess = _session("저지력 증가", 1, targets=["Increased flinch"])
+        sess.merge_glossary({"저지력": "Aim Punch"}, resweep=True)
+        self.assertEqual(len(sess.fragments()[0].findings), 1)
+
+        sess.dismiss_finding(0, "terminology.violation")
+        sess.run_final_sweep()
+        self.assertEqual(sess.fragments()[0].findings, [])
+
+        sess.restore_finding(0, "terminology.violation")
+        self.assertEqual(len(sess.fragments()[0].findings), 1)
+
+
 class EditPropagationTestCase(unittest.TestCase):
     def test_identical_indices(self) -> None:
         sess = _session("반복", 3)

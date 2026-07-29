@@ -280,6 +280,9 @@ class FragmentsResponse(BaseModel):
     revision: int = 0
     committed_revision: int = 0
     dirty: bool = False
+    # Name the deck will be saved as, so the review screen can show what the
+    # user is about to produce without having to download it first.
+    output_filename: Optional[str] = None
 
 
 class FragmentEditRequest(BaseModel):
@@ -350,6 +353,29 @@ class PartialApplyRequest(BaseModel):
 
 class ReviewRevisionRequest(BaseModel):
     expected_revision: int
+
+
+class ReviewDismissalEntry(BaseModel):
+    """One (fragment, finding type) pair to hide from — or return to — the queue."""
+
+    index: int
+    finding_type: str
+
+
+class ReviewDismissalRequest(BaseModel):
+    """Dismiss or restore several findings in one call."""
+
+    action: Literal["dismiss", "restore"] = "dismiss"
+    entries: List[ReviewDismissalEntry] = Field(..., min_length=1, max_length=2000)
+
+
+class ReviewDismissalResponse(BaseModel):
+    """Entries this call actually changed, so the client can undo exactly those."""
+
+    changed: List[ReviewDismissalEntry] = []
+    revision: int
+    committed_revision: int
+    dirty: bool
 
 
 class ReviewMutationResponse(BaseModel):
@@ -1175,6 +1201,7 @@ async def get_job_fragments(job_id: str) -> FragmentsResponse:
         revision=session.revision,
         committed_revision=session.committed_revision,
         dirty=session.dirty,
+        output_filename=job.output_filename,
     )
 
 
@@ -1463,6 +1490,70 @@ async def apply_review_partial_candidates(
         )
     return ReviewMutationResponse(
         changed_indices=changed,
+        revision=session.revision,
+        committed_revision=session.committed_revision,
+        dirty=session.dirty,
+    )
+
+
+@app.post(
+    "/api/v1/jobs/{job_id}/review/dismissals",
+    response_model=ReviewDismissalResponse,
+)
+async def update_review_dismissals(
+    job_id: str, body: ReviewDismissalRequest
+) -> ReviewDismissalResponse:
+    """Dismiss or restore findings in bulk.
+
+    The review queue dismisses with a single keystroke and can skip everything
+    that is left in one click, so dismissals must be reversible: ``restore`` is
+    what the screen's undo calls, and taking the whole batch in one request lets
+    the client undo it as a single step.
+
+    Deliberately does not take ``review_lock`` or an ``expected_revision``:
+    dismissals only add to / remove from a set, never touch the draft text or
+    the revision, and are commutative. Waiting on the lock would stall a
+    keystroke behind an in-flight re-translation for no benefit.
+    """
+    job = get_job_manager().get_job(job_id)
+    if job is None or job.review_session is None:
+        raise HTTPException(status_code=404, detail="Review session not found")
+    session = job.review_session
+    total = len(session.paragraphs)
+
+    changed: List[ReviewDismissalEntry] = []
+    for entry in body.entries:
+        if not (0 <= entry.index < total):
+            continue
+        mutate = (
+            session.dismiss_finding
+            if body.action == "dismiss"
+            else session.restore_finding
+        )
+        if mutate(entry.index, entry.finding_type):
+            changed.append(entry)
+
+    # Restores intentionally write no ledger row: the ledger is append-only, so
+    # a dismissal that was undone stays recorded as rejected.
+    if changed and body.action == "dismiss":
+        recorder = QualityRecorder(quality_dir=get_settings().quality_dir)
+        doc_ref = f"deck:{job.output_filename or 'deck.pptx'}"
+
+        def _record_all() -> None:
+            for item in changed:
+                _record_edit(
+                    recorder, session, item.index,
+                    session.paragraphs[item.index].original_text or "",
+                    session.translated_texts[item.index],
+                    corrected=None, disposition="rejected", doc_ref=doc_ref,
+                    finding_type=item.finding_type,
+                )
+
+        # One append per entry; keep the file writes off the event loop.
+        await asyncio.get_running_loop().run_in_executor(None, _record_all)
+
+    return ReviewDismissalResponse(
+        changed=changed,
         revision=session.revision,
         committed_revision=session.committed_revision,
         dirty=session.dirty,

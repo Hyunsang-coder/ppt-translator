@@ -222,6 +222,42 @@ class TestConcurrencyLimits:
         assert mgr.get_active_count() == 2
 
 
+class TestCleanupAgesFromLastActivity:
+    """A review session open for over an hour must not be reaped underneath it."""
+
+    def test_stale_job_is_removed(self, manager: JobManager):
+        job = manager.create_job(JobType.TRANSLATION)
+        job.state = JobState.COMPLETED
+        job.completed_at = time.time() - 7200
+
+        manager._cleanup_old_jobs()
+
+        assert job.id not in manager._jobs
+
+    def test_recent_access_keeps_an_old_job_alive(self, manager: JobManager):
+        """Every review request goes through get_job, which counts as activity."""
+        job = manager.create_job(JobType.TRANSLATION)
+        job.state = JobState.COMPLETED
+        job.completed_at = time.time() - 7200
+
+        assert manager.get_job(job.id) is job  # e.g. a fragment edit mid-review
+        manager._cleanup_old_jobs()
+
+        assert job.id in manager._jobs
+
+    def test_abandoned_job_is_removed_again(self, manager: JobManager):
+        """Activity only defers cleanup; it does not pin the job forever."""
+        job = manager.create_job(JobType.TRANSLATION)
+        job.state = JobState.COMPLETED
+        job.completed_at = time.time() - 7200
+        manager.get_job(job.id)
+        job.last_activity_at = time.time() - 7200  # review closed long ago
+
+        manager._cleanup_old_jobs()
+
+        assert job.id not in manager._jobs
+
+
 class TestCleanupReleasesResources:
     """Tests that cleanup properly releases resources."""
 

@@ -60,6 +60,10 @@ class Job:
     created_at: float = field(default_factory=time.time)
     started_at: Optional[float] = None
     completed_at: Optional[float] = None
+    # Last time anything looked this job up. ``_cleanup_old_jobs`` ages terminal
+    # jobs from here when set, so a review session that is still open is never
+    # reaped mid-review just because the translation finished an hour ago.
+    last_activity_at: Optional[float] = None
     progress: Optional[TranslationProgress] = None
     result: Optional[TranslationResult] = None
     output_file: Optional[io.BytesIO] = None
@@ -78,6 +82,10 @@ class Job:
     review_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
     _task: Optional[asyncio.Task] = field(default=None, repr=False)
     _state_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
+
+    def touch(self) -> None:
+        """Mark the job as recently used (see ``JobManager._cleanup_old_jobs``)."""
+        self.last_activity_at = time.time()
 
     def add_event(self, event_type: str, data: Dict[str, Any]) -> None:
         """Append an event to the job's history deque.
@@ -160,8 +168,17 @@ class JobManager:
         return self.create_job(job_type)
 
     def get_job(self, job_id: str) -> Optional[Job]:
-        """Get a job by ID."""
-        return self._jobs.get(job_id)
+        """Get a job by ID.
+
+        Looking a job up counts as activity. Every review request (fragments,
+        proposals, apply, undo, commit) goes through here, so ageing terminal
+        jobs from the last access is what keeps a long review session alive;
+        ``completed_at`` alone would drop the draft after an hour of editing.
+        """
+        job = self._jobs.get(job_id)
+        if job is not None:
+            job.touch()
+        return job
 
     async def delete_job(self, job_id: str) -> bool:
         """Cancel a job (keeps it in store for status queries; cleanup removes it later)."""
@@ -298,7 +315,8 @@ class JobManager:
         to_remove = []
         for job_id, job in self._jobs.items():
             if job.state in _TERMINAL_STATES:
-                if job.completed_at and (now - job.completed_at) > max_age:
+                last_used = job.last_activity_at or job.completed_at
+                if last_used and (now - last_used) > max_age:
                     to_remove.append(job_id)
 
         for job_id in to_remove:

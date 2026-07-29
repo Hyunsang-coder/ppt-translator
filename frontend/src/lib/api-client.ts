@@ -16,6 +16,8 @@ import type {
   JobStatusResponse,
   LanguageInfo,
   ModelInfo,
+  ReviewDismissalEntry,
+  ReviewDismissalResponse,
   ReviewMutationResponse,
   TranslationSettings,
 } from "@/types/api";
@@ -325,6 +327,26 @@ export const apiClient = {
       body: JSON.stringify(body),
     });
     return handleResponse<ReviewMutationResponse>(response);
+  },
+
+  /**
+   * Hide findings from the review queue, or bring dismissed ones back.
+   *
+   * Bulk in one call so "남은 항목 모두 넘기기" is a single undoable step.
+   * Returns only the entries that actually changed — feed those back with
+   * `action: "restore"` to undo.
+   */
+  async updateReviewDismissals(
+    jobId: string,
+    action: "dismiss" | "restore",
+    entries: ReviewDismissalEntry[]
+  ): Promise<ReviewDismissalResponse> {
+    const response = await fetch(await apiUrl(`/api/v1/jobs/${jobId}/review/dismissals`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, entries }),
+    });
+    return handleResponse<ReviewDismissalResponse>(response);
   },
 
   async undoReview(jobId: string, expectedRevision: number): Promise<ReviewMutationResponse> {
