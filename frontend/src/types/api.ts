@@ -87,12 +87,49 @@ export interface FragmentItem {
   edited: boolean;
   style_segments: StyleSegment[];
   style_status: "single_style" | "preserved" | "partial" | "dropped";
+  /**
+   * Text frame this paragraph lives in — unique per text box, table cell, and
+   * grouped child. Consecutive fragments sharing it are candidates to show as
+   * one review item (a sentence the author wrapped with hard returns).
+   */
+  container_id: string;
+  container_kind: ContainerKind;
 }
+
+/**
+ * What kind of text frame a fragment sits in. Several paragraphs in a `body`
+ * placeholder are a bullet list; several in a `textbox` are usually one
+ * wrapped sentence. Bullet markers are inherited from the layout and absent
+ * from the paragraph XML, so this is the signal that distinguishes them.
+ */
+export type ContainerKind =
+  | "title"
+  | "body"
+  | "textbox"
+  | "placeholder"
+  | "table_cell"
+  | "notes";
 
 export interface FragmentsResponse {
   job_id: string;
   total: number;
   fragments: FragmentItem[];
+  revision: number;
+  committed_revision: number;
+  dirty: boolean;
+  /** Name the deck will be saved as, shown in the review header. */
+  output_filename: string | null;
+}
+
+/** One (fragment, finding type) pair to hide from — or return to — the queue. */
+export interface ReviewDismissalEntry {
+  index: number;
+  finding_type: string;
+}
+
+export interface ReviewDismissalResponse {
+  /** Only the entries this call actually changed, so undo can target them. */
+  changed: ReviewDismissalEntry[];
   revision: number;
   committed_revision: number;
   dirty: boolean;

@@ -117,6 +117,200 @@ class FragmentsTestCase(unittest.TestCase):
         self.assertEqual(violations[0].term_source, "저지력")
 
 
+class ContainerIdentityTestCase(unittest.TestCase):
+    """(slide, shape, paragraph) is not unique; container_id has to be."""
+
+    @staticmethod
+    def _mixed_deck() -> io.BytesIO:
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[1])
+        slide.shapes.title.text = "제목"
+        body = slide.placeholders[1].text_frame
+        body.text = "첫 항목"
+        body.add_paragraph().text = "둘째 항목"
+
+        box = slide.shapes.add_textbox(Inches(1), Inches(4), Inches(6), Inches(1))
+        box.text_frame.text = "신규 시즌 패스 도입 이후"
+        box.text_frame.add_paragraph().text = "재방문율이 개선되었습니다."
+
+        table = slide.shapes.add_table(
+            2, 2, Inches(1), Inches(5.5), Inches(4), Inches(1)
+        ).table
+        for row in range(2):
+            for column in range(2):
+                table.cell(row, column).text = f"셀{row}{column}"
+
+        buffer = io.BytesIO()
+        prs.save(buffer)
+        buffer.seek(0)
+        return buffer
+
+    def test_table_cells_do_not_collide(self) -> None:
+        paragraphs, _ = PPTParser().extract_paragraphs(self._mixed_deck())
+        cells = [p for p in paragraphs if p.container_kind == "table_cell"]
+        self.assertEqual(len(cells), 4)
+        # Every cell shares the table's shape_index and restarts paragraph_index.
+        self.assertEqual(len({(c.shape_index, c.paragraph_index) for c in cells}), 1)
+        self.assertEqual(len({c.container_id for c in cells}), 4)
+
+    def test_every_paragraph_is_uniquely_addressable(self) -> None:
+        paragraphs, _ = PPTParser().extract_paragraphs(self._mixed_deck())
+        keys = {(p.container_id, p.paragraph_index) for p in paragraphs}
+        self.assertEqual(len(keys), len(paragraphs))
+
+    def test_bullet_list_and_wrapped_sentence_are_distinguishable(self) -> None:
+        """Bullet markers live in the layout, so the container kind is the signal."""
+        paragraphs, _ = PPTParser().extract_paragraphs(self._mixed_deck())
+        kinds = {p.original_text: p.container_kind for p in paragraphs}
+        self.assertEqual(kinds["제목"], "title")
+        self.assertEqual(kinds["첫 항목"], "body")
+        self.assertEqual(kinds["신규 시즌 패스 도입 이후"], "textbox")
+
+    def test_grouped_children_get_separate_containers(self) -> None:
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        group = slide.shapes.add_group_shape()
+        for offset in range(2):
+            child = group.shapes.add_textbox(
+                Inches(1 + offset), Inches(1), Inches(1), Inches(1)
+            )
+            child.text_frame.text = f"자식{offset}"
+        buffer = io.BytesIO()
+        prs.save(buffer)
+        buffer.seek(0)
+
+        paragraphs, _ = PPTParser().extract_paragraphs(buffer)
+        children = [p for p in paragraphs if p.original_text.startswith("자식")]
+        self.assertEqual(len(children), 2)
+        # Children flatten onto the parent's shape_index; the path keeps them apart.
+        self.assertEqual(len({c.shape_index for c in children}), 1)
+        self.assertEqual(len({c.container_id for c in children}), 2)
+
+    def test_fragments_expose_the_container(self) -> None:
+        sess = _session("A", 2)
+        frags = sess.fragments()
+        self.assertTrue(all(f.container_id for f in frags))
+        self.assertTrue(all(f.container_kind for f in frags))
+
+
+class BlockEditTestCase(unittest.TestCase):
+    """A wrapped sentence is one review item, so it applies as one revision."""
+
+    def test_block_edit_is_one_revision_and_one_undo(self) -> None:
+        sess = _session("A", 3, targets=["one", "two", "three"])
+        changed = sess.apply_block_edit(
+            {0: "ONE", 1: "TWO"}, expected_revision=0, model="m", provider="anthropic"
+        )
+        self.assertEqual(changed, [0, 1])
+        self.assertEqual(sess.revision, 1)
+        self.assertEqual(sess.translated_texts, ["ONE", "TWO", "three"])
+
+        # One undo restores the whole block, not just its last line.
+        sess.undo(sess.revision)
+        self.assertEqual(sess.translated_texts, ["one", "two", "three"])
+
+    def test_unchanged_lines_are_skipped(self) -> None:
+        sess = _session("A", 2, targets=["one", "two"])
+        changed = sess.apply_block_edit(
+            {0: "one", 1: "TWO"}, expected_revision=0, model="m", provider="anthropic"
+        )
+        self.assertEqual(changed, [1])
+
+    def test_no_op_edit_does_not_bump_the_revision(self) -> None:
+        sess = _session("A", 2, targets=["one", "two"])
+        self.assertEqual(
+            sess.apply_block_edit(
+                {0: "one"}, expected_revision=0, model="m", provider="anthropic"
+            ),
+            [],
+        )
+        self.assertEqual(sess.revision, 0)
+
+    def test_stale_revision_is_rejected_before_mutating(self) -> None:
+        sess = _session("A", 2, targets=["one", "two"])
+        with self.assertRaises(RuntimeError):
+            sess.apply_block_edit(
+                {0: "ONE"}, expected_revision=5, model="m", provider="anthropic"
+            )
+        self.assertEqual(sess.translated_texts, ["one", "two"])
+
+    def test_out_of_range_index_leaves_the_draft_untouched(self) -> None:
+        sess = _session("A", 2, targets=["one", "two"])
+        with self.assertRaises(IndexError):
+            sess.apply_block_edit(
+                {0: "ONE", 99: "X"}, expected_revision=0, model="m", provider="anthropic"
+            )
+        self.assertEqual(sess.translated_texts, ["one", "two"])
+        self.assertEqual(sess.revision, 0)
+
+
+class DismissRestoreTestCase(unittest.TestCase):
+    """The queue dismisses with one keystroke, so dismissals must be undoable."""
+
+    @staticmethod
+    def _flagged_session() -> ReviewSession:
+        finding = Finding(
+            type="terminology.violation", severity="major", description="x",
+            location={"slide": 1, "shape": 0, "paragraph": 0},
+            segment={"source": "s", "output": "o"}, ordinal=1,
+            fragment_index=0,
+        )
+        return _session("A", 1, findings=[finding])
+
+    def test_dismiss_hides_finding_and_restore_brings_it_back(self) -> None:
+        sess = self._flagged_session()
+        self.assertEqual(len(sess.fragments()[0].findings), 1)
+
+        self.assertTrue(sess.dismiss_finding(0, "terminology.violation"))
+        self.assertEqual(sess.fragments()[0].findings, [])
+
+        self.assertTrue(sess.restore_finding(0, "terminology.violation"))
+        self.assertEqual(len(sess.fragments()[0].findings), 1)
+
+    def test_repeat_calls_report_no_change(self) -> None:
+        sess = self._flagged_session()
+        self.assertTrue(sess.dismiss_finding(0, "terminology.violation"))
+        # Already dismissed / already restored: nothing for the client to undo.
+        self.assertFalse(sess.dismiss_finding(0, "terminology.violation"))
+        self.assertTrue(sess.restore_finding(0, "terminology.violation"))
+        self.assertFalse(sess.restore_finding(0, "terminology.violation"))
+
+    def test_dismissal_does_not_touch_draft_or_revision(self) -> None:
+        sess = self._flagged_session()
+        sess.dismiss_finding(0, "terminology.violation")
+        self.assertEqual(sess.revision, 0)
+        self.assertFalse(sess.dirty)
+
+    def test_dismiss_hides_the_style_finding_too(self) -> None:
+        # This one is derived from the style preview instead of the sweep, so it
+        # bypasses the dismissal filter unless fragments() checks it directly.
+        sess = _multicolor_session()
+        sess.color_distributions = {}
+        self.assertEqual(
+            [f["type"] for f in sess.fragments()[0].findings], ["style.mapping_dropped"]
+        )
+
+        self.assertTrue(sess.dismiss_finding(0, "style.mapping_dropped"))
+        self.assertEqual(sess.fragments()[0].findings, [])
+
+        self.assertTrue(sess.restore_finding(0, "style.mapping_dropped"))
+        self.assertEqual(
+            [f["type"] for f in sess.fragments()[0].findings], ["style.mapping_dropped"]
+        )
+
+    def test_dismissal_survives_a_resweep(self) -> None:
+        sess = _session("저지력 증가", 1, targets=["Increased flinch"])
+        sess.merge_glossary({"저지력": "Aim Punch"}, resweep=True)
+        self.assertEqual(len(sess.fragments()[0].findings), 1)
+
+        sess.dismiss_finding(0, "terminology.violation")
+        sess.run_final_sweep()
+        self.assertEqual(sess.fragments()[0].findings, [])
+
+        sess.restore_finding(0, "terminology.violation")
+        self.assertEqual(len(sess.fragments()[0].findings), 1)
+
+
 class EditPropagationTestCase(unittest.TestCase):
     def test_identical_indices(self) -> None:
         sess = _session("반복", 3)

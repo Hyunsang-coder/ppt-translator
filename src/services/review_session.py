@@ -51,6 +51,11 @@ class FragmentView:
     edited: bool = False
     style_segments: List[dict] = field(default_factory=list)
     style_status: str = "single_style"
+    # Which text frame this paragraph sits in, and what kind it is. The review
+    # screen groups consecutive paragraphs of one container back into a single
+    # item so a hard-return-wrapped sentence is judged once instead of N times.
+    container_id: str = ""
+    container_kind: str = "textbox"
 
 
 @dataclass
@@ -274,7 +279,12 @@ class ReviewSession:
             target = self.translated_texts[idx] if idx < len(self.translated_texts) else ""
             style_segments, style_status = self.style_preview(idx, target=target)
             findings = list(by_index.get(idx, []))
-            if style_status in {"dropped", "partial"}:
+            # This one is derived from the style preview rather than the sweep,
+            # so it never passed through the dismissal filter above.
+            style_dismissed = (
+                self._finding_key(idx, "style.mapping_dropped") in self.dismissed_findings
+            )
+            if style_status in {"dropped", "partial"} and not style_dismissed:
                 findings.append(
                     {
                         "type": "style.mapping_dropped",
@@ -304,6 +314,8 @@ class ReviewSession:
                     edited=idx in self.edited_indices,
                     style_segments=style_segments,
                     style_status=style_status,
+                    container_id=info.container_id,
+                    container_kind=info.container_kind,
                 )
             )
         return views
@@ -391,6 +403,54 @@ class ReviewSession:
                 self.color_distributions.pop(idx, None)
         self.revision += 1
         return changed
+
+    def apply_block_edit(
+        self,
+        edits: Dict[int, str],
+        *,
+        expected_revision: int,
+        model: str,
+        provider: str,
+    ) -> List[int]:
+        """Stage edits to several paragraphs as one revision.
+
+        The review screen shows a hard-return-wrapped sentence as a single item,
+        so applying it has to be atomic: one history entry (so ``되돌리기``
+        restores the whole sentence, not its last line) and one revision bump
+        (so a half-applied block cannot exist).
+        """
+        if expected_revision != self.revision:
+            raise RuntimeError("review revision conflict")
+
+        changed: Dict[int, str] = {}
+        for index, target in edits.items():
+            if not (0 <= index < len(self.translated_texts)):
+                raise IndexError(f"fragment index {index} out of range")
+            if self.translated_texts[index] != target:
+                changed[index] = target
+        if not changed:
+            return []
+
+        # Map colours before mutating: a failure here must leave the draft alone.
+        colors = {
+            index: self._map_color_distribution(
+                index, target, model=model, provider=provider
+            )
+            for index, target in changed.items()
+        }
+
+        indices = sorted(changed)
+        self._history.append(self._snapshot(indices))
+        for index in indices:
+            self.translated_texts[index] = changed[index]
+            self.edited_indices.add(index)
+            mapped = colors.get(index)
+            if mapped:
+                self.color_distributions[index] = list(mapped)
+            else:
+                self.color_distributions.pop(index, None)
+        self.revision += 1
+        return indices
 
     def _map_color_distribution(
         self, index: int, target: str, *, model: str, provider: str
@@ -781,8 +841,29 @@ class ReviewSession:
         self.revision += 1
         return sorted(snapshot.texts)
 
-    def dismiss_finding(self, index: int, finding_type: str) -> None:
-        self.dismissed_findings.add(self._finding_key(index, finding_type))
+    def dismiss_finding(self, index: int, finding_type: str) -> bool:
+        """Hide a finding from the review screen.
+
+        Returns True when this call is what dismissed it, so callers can record
+        the dismissal once and offer a precise undo.
+        """
+        key = self._finding_key(index, finding_type)
+        if key in self.dismissed_findings:
+            return False
+        self.dismissed_findings.add(key)
+        return True
+
+    def restore_finding(self, index: int, finding_type: str) -> bool:
+        """Undo a dismissal so the finding reappears while the sweep still finds it.
+
+        The review queue dismisses with a single keystroke, so dismissals have to
+        be reversible. Returns True when a dismissal was actually removed.
+        """
+        key = self._finding_key(index, finding_type)
+        if key not in self.dismissed_findings:
+            return False
+        self.dismissed_findings.discard(key)
+        return True
 
     def replace_findings(self, findings: List[Finding]) -> None:
         self.findings = findings

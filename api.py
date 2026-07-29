@@ -269,6 +269,11 @@ class FragmentItem(BaseModel):
     edited: bool = False
     style_segments: List[StyleSegment] = []
     style_status: Literal["single_style", "preserved", "partial", "dropped"] = "single_style"
+    # Text frame this paragraph belongs to. Unique per text box / table cell /
+    # grouped child — unlike (slide, shape, paragraph), which collides across
+    # table cells. Lets the review screen group a wrapped sentence into one item.
+    container_id: str = ""
+    container_kind: str = "textbox"
 
 
 class FragmentsResponse(BaseModel):
@@ -280,6 +285,9 @@ class FragmentsResponse(BaseModel):
     revision: int = 0
     committed_revision: int = 0
     dirty: bool = False
+    # Name the deck will be saved as, so the review screen can show what the
+    # user is about to produce without having to download it first.
+    output_filename: Optional[str] = None
 
 
 class FragmentEditRequest(BaseModel):
@@ -350,6 +358,37 @@ class PartialApplyRequest(BaseModel):
 
 class ReviewRevisionRequest(BaseModel):
     expected_revision: int
+
+
+class BlockEditRequest(BaseModel):
+    """Apply new text to several paragraphs of one block in a single revision."""
+
+    # fragment index -> new target text
+    edits: Dict[int, str] = Field(..., min_length=1, max_length=200)
+    expected_revision: int
+
+
+class ReviewDismissalEntry(BaseModel):
+    """One (fragment, finding type) pair to hide from — or return to — the queue."""
+
+    index: int
+    finding_type: str
+
+
+class ReviewDismissalRequest(BaseModel):
+    """Dismiss or restore several findings in one call."""
+
+    action: Literal["dismiss", "restore"] = "dismiss"
+    entries: List[ReviewDismissalEntry] = Field(..., min_length=1, max_length=2000)
+
+
+class ReviewDismissalResponse(BaseModel):
+    """Entries this call actually changed, so the client can undo exactly those."""
+
+    changed: List[ReviewDismissalEntry] = []
+    revision: int
+    committed_revision: int
+    dirty: bool
 
 
 class ReviewMutationResponse(BaseModel):
@@ -1166,6 +1205,8 @@ async def get_job_fragments(job_id: str) -> FragmentsResponse:
                 edited=view.edited,
                 style_segments=[StyleSegment(**segment) for segment in view.style_segments],
                 style_status=view.style_status,
+                container_id=view.container_id,
+                container_kind=view.container_kind,
             )
         )
     return FragmentsResponse(
@@ -1175,6 +1216,7 @@ async def get_job_fragments(job_id: str) -> FragmentsResponse:
         revision=session.revision,
         committed_revision=session.committed_revision,
         dirty=session.dirty,
+        output_filename=job.output_filename,
     )
 
 
@@ -1463,6 +1505,135 @@ async def apply_review_partial_candidates(
         )
     return ReviewMutationResponse(
         changed_indices=changed,
+        revision=session.revision,
+        committed_revision=session.committed_revision,
+        dirty=session.dirty,
+    )
+
+
+@app.post(
+    "/api/v1/jobs/{job_id}/review/block",
+    response_model=ReviewMutationResponse,
+)
+async def apply_review_block_edit(
+    job_id: str, body: BlockEditRequest
+) -> ReviewMutationResponse:
+    """Apply edits to several paragraphs of one block atomically.
+
+    The review screen presents a hard-return-wrapped sentence as a single item.
+    Applying it paragraph by paragraph would bump the revision once per line,
+    leave a half-applied block behind on failure, and make ``되돌리기`` restore
+    only the last line. One request, one history entry, one revision.
+    """
+    job = get_job_manager().get_job(job_id)
+    if job is None or job.review_session is None:
+        raise HTTPException(status_code=404, detail="Review session not found")
+    session = job.review_session
+
+    previous = dict(enumerate(session.translated_texts))
+    async with job.review_lock:
+        try:
+            loop = asyncio.get_running_loop()
+            changed = await loop.run_in_executor(
+                None,
+                functools.partial(
+                    session.apply_block_edit,
+                    body.edits,
+                    expected_revision=body.expected_revision,
+                    model=session.model or DEFAULT_TRANSLATION_MODEL,
+                    provider=session.provider,
+                ),
+            )
+            findings = await loop.run_in_executor(None, session.run_final_sweep)
+        except IndexError:
+            raise HTTPException(status_code=400, detail="Fragment index out of range")
+        except RuntimeError:
+            raise HTTPException(
+                status_code=409,
+                detail="검토 내용이 변경되었습니다. 다시 확인해주세요.",
+            )
+        except Exception as exc:
+            LOGGER.exception("Block edit failed: %s", exc)
+            raise HTTPException(status_code=500, detail="수정 적용에 실패했습니다.")
+
+    recorder = QualityRecorder(quality_dir=get_settings().quality_dir)
+    doc_ref = f"deck:{job.output_filename or 'deck.pptx'}"
+    for index in changed:
+        _record_edit(
+            recorder, session, index,
+            session.paragraphs[index].original_text or "",
+            previous[index],
+            corrected=session.translated_texts[index],
+            disposition="accepted", doc_ref=doc_ref,
+        )
+
+    return ReviewMutationResponse(
+        changed_indices=changed,
+        revision=session.revision,
+        committed_revision=session.committed_revision,
+        dirty=session.dirty,
+        findings_count=len(findings),
+    )
+
+
+@app.post(
+    "/api/v1/jobs/{job_id}/review/dismissals",
+    response_model=ReviewDismissalResponse,
+)
+async def update_review_dismissals(
+    job_id: str, body: ReviewDismissalRequest
+) -> ReviewDismissalResponse:
+    """Dismiss or restore findings in bulk.
+
+    The review queue dismisses with a single keystroke and can skip everything
+    that is left in one click, so dismissals must be reversible: ``restore`` is
+    what the screen's undo calls, and taking the whole batch in one request lets
+    the client undo it as a single step.
+
+    Deliberately does not take ``review_lock`` or an ``expected_revision``:
+    dismissals only add to / remove from a set, never touch the draft text or
+    the revision, and are commutative. Waiting on the lock would stall a
+    keystroke behind an in-flight re-translation for no benefit.
+    """
+    job = get_job_manager().get_job(job_id)
+    if job is None or job.review_session is None:
+        raise HTTPException(status_code=404, detail="Review session not found")
+    session = job.review_session
+    total = len(session.paragraphs)
+
+    changed: List[ReviewDismissalEntry] = []
+    for entry in body.entries:
+        if not (0 <= entry.index < total):
+            continue
+        mutate = (
+            session.dismiss_finding
+            if body.action == "dismiss"
+            else session.restore_finding
+        )
+        if mutate(entry.index, entry.finding_type):
+            changed.append(entry)
+
+    # Restores intentionally write no ledger row: the ledger is append-only, so
+    # a dismissal that was undone stays recorded as rejected.
+    if changed and body.action == "dismiss":
+        recorder = QualityRecorder(quality_dir=get_settings().quality_dir)
+        doc_ref = f"deck:{job.output_filename or 'deck.pptx'}"
+
+        def _record_all() -> None:
+            for item in changed:
+                _record_edit(
+                    recorder, session, item.index,
+                    session.paragraphs[item.index].original_text or "",
+                    session.translated_texts[item.index],
+                    corrected=None, disposition="rejected", doc_ref=doc_ref,
+                    finding_type=item.finding_type,
+                )
+
+        # One append per entry; keep the file writes off the event loop.
+        await asyncio.get_running_loop().run_in_executor(None, _record_all)
+
+    return ReviewDismissalResponse(
+        changed=changed,
         revision=session.revision,
         committed_revision=session.committed_revision,
         dirty=session.dirty,

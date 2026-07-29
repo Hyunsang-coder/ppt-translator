@@ -1,54 +1,37 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
-import { apiClient } from "@/lib/api-client";
+import { ApiError, apiClient } from "@/lib/api-client";
+import { DoneScreen } from "@/components/translation/review/DoneScreen";
+import { FinishBar } from "@/components/translation/review/FinishBar";
+import { FragmentList } from "@/components/translation/review/FragmentList";
+import { GlossaryPane } from "@/components/translation/review/GlossaryPane";
+import { PartialMatchCard } from "@/components/translation/review/PartialMatchCard";
+import { QueueItem } from "@/components/translation/review/QueueItem";
+import { SlideRail, type SlideProgress } from "@/components/translation/review/SlideRail";
+import { StepHeader } from "@/components/translation/review/StepHeader";
+import {
+  blockFindings,
+  buildBlocks,
+  buildQueue,
+  initialQueueState,
+  isReviewComplete,
+  lastAction,
+  primaryFinding,
+  queueReducer,
+  remainingCount,
+  suggestFix,
+  type EditorMode,
+  type ReviewLogEntry,
+} from "@/lib/review-queue";
 import type {
   FragmentItem,
-  FragmentFinding,
   FragmentProposalResponse,
   PartialCandidate,
-  StyleSegment,
 } from "@/types/api";
-import {
-  X,
-  Pencil,
-  RefreshCw,
-  Ban,
-  Check,
-  Download,
-  Loader2,
-  AlertTriangle,
-  Undo2,
-  ArrowRight,
-  Plus,
-} from "lucide-react";
+import { AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { Input } from "@/components/ui/input";
-import { glossaryTermKey } from "@/lib/glossary";
-import { useGlossaryStore } from "@/stores/glossary-store";
-
-// Finding type -> badge style. Mirrors the LOG_TYPE_STYLES lookup pattern.
-function badgeStyle(finding: FragmentFinding): { cls: string; label: string } {
-  switch (finding.type) {
-    case "terminology.violation":
-      return { cls: "text-destructive bg-destructive/10", label: "용어집 위반" };
-    case "terminology.inconsistency":
-    case "consistency.phrase":
-      return { cls: "text-info bg-info/10", label: "일관성" };
-    case "accuracy.omission":
-      return { cls: "text-destructive bg-destructive/10", label: "미번역" };
-    case "fit.overflow":
-      return { cls: "text-warning bg-warning/10", label: "공간 초과" };
-    case "fit.length_limit":
-      return { cls: "text-warning bg-warning/10", label: "길이 초과" };
-    case "style.mapping_dropped":
-      return { cls: "text-warning bg-warning/10", label: "색상 확인" };
-    default:
-      return { cls: "text-muted-foreground bg-muted", label: finding.type };
-  }
-}
 
 interface ReviewPanelProps {
   jobId: string;
@@ -56,214 +39,339 @@ interface ReviewPanelProps {
   onDownload: () => void;
 }
 
-type CardSpan = "short" | "med" | "long";
-
-// 번역 길이로 타일이 차지할 그리드 폭을 정한다. 짧은 조각은 1칸, 중간은 2칸,
-// 긴 문단·노트·편집 중인 조각은 전체 폭. 이렇게 해야 짧은 조각이 가로로
-// 여러 개 채워져 스크롤이 짧아진다.
-function cardSpan(frag: FragmentItem, editing: boolean): CardSpan {
-  if (editing || frag.is_note) return "long";
-  const n = frag.target.length;
-  if (n > 80) return "long";
-  if (n > 26) return "med";
-  return "short";
-}
-
-function isOverflow(frag: FragmentItem): boolean {
-  return (
-    frag.length_budget !== null &&
-    !frag.is_note &&
-    frag.target.length > frag.length_budget
-  );
-}
-
-type SlideGroup = {
-  slide: number;
-  title: string | null;
-  items: FragmentItem[];
-  flagged: number;
-  edited: number;
-};
-
+/**
+ * The review screen: one flagged item at a time, in a fixed order, with the
+ * deck's remaining work on the left and the glossary on the right. Everything
+ * about *what* an item is and *where* the cursor goes lives in
+ * `lib/review-queue`; this component only talks to the server and renders.
+ */
 export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
   const [fragments, setFragments] = useState<FragmentItem[]>([]);
+  const [outputFilename, setOutputFilename] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeSlide, setActiveSlide] = useState<number | null>(null);
-  const [editingIndex, setEditingIndex] = useState<number | null>(null);
-  const [editText, setEditText] = useState("");
-  const [propagate, setPropagate] = useState(true);
-  const [busyIndex, setBusyIndex] = useState<number | null>(null);
   const [revision, setRevision] = useState(0);
-  const [committedRevision, setCommittedRevision] = useState(0);
   const [dirty, setDirty] = useState(false);
-  const [proposal, setProposal] = useState<FragmentProposalResponse | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
+  // A re-translation belongs to the item it was made for: navigating away must
+  // not offer it for the next one.
+  const [proposalFor, setProposalFor] = useState<
+    { key: string; response: FragmentProposalResponse } | null
+  >(null);
+  const [pendingKey, setPendingKey] = useState<string | null>(null);
   const [partialCandidates, setPartialCandidates] = useState<PartialCandidate[]>([]);
   const [selectedPartial, setSelectedPartial] = useState<Set<number>>(new Set());
   const [applyingPartial, setApplyingPartial] = useState(false);
-  const [committing, setCommitting] = useState(false);
-  const [glossarySource, setGlossarySource] = useState("");
-  const [glossaryTarget, setGlossaryTarget] = useState("");
-  const [glossaryBusy, setGlossaryBusy] = useState(false);
-  const [reviewGlossaryId, setReviewGlossaryId] = useState("");
+  const [editTexts, setEditTexts] = useState<Record<number, string>>({});
+  const [instruction, setInstruction] = useState("");
+  const [propagate, setPropagate] = useState(true);
+  const [queueState, dispatch] = useReducer(queueReducer, initialQueueState);
 
-  const glossaries = useGlossaryStore((s) => s.glossaries);
-  const activeGlossaryIds = useGlossaryStore((s) => s.activeGlossaryIds);
-  const ensureDefaultGlossary = useGlossaryStore((s) => s.ensureDefaultGlossary);
-  const addEntry = useGlossaryStore((s) => s.addEntry);
-  const updateEntry = useGlossaryStore((s) => s.updateEntry);
-  const deleteEntry = useGlossaryStore((s) => s.deleteEntry);
-  const setActiveGlossaryIds = useGlossaryStore((s) => s.setActiveGlossaryIds);
-
-  const activeGlossaries = useMemo(() => {
-    const byId = new Map(glossaries.map((glossary) => [glossary.id, glossary]));
-    return activeGlossaryIds
-      .map((id) => byId.get(id))
-      .filter((glossary): glossary is NonNullable<typeof glossary> => Boolean(glossary));
-  }, [activeGlossaryIds, glossaries]);
-
-  useEffect(() => {
-    if (activeGlossaryIds.includes(reviewGlossaryId)) return;
-    setReviewGlossaryId(activeGlossaryIds[0] ?? "");
-  }, [activeGlossaryIds, reviewGlossaryId]);
+  const fetchFragments = useCallback(async () => {
+    const resp = await apiClient.getJobFragments(jobId);
+    setFragments(resp.fragments);
+    setOutputFilename(resp.output_filename);
+    setRevision(resp.revision);
+    setDirty(resp.dirty);
+  }, [jobId]);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const resp = await apiClient.getJobFragments(jobId);
-      setFragments(resp.fragments);
-      setRevision(resp.revision);
-      setCommittedRevision(resp.committed_revision);
-      setDirty(resp.dirty);
-      // 첫 로드 시 첫 슬라이드를 자동 선택.
-      setActiveSlide((cur) =>
-        cur !== null ? cur : (resp.fragments[0]?.slide ?? null)
-      );
+      await fetchFragments();
     } catch {
-      setError("섹션 목록을 불러오지 못했습니다.");
+      setError("검토 목록을 불러오지 못했습니다.");
     } finally {
       setLoading(false);
     }
-  }, [jobId]);
+  }, [fetchFragments]);
+
+  // Every mutation re-reads the list (the server re-sweeps findings), so the
+  // re-read must not flash the whole screen the way the first load does.
+  const refresh = useCallback(async () => {
+    try {
+      await fetchFragments();
+    } catch {
+      toast.error("목록을 새로 불러오지 못했습니다.");
+    }
+  }, [fetchFragments]);
 
   useEffect(() => {
-    load();
+    void load();
   }, [load]);
 
-  const flaggedCount = useMemo(
-    () => fragments.filter((f) => f.findings.length > 0).length,
-    [fragments]
+  const queue = useMemo(
+    () => buildQueue(fragments, queueState.resolved, queueState.pinned),
+    [fragments, queueState.resolved, queueState.pinned]
   );
-  const editedCount = useMemo(
-    () => fragments.filter((f) => f.edited).length,
-    [fragments]
+  const allBlocks = useMemo(() => buildBlocks(fragments), [fragments]);
+  const blocksByKey = useMemo(
+    () => new Map(queue.map((block) => [block.key, block])),
+    [queue]
+  );
+  const queueKeys = useMemo(() => queue.map((block) => block.key), [queue]);
+
+  useEffect(() => {
+    dispatch({ type: "sync", keys: queueKeys });
+  }, [queueKeys]);
+
+  const currentKey = queueState.order[queueState.cursor] ?? null;
+  const current = currentKey ? blocksByKey.get(currentKey) ?? null : null;
+  const currentFinding = current ? primaryFinding(current) : null;
+  const subject = current
+    ? current.items.find((item) => item.index === currentFinding?.index) ?? current.items[0]
+    : null;
+  const total = queueState.order.length;
+  const remaining = remainingCount(queueState);
+  const undoable = lastAction(queueState) !== null;
+  const complete = isReviewComplete(queueState);
+  // The done screen is a destination, not a wall: `처리한 항목 다시 보기` steps
+  // back into the queue, and new findings put it away on their own.
+  const [reopened, setReopened] = useState(false);
+  useEffect(() => {
+    if (!complete) setReopened(false);
+  }, [complete]);
+  const outcomes = Object.values(queueState.resolved);
+  const suggestion = useMemo(
+    () => (subject && currentFinding ? suggestFix(subject.target, currentFinding.finding) : null),
+    [subject, currentFinding]
   );
 
-  // 슬라이드 단위로 그룹핑 — 사이드바 네비 + 본문 렌더 양쪽에서 쓴다.
-  const slideGroups = useMemo<SlideGroup[]>(() => {
-    const groups: SlideGroup[] = [];
-    for (const f of fragments) {
-      const last = groups[groups.length - 1];
-      if (last && last.slide === f.slide) {
-        last.items.push(f);
-        if (f.findings.length > 0) last.flagged += 1;
-        if (f.edited) last.edited += 1;
+  const slides = useMemo<SlideProgress[]>(() => {
+    const bySlide = new Map<number, SlideProgress>();
+    for (const key of queueState.order) {
+      if (key in queueState.resolved) continue;
+      const block = blocksByKey.get(key);
+      if (!block) continue;
+      const entry = bySlide.get(block.slide);
+      if (entry) {
+        entry.remaining += 1;
       } else {
-        groups.push({
-          slide: f.slide,
-          title: f.slide_title,
-          items: [f],
-          flagged: f.findings.length > 0 ? 1 : 0,
-          edited: f.edited ? 1 : 0,
+        bySlide.set(block.slide, {
+          slide: block.slide,
+          title: block.items[0].slide_title,
+          remaining: 1,
         });
       }
     }
-    return groups;
-  }, [fragments]);
+    return [...bySlide.values()].sort((a, b) => a.slide - b.slide);
+  }, [queueState.order, queueState.resolved, blocksByKey]);
 
-  const activeGroup = useMemo(
-    () => slideGroups.find((g) => g.slide === activeSlide) ?? null,
-    [slideGroups, activeSlide]
-  );
-  const proposalFragment = useMemo(
-    () => fragments.find((fragment) => fragment.index === proposal?.index) ?? null,
-    [fragments, proposal]
-  );
+  const doneSlides = useMemo(() => {
+    const left = new Set(slides.map((entry) => entry.slide));
+    const all = new Set(queue.map((block) => block.slide));
+    return [...all].filter((slide) => !left.has(slide)).length;
+  }, [queue, slides]);
 
-  const startEdit = (frag: FragmentItem) => {
-    setEditingIndex(frag.index);
-    setEditText(frag.target);
+  const selectSlide = (slide: number) => {
+    const key = queueState.order.find((candidate) => (
+      !(candidate in queueState.resolved) && blocksByKey.get(candidate)?.slide === slide
+    ));
+    if (key) dispatch({ type: "focus", key });
   };
 
-  const previewEdit = async (frag: FragmentItem) => {
-    setBusyIndex(frag.index);
+  const setEditor = (editor: EditorMode) => {
+    if (editor === "manual" && current) {
+      setEditTexts(
+        Object.fromEntries(current.items.map((item) => [item.index, item.target]))
+      );
+    }
+    if (editor === "ai") setInstruction("");
+    if (editor === "none") setProposalFor(null);
+    dispatch({ type: "editor", editor });
+  };
+
+  const receivePartials = (list: PartialCandidate[]) => {
+    setPartialCandidates(list);
+    // 후보가 하나면 고를 것이 없다 — 체크박스 없이 적용/건너뛰기만 남긴다.
+    setSelectedPartial(new Set(list.length === 1 ? [list[0].index] : []));
+  };
+
+  const skip = async () => {
+    if (!current) return;
+    const entries = blockFindings(current).map(({ index, finding }) => ({
+      index,
+      finding_type: finding.type,
+    }));
+    if (entries.length === 0) return;
+    setBusy(true);
     try {
-      const resp = await apiClient.proposeJobFragment(jobId, frag.index, {
-        action: "edit",
-        target: editText,
-        propagate_identical: propagate,
+      const resp = await apiClient.updateReviewDismissals(jobId, "dismiss", entries);
+      setDirty(resp.dirty);
+      dispatch({
+        type: "resolve",
+        entry: { kind: "dismiss", keys: [current.key], entries: resp.changed },
       });
-      setProposal(resp);
+      await refresh();
     } catch {
-      toast.error("수정 미리보기를 만들지 못했습니다.");
+      toast.error("처리에 실패했습니다.");
     } finally {
-      setBusyIndex(null);
+      setBusy(false);
     }
   };
 
-  const retranslate = async (frag: FragmentItem, instruction?: string) => {
-    setBusyIndex(frag.index);
+  /**
+   * One request for every finding still open, so `되돌리기` brings them all
+   * back in one step. Dismissals only add to a set, so no lock or revision
+   * check is involved — 40 items would otherwise be 40 round trips.
+   */
+  const skipAllRemaining = async () => {
+    const keys = queueState.order.filter((key) => !(key in queueState.resolved));
+    const entries = keys.flatMap((key) => {
+      const block = blocksByKey.get(key);
+      return block
+        ? blockFindings(block).map(({ index, finding }) => ({
+            index,
+            finding_type: finding.type,
+          }))
+        : [];
+    });
+    if (entries.length === 0) return;
+    setBusy(true);
     try {
-      const resp = await apiClient.proposeJobFragment(jobId, frag.index, {
-        action: "retranslate",
-        instruction,
+      const resp = await apiClient.updateReviewDismissals(jobId, "dismiss", entries);
+      setDirty(resp.dirty);
+      dispatch({ type: "resolve", entry: { kind: "dismiss", keys, entries: resp.changed } });
+      await refresh();
+    } catch {
+      toast.error("남은 항목을 넘기지 못했습니다.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * propose → apply with no comparison modal in between. A 409 means another
+   * change landed first; the proposal is bound to the revision it was made
+   * against and cannot be reused, so re-read and propose once more.
+   */
+  const proposeAndApply = async (index: number, target: string) => {
+    let expected = revision;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const proposed = await apiClient.proposeJobFragment(jobId, index, {
+        action: "edit",
+        target,
         propagate_identical: propagate,
       });
-      setProposal(resp);
+      try {
+        return await apiClient.applyJobFragmentProposal(jobId, proposed.proposal_id, expected);
+      } catch (err) {
+        if (attempt > 0 || !(err instanceof ApiError) || err.status !== 409) throw err;
+        const fresh = await apiClient.getJobFragments(jobId);
+        setFragments(fresh.fragments);
+        setRevision(fresh.revision);
+        setDirty(fresh.dirty);
+        expected = fresh.revision;
+      }
+    }
+    throw new Error("apply conflicted twice");
+  };
+
+  const applySuggestion = async () => {
+    if (!current || !subject || !suggestion) return;
+    const entry: ReviewLogEntry = { kind: "edit", keys: [current.key], revision };
+    // 적용 1회에 서버가 스윕을 다시 돌아 큰 덱에서 1~2초가 걸린다. 커서는 응답을
+    // 기다리지 않고 넘기고, 실패하면 그 항목만 되돌린다.
+    dispatch({ type: "resolve", entry });
+    try {
+      const resp = await proposeAndApply(subject.index, suggestion.target);
+      setRevision(resp.revision);
+      setDirty(resp.dirty);
+      receivePartials(resp.partial_candidates);
+      await refresh();
+    } catch {
+      dispatch({ type: "rollback", entry });
+      toast.error("추천 수정을 적용하지 못했습니다.");
+      await refresh();
+    }
+  };
+
+  const applyEdits = async () => {
+    if (!current) return;
+    const edits: Record<number, string> = {};
+    for (const item of current.items) {
+      const next = editTexts[item.index] ?? item.target;
+      if (next !== item.target) edits[item.index] = next;
+    }
+    const indices = Object.keys(edits).map(Number);
+    if (indices.length === 0) {
+      dispatch({ type: "editor", editor: "none" });
+      return;
+    }
+    const entry: ReviewLogEntry = { kind: "edit", keys: [current.key], revision };
+    dispatch({ type: "resolve", entry });
+    try {
+      if (indices.length === 1) {
+        // 문단 하나면 propose 경로가 낫다 — 동일 문구 전파와 부분 일치 후보를 준다.
+        const resp = await proposeAndApply(indices[0], edits[indices[0]]);
+        setRevision(resp.revision);
+        setDirty(resp.dirty);
+        receivePartials(resp.partial_candidates);
+      } else {
+        // 여러 문단이면 한 요청으로 — 되돌리기 한 번에 문장 전체가 복구돼야 한다.
+        // 대신 이 경로에는 동일 문구 전파·부분 일치 후보가 없다.
+        const resp = await apiClient.applyReviewBlockEdit(jobId, edits, revision);
+        setRevision(resp.revision);
+        setDirty(resp.dirty);
+      }
+      await refresh();
+    } catch {
+      dispatch({ type: "rollback", entry });
+      toast.error("수정을 적용하지 못했습니다.");
+      await refresh();
+    }
+  };
+
+  const retranslate = async () => {
+    if (!current || !subject) return;
+    const trimmed = instruction.trim();
+    const overBudget =
+      subject.length_budget !== null &&
+      !subject.is_note &&
+      subject.target.length > subject.length_budget;
+    setProposalFor(null);
+    setPendingKey(current.key);
+    try {
+      const response = await apiClient.proposeJobFragment(jobId, subject.index, {
+        action: "retranslate",
+        instruction: trimmed || (overBudget ? "더 짧게" : undefined),
+        propagate_identical: propagate,
+      });
+      setProposalFor({ key: current.key, response });
     } catch {
       toast.error("재번역에 실패했습니다.");
     } finally {
-      setBusyIndex(null);
+      setPendingKey(null);
     }
   };
 
   const applyProposal = async () => {
-    if (!proposal) return;
-    setBusyIndex(proposal.index);
+    if (!current || proposalFor?.key !== current.key) return;
+    const proposalId = proposalFor.response.proposal_id;
+    const entry: ReviewLogEntry = { kind: "edit", keys: [current.key], revision };
+    setProposalFor(null);
+    dispatch({ type: "resolve", entry });
     try {
-      const resp = await apiClient.applyJobFragmentProposal(
-        jobId,
-        proposal.proposal_id,
-        revision
-      );
+      const resp = await apiClient.applyJobFragmentProposal(jobId, proposalId, revision);
       setRevision(resp.revision);
       setDirty(resp.dirty);
-      setPartialCandidates(resp.partial_candidates);
-      // 부분 일치는 문맥 검토가 필요한 보조 후보이므로 사용자가 직접 고른다.
-      setSelectedPartial(new Set());
-      setProposal(null);
-      setEditingIndex(null);
-      await load();
-      toast.success(
-        resp.changed_indices.length > 1
-          ? `초안 ${resp.changed_indices.length}곳에 반영했습니다.`
-          : "검토 초안에 반영했습니다."
-      );
+      receivePartials(resp.partial_candidates);
+      await refresh();
     } catch {
-      toast.error("후보 적용에 실패했습니다. 목록을 새로 확인해주세요.");
-      await load();
-    } finally {
-      setBusyIndex(null);
+      // A proposal is bound to the revision it was made against, so a conflict
+      // means re-running the model — the user decides whether that is worth it.
+      dispatch({ type: "rollback", entry });
+      toast.error("AI 번역 결과를 적용하지 못했습니다. 다시 시도해주세요.");
+      await refresh();
     }
   };
 
   const applySelectedPartial = async () => {
-    if (
-      applyingPartial ||
-      selectedPartial.size === 0 ||
-      partialCandidates.length === 0
-    ) return;
+    if (applyingPartial || selectedPartial.size === 0 || partialCandidates.length === 0) {
+      return;
+    }
     const first = partialCandidates[0];
     setApplyingPartial(true);
     try {
@@ -275,794 +383,249 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
       });
       setPartialCandidates([]);
       setSelectedPartial(new Set());
-      await load();
-      toast.success("선택한 부분 일치 문구를 초안에 반영했습니다.");
+      await refresh();
     } catch {
       toast.error("부분 일치 문구 적용에 실패했습니다.");
-      await load();
+      await refresh();
     } finally {
       setApplyingPartial(false);
     }
   };
 
   const undo = async () => {
+    const entry = lastAction(queueState);
+    if (!entry) return;
+    setBusy(true);
     try {
-      await apiClient.undoReview(jobId, revision);
-      setProposal(null);
+      if (entry.kind === "dismiss") {
+        if (entry.entries.length > 0) {
+          const resp = await apiClient.updateReviewDismissals(jobId, "restore", entry.entries);
+          setDirty(resp.dirty);
+        }
+      } else {
+        const resp = await apiClient.undoReview(jobId, revision);
+        setRevision(resp.revision);
+        setDirty(resp.dirty);
+      }
+      dispatch({ type: "undo" });
+      setProposalFor(null);
       setPartialCandidates([]);
-      await load();
-      toast.success("마지막 초안 수정을 되돌렸습니다.");
+      await refresh();
     } catch {
       toast.error("되돌리기에 실패했습니다.");
+    } finally {
+      setBusy(false);
     }
   };
 
-  const commitAndDownload = async () => {
-    setCommitting(true);
+  /**
+   * One key per action, but only while the queue itself has focus: typing an
+   * `s` into the editor must stay an `s`.
+   */
+  const handleKey = (event: KeyboardEvent) => {
+    const target = event.target as HTMLElement | null;
+    const typing =
+      target instanceof HTMLElement &&
+      (target.isContentEditable ||
+        ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
+
+    if (event.key === "Escape") {
+      if (queueState.editor !== "none" || proposalFor) setEditor("none");
+      else if (queueState.mode === "list") dispatch({ type: "mode", mode: "queue" });
+      else onClose();
+      return;
+    }
+    if (typing || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (loading || error || queueState.mode === "list") return;
+    if (partialCandidates.length > 0 || (complete && !reopened)) return;
+    if (!current) return;
+    const handled = current.key in queueState.resolved;
+
+    switch (event.key) {
+      case "Enter":
+        if (suggestion && !handled && queueState.editor === "none") {
+          event.preventDefault();
+          void applySuggestion();
+        }
+        break;
+      case "ArrowLeft":
+        dispatch({ type: "move", delta: -1 });
+        break;
+      case "ArrowRight":
+        dispatch({ type: "move", delta: 1 });
+        break;
+      default:
+        switch (event.key.toLowerCase()) {
+          case "s":
+            if (!handled) void skip();
+            break;
+          case "e":
+            setEditor("manual");
+            break;
+          case "r":
+            setEditor("ai");
+            break;
+        }
+    }
+  };
+
+  // The listener is registered once; the ref keeps it reading current state
+  // instead of the state it was created with.
+  const keyHandler = useRef(handleKey);
+  keyHandler.current = handleKey;
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => keyHandler.current(event);
+    window.addEventListener("keydown", listener);
+    return () => window.removeEventListener("keydown", listener);
+  }, []);
+
+  const save = async () => {
+    setSaving(true);
     try {
-      const resp = await apiClient.commitReview(jobId, revision);
-      setCommittedRevision(resp.committed_revision);
-      setDirty(resp.dirty);
-      await load();
+      if (dirty) {
+        const resp = await apiClient.commitReview(jobId, revision);
+        setDirty(resp.dirty);
+        await refresh();
+      }
       await onDownload();
-      toast.success("검토 초안을 최종 PPT에 반영했습니다.");
     } catch {
       toast.error("최종 반영에 실패했습니다. 기존 결과 파일은 유지됩니다.");
     } finally {
-      setCommitting(false);
+      setSaving(false);
     }
-  };
-
-  const ignore = async (frag: FragmentItem) => {
-    setBusyIndex(frag.index);
-    try {
-      await apiClient.editJobFragment(jobId, frag.index, {
-        action: "ignore",
-        finding_type: frag.findings[0]?.type,
-      });
-      // 무시는 검출만 지운다 — 해당 조각의 findings를 비운다.
-      setFragments((prev) =>
-        prev.map((f) => (f.index === frag.index ? { ...f, findings: [] } : f))
-      );
-      toast.success("검출을 무시했습니다.");
-    } catch {
-      toast.error("처리에 실패했습니다.");
-    } finally {
-      setBusyIndex(null);
-    }
-  };
-
-  const registerGlossaryTerm = async (source: string, target: string) => {
-    const src = source.trim();
-    const tgt = target.trim();
-    if (!src || !tgt || glossaryBusy) return;
-    setGlossaryBusy(true);
-    const previousActiveIds = [...useGlossaryStore.getState().activeGlossaryIds];
-    let localRollback: (() => void) | null = null;
-    try {
-      // Validate and persist locally first. If the job update fails, compensate
-      // the local mutation so the current review and future jobs do not diverge.
-      const glossaryId = reviewGlossaryId || ensureDefaultGlossary();
-      const glossary = useGlossaryStore.getState().glossaries.find((item) => item.id === glossaryId);
-      const existing = glossary?.entries.find((entry) => (
-        glossaryTermKey(entry.source) === glossaryTermKey(src)
-      ));
-      if (existing) {
-        const previous = { ...existing };
-        updateEntry(glossaryId, existing.id, { source: src, target: tgt });
-        localRollback = () => {
-          updateEntry(glossaryId, existing.id, previous);
-          setActiveGlossaryIds(previousActiveIds);
-        };
-        if (!previousActiveIds.includes(glossaryId)) {
-          setActiveGlossaryIds([...previousActiveIds, glossaryId]);
-        }
-      } else {
-        const result = addEntry(glossaryId, src, tgt);
-        localRollback = () => {
-          deleteEntry(glossaryId, result.entry.id);
-          setActiveGlossaryIds(previousActiveIds);
-        };
-      }
-      await apiClient.updateJobGlossary(jobId, { [src]: tgt });
-      setGlossarySource("");
-      setGlossaryTarget("");
-      await load();
-      toast.success("용어집에 추가했습니다. 재번역 시 적용됩니다.");
-    } catch (err) {
-      if (localRollback) {
-        try {
-          localRollback();
-        } catch {
-          toast.error("현재 작업 반영에 실패했고 로컬 용어집 복구도 완료하지 못했습니다.");
-          setGlossaryBusy(false);
-          return;
-        }
-      }
-      toast.error(err instanceof Error ? err.message : "용어집 추가에 실패했습니다.");
-    } finally {
-      setGlossaryBusy(false);
-    }
-  };
-
-  const handleQuickGlossaryAdd = () => {
-    void registerGlossaryTerm(glossarySource, glossaryTarget);
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-background/95 backdrop-blur-sm flex flex-col">
-      {/* header */}
-      <div className="border-b bg-background/95">
-        <div className="flex items-center justify-between gap-3 px-4 py-2.5 flex-wrap">
-          <div>
-            <h2 className="text-base font-bold leading-tight">번역 검토 &amp; 수정</h2>
-            <p className="text-xs text-muted-foreground">
-              {fragments.length}개 섹션 · 검출 {flaggedCount} · 수정됨 {editedCount}
-              {dirty && ` · 최종 r${committedRevision} → 초안 r${revision}`}
-            </p>
-          </div>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={undo}
-              disabled={!dirty || committing}
-              className="gap-2"
-            >
-              <Undo2 className="w-4 h-4" />
-              되돌리기
-            </Button>
-            <Button size="sm" onClick={commitAndDownload} disabled={committing} className="gap-2">
-              {committing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-              {dirty ? "최종 반영 후 저장" : "저장"}
-            </Button>
-            <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="닫기">
-              <X className="w-4 h-4" />
-            </Button>
-          </div>
-        </div>
-        <div className="flex flex-wrap items-end gap-2 px-4 pb-2.5">
-          {activeGlossaries.length > 1 && (
-            <div className="min-w-[150px] space-y-1">
-              <label className="text-[10px] text-muted-foreground" htmlFor="review-glossary-select">
-                저장할 용어집
-              </label>
-              <select
-                id="review-glossary-select"
-                value={reviewGlossaryId}
-                onChange={(event) => setReviewGlossaryId(event.target.value)}
-                disabled={glossaryBusy || committing}
-                className="h-8 w-full rounded-md border border-border bg-background px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-              >
-                {activeGlossaries.map((glossary) => (
-                  <option key={glossary.id} value={glossary.id}>{glossary.name}</option>
-                ))}
-              </select>
-            </div>
-          )}
-          <div className="min-w-[100px] flex-1 space-y-1 max-w-[200px]">
-            <label className="text-[10px] text-muted-foreground" htmlFor="review-glossary-source">
-              용어 원문
-            </label>
-            <Input
-              id="review-glossary-source"
-              value={glossarySource}
-              onChange={(e) => setGlossarySource(e.target.value)}
-              disabled={glossaryBusy || committing}
-              className="h-8 text-sm"
-              placeholder="Source"
-            />
-          </div>
-          <ArrowRight className="mb-2 h-4 w-4 shrink-0 text-muted-foreground" />
-          <div className="min-w-[100px] flex-1 space-y-1 max-w-[200px]">
-            <label className="text-[10px] text-muted-foreground" htmlFor="review-glossary-target">
-              용어 번역
-            </label>
-            <Input
-              id="review-glossary-target"
-              value={glossaryTarget}
-              onChange={(e) => setGlossaryTarget(e.target.value)}
-              disabled={glossaryBusy || committing}
-              className="h-8 text-sm"
-              placeholder="Target"
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleQuickGlossaryAdd();
-              }}
-            />
-          </div>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            className="h-8 gap-1"
-            disabled={
-              glossaryBusy ||
-              committing ||
-              !glossarySource.trim() ||
-              !glossaryTarget.trim()
-            }
-            onClick={handleQuickGlossaryAdd}
-          >
-            {glossaryBusy ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Plus className="h-3.5 w-3.5" />
-            )}
-            용어 추가
-          </Button>
-          <p className="w-full text-[10px] text-muted-foreground sm:w-auto sm:ml-1 sm:mb-2">
-            라이브러리와 이 작업에 동시에 반영 · 기존 번역은 재번역 시 적용
-          </p>
-        </div>
-      </div>
+    <div className="fixed inset-0 z-50 flex flex-col bg-background">
+      <StepHeader
+        filename={outputFilename}
+        canUndo={undoable}
+        busy={busy || saving}
+        onUndo={undo}
+        onClose={onClose}
+      />
 
       {loading && (
-        <div className="flex items-center justify-center flex-1 text-muted-foreground gap-2">
-          <Loader2 className="w-5 h-5 animate-spin" />
+        <div className="flex flex-1 items-center justify-center gap-2 text-muted-foreground">
+          <Loader2 className="size-5 animate-spin" />
           섹션을 불러오는 중...
         </div>
       )}
 
-      {error && (
-        <div className="m-4 p-3 rounded-lg border border-destructive/30 bg-destructive/10 text-sm text-destructive flex items-center gap-2">
-          <AlertTriangle className="w-4 h-4" />
+      {error && !loading && (
+        <div className="m-4 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+          <AlertTriangle className="size-4" />
           {error}
+          <Button variant="outline" size="sm" className="ml-auto" onClick={() => void load()}>
+            다시 시도
+          </Button>
         </div>
       )}
 
       {!loading && !error && (
-        <div className="flex flex-1 min-h-0">
-          {/* 사이드바: 슬라이드 목록 */}
-          <nav className="w-40 shrink-0 border-r overflow-y-auto py-2">
-            {slideGroups.map((g) => {
-              const active = g.slide === activeSlide;
-              return (
-                <button
-                  key={g.slide}
-                  onClick={() => setActiveSlide(g.slide)}
-                  className={`w-full text-left px-3 py-2 border-l-2 transition-colors ${
-                    active
-                      ? "border-primary bg-primary/10"
-                      : "border-transparent hover:bg-muted/50"
-                  }`}
-                >
-                  <div className="flex items-center gap-1.5">
-                    <span
-                      className={`text-xs font-bold ${
-                        active ? "text-primary" : "text-muted-foreground"
-                      }`}
-                    >
-                      S{g.slide}
-                    </span>
-                    {g.flagged > 0 && (
-                      <span className="text-[10px] text-warning">⚠️{g.flagged}</span>
-                    )}
-                    {g.edited > 0 && (
-                      <span className="text-[10px] text-success">✎{g.edited}</span>
-                    )}
-                  </div>
-                  {g.title && (
-                    <div className="text-[11px] text-muted-foreground truncate mt-0.5">
-                      {g.title}
-                    </div>
-                  )}
-                  <div className="text-[10px] text-muted-foreground/70">
-                    섹션 {g.items.length}
-                  </div>
-                </button>
-              );
-            })}
-          </nav>
+        <div className="flex min-h-0 flex-1">
+          <SlideRail
+            resolved={total - remaining}
+            total={total}
+            slides={slides}
+            doneSlides={doneSlides}
+            activeSlide={current?.slide ?? null}
+            allCount={allBlocks.length}
+            onSelectSlide={selectSlide}
+            onShowAll={() => dispatch({ type: "mode", mode: "list" })}
+          />
 
-          {/* 본문: 선택된 슬라이드의 조각만 — 반응형 그리드 (2~4열, 짝수) */}
-          <div className="flex-1 overflow-y-auto px-4 py-3">
-            {activeGroup && (
-              <div className="flex items-center gap-2 mb-3">
-                <span className="text-xs font-bold text-primary bg-primary/10 rounded px-2 py-1">
-                  S{activeGroup.slide}
-                </span>
-                {activeGroup.title && (
-                  <h3 className="text-sm font-bold truncate">{activeGroup.title}</h3>
-                )}
-                <span className="text-xs text-muted-foreground">
-                  섹션 {activeGroup.items.length}개
-                </span>
-              </div>
-            )}
-
-            <div className="review-grid">
-              {activeGroup?.items.map((frag) => (
-                <FragmentCard
-                  key={frag.index}
-                  frag={frag}
-                  span={cardSpan(frag, editingIndex === frag.index)}
-                  editing={editingIndex === frag.index}
-                  busy={busyIndex === frag.index}
-                  editText={editText}
+          <div className="flex min-w-0 flex-1 flex-col">
+            {queueState.mode === "list" ? (
+              <FragmentList
+                blocks={allBlocks}
+                resolved={queueState.resolved}
+                onOpen={(key) => dispatch({ type: "pin", key })}
+                onBack={() => dispatch({ type: "mode", mode: "queue" })}
+              />
+            ) : partialCandidates.length > 0 ? (
+              <PartialMatchCard
+                candidates={partialCandidates}
+                selected={selectedPartial}
+                busy={applyingPartial}
+                onToggle={(index) =>
+                  setSelectedPartial((currentSelection) => {
+                    const next = new Set(currentSelection);
+                    if (next.has(index)) next.delete(index);
+                    else next.add(index);
+                    return next;
+                  })
+                }
+                onApply={applySelectedPartial}
+                onSkip={() => receivePartials([])}
+              />
+            ) : complete && !reopened ? (
+              <DoneScreen
+                edited={outcomes.filter((outcome) => outcome === "applied").length}
+                skipped={outcomes.filter((outcome) => outcome === "skipped").length}
+                saving={saving}
+                onSave={save}
+                onReopen={() => setReopened(true)}
+              />
+            ) : current && subject ? (
+              <div key={current.key} className="review-item-enter flex min-h-0 flex-1 flex-col">
+                <QueueItem
+                  block={current}
+                  finding={currentFinding}
+                  subject={subject}
+                  suggestion={suggestion}
+                  proposal={proposalFor?.key === current.key ? proposalFor.response : null}
+                  proposalPending={pendingKey === current.key}
+                  position={queueState.cursor + 1}
+                  total={total}
+                  handled={current.key in queueState.resolved}
+                  busy={busy}
+                  editor={queueState.editor}
+                  editTexts={editTexts}
+                  instruction={instruction}
                   propagate={propagate}
-                  onEditTextChange={setEditText}
+                  onEditTextChange={(index, value) =>
+                    setEditTexts((previous) => ({ ...previous, [index]: value }))
+                  }
+                  onInstructionChange={setInstruction}
                   onPropagateChange={setPropagate}
-                  onStartEdit={() => startEdit(frag)}
-                  onCancelEdit={() => setEditingIndex(null)}
-                  onPreviewManual={() => previewEdit(frag)}
-                  onRetranslate={(instruction) => retranslate(frag, instruction)}
-                  onIgnore={() => ignore(frag)}
+                  onPrevious={() => dispatch({ type: "move", delta: -1 })}
+                  onNext={() => dispatch({ type: "move", delta: 1 })}
+                  onEditor={setEditor}
+                  onApplySuggestion={applySuggestion}
+                  onApplyEdits={applyEdits}
+                  onRetranslate={retranslate}
+                  onApplyProposal={applyProposal}
+                  onCancelProposal={() => setEditor("none")}
+                  onSkip={skip}
                 />
-              ))}
-            </div>
-
-            {activeGroup && activeGroup.items.length === 0 && (
-              <div className="text-center py-16 text-muted-foreground text-sm">
-                이 슬라이드에 섹션이 없습니다.
               </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {proposal && (
-        <div className="absolute inset-0 z-20 bg-background/75 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-2xl rounded-xl border bg-card shadow-xl p-4 space-y-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h3 className="font-bold">수정 후보 비교</h3>
-                <p className="text-xs text-muted-foreground">
-                  색상과 강조를 확인한 뒤 초안에 적용하세요.
-                </p>
-              </div>
-              <Button variant="ghost" size="icon-sm" onClick={() => setProposal(null)}>
-                <X className="w-4 h-4" />
-              </Button>
-            </div>
-            <div className="rounded-lg border bg-muted/30 p-3">
-              <p className="text-[11px] font-bold text-muted-foreground mb-1">원문</p>
-              <p className="text-sm leading-snug">{proposalFragment?.source ?? ""}</p>
-            </div>
-            <div className="grid sm:grid-cols-2 gap-3">
-              <div className="rounded-lg bg-muted/50 p-3">
-                <p className="text-[11px] font-bold text-muted-foreground mb-1">현재 번역</p>
-                <p className="text-sm">{proposal.old_target}</p>
-              </div>
-              <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
-                <p className="text-[11px] font-bold text-muted-foreground mb-1">수정 후보 · 색상 미리보기</p>
-                <StyledText segments={proposal.style_segments} fallback={proposal.target} />
-              </div>
-            </div>
-            <div className="flex flex-wrap gap-2 text-xs">
-              <span className="rounded-full bg-muted px-2 py-1">
-                서식 {styleStatusLabel(proposal.style_status)}
-              </span>
-              {proposal.changed_indices.length > 1 && (
-                <span className="rounded-full bg-info/10 text-info px-2 py-1">
-                  동일 문구 {proposal.changed_indices.length}곳
-                </span>
-              )}
-              {proposal.over_budget && (
-                <span className="rounded-full bg-destructive/10 text-destructive px-2 py-1">
-                  예상 박스 용량 초과
-                </span>
-              )}
-            </div>
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setProposal(null)}>취소</Button>
-              <Button onClick={applyProposal} disabled={busyIndex === proposal.index}>
-                {busyIndex === proposal.index && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
-                적용
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {partialCandidates.length > 0 && !proposal && (
-        <div className="absolute bottom-4 left-1/2 z-10 w-[min(680px,calc(100%-2rem))] -translate-x-1/2 rounded-xl border bg-card shadow-xl p-4">
-          <div className="flex items-start justify-between gap-3 mb-3">
-            <div>
-              <h3 className="text-sm font-bold">부분 일치 문구도 변경할까요?</h3>
-              <p className="text-xs text-muted-foreground">
-                문장 구조가 다른 위치는 원문을 확인하고 필요한 항목만 선택하세요.
-              </p>
-              {partialCandidates[0] && (
-                <p className="mt-1 text-xs font-medium">
-                  &ldquo;{partialCandidates[0].old_phrase}&rdquo; → &ldquo;
-                  {partialCandidates[0].new_phrase || "(삭제)"}&rdquo;
-                </p>
-              )}
-            </div>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              disabled={applyingPartial}
-              onClick={() => setPartialCandidates([])}
-            >
-              <X className="w-4 h-4" />
-            </Button>
-          </div>
-          <div className="max-h-48 overflow-y-auto space-y-2">
-            {partialCandidates.map((candidate) => (
-              <label key={candidate.index} className="flex gap-2 rounded-lg bg-muted/50 p-2 text-xs">
-                <input
-                  type="checkbox"
-                  checked={selectedPartial.has(candidate.index)}
-                  disabled={applyingPartial}
-                  onChange={(event) => {
-                    setSelectedPartial((current) => {
-                      const next = new Set(current);
-                      if (event.target.checked) next.add(candidate.index);
-                      else next.delete(candidate.index);
-                      return next;
-                    });
-                  }}
-                />
-                <span className="min-w-0 space-y-0.5">
-                  <span className="block text-muted-foreground">
-                    <b className="text-foreground">S{candidate.slide}</b>
-                    {candidate.is_note && " · 발표자 노트"} · 원문: {candidate.source}
-                  </span>
-                  <span className="block">{candidate.target}</span>
-                  <span className="block text-primary">→ {candidate.proposed_target}</span>
-                </span>
-              </label>
-            ))}
-          </div>
-          <div className="flex justify-end gap-2 mt-3">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={applyingPartial}
-              onClick={() => setPartialCandidates([])}
-            >
-              건너뛰기
-            </Button>
-            <Button
-              size="sm"
-              onClick={applySelectedPartial}
-              disabled={applyingPartial || selectedPartial.size === 0}
-            >
-              {applyingPartial && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {applyingPartial ? "적용 중" : `선택한 ${selectedPartial.size}건 적용`}
-            </Button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function styleStatusLabel(status: string): string {
-  switch (status) {
-    case "preserved": return "보존됨";
-    case "partial": return "일부 확인 필요";
-    case "dropped": return "단색 대체";
-    default: return "단일 서식";
-  }
-}
-
-const LIGHT_REVIEW_BACKGROUND_LUMINANCE = 0.98;
-const DARK_REVIEW_BACKGROUND_LUMINANCE = 0.03;
-const MIN_REVIEW_TEXT_CONTRAST = 4.5;
-
-function relativeLuminance(color: string): number | null {
-  const match = color.match(/^#([0-9a-f]{6})$/i);
-  if (!match) return null;
-
-  const channels = match[1].match(/.{2}/g)?.map((value) => {
-    const srgb = Number.parseInt(value, 16) / 255;
-    return srgb <= 0.04045
-      ? srgb / 12.92
-      : ((srgb + 0.055) / 1.055) ** 2.4;
-  });
-  if (!channels || channels.length !== 3) return null;
-
-  return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
-}
-
-function contrastRatio(first: number, second: number): number {
-  const lighter = Math.max(first, second);
-  const darker = Math.min(first, second);
-  return (lighter + 0.05) / (darker + 0.05);
-}
-
-function reviewColorContrast(color: string | null): {
-  lowOnLight: boolean;
-  lowOnDark: boolean;
-} {
-  if (!color) return { lowOnLight: false, lowOnDark: false };
-  const luminance = relativeLuminance(color);
-  if (luminance === null) return { lowOnLight: false, lowOnDark: false };
-
-  return {
-    lowOnLight:
-      contrastRatio(luminance, LIGHT_REVIEW_BACKGROUND_LUMINANCE) <
-      MIN_REVIEW_TEXT_CONTRAST,
-    lowOnDark:
-      contrastRatio(luminance, DARK_REVIEW_BACKGROUND_LUMINANCE) <
-      MIN_REVIEW_TEXT_CONTRAST,
-  };
-}
-
-function StyledText({ segments, fallback }: { segments: StyleSegment[]; fallback: string }) {
-  if (segments.length === 0) return <span className="text-sm">{fallback}</span>;
-  return (
-    <span className="text-sm leading-snug">
-      {segments.map((segment, index) => {
-        const contrast = reviewColorContrast(segment.color);
-        return (
-          <span
-            key={`${index}-${segment.group_index}`}
-            className="review-style-color"
-            data-low-contrast-light={contrast.lowOnLight || undefined}
-            data-low-contrast-dark={contrast.lowOnDark || undefined}
-            style={{
-              "--review-original-color": segment.color ?? "var(--foreground)",
-              fontWeight: segment.bold ? 700 : undefined,
-              fontStyle: segment.italic ? "italic" : undefined,
-            } as CSSProperties}
-            title={segment.color ?? (segment.scheme ? `테마 색상: ${segment.scheme}` : undefined)}
-          >
-            {segment.text}
-          </span>
-        );
-      })}
-    </span>
-  );
-}
-
-interface FragmentCardProps {
-  frag: FragmentItem;
-  span: CardSpan;
-  editing: boolean;
-  busy: boolean;
-  editText: string;
-  propagate: boolean;
-  onEditTextChange: (v: string) => void;
-  onPropagateChange: (v: boolean) => void;
-  onStartEdit: () => void;
-  onCancelEdit: () => void;
-  onPreviewManual: () => void;
-  onRetranslate: (instruction?: string) => void;
-  onIgnore: () => void;
-}
-
-function FragmentCard({
-  frag,
-  span,
-  editing,
-  busy,
-  editText,
-  propagate,
-  onEditTextChange,
-  onPropagateChange,
-  onStartEdit,
-  onCancelEdit,
-  onPreviewManual,
-  onRetranslate,
-  onIgnore,
-}: FragmentCardProps) {
-  const overflow = isOverflow(frag);
-  // long/편집 = 원문|번역 2단 대조. short/med = 번역 크게 + 원문 흐리게.
-  const twoCol = span === "long" || editing;
-
-  const [editMode, setEditMode] = useState<"manual" | "ai">("manual");
-  const [instruct, setInstruct] = useState("");
-
-  useEffect(() => {
-    if (!editing) {
-      setEditMode("manual");
-      setInstruct("");
-    }
-  }, [editing]);
-
-  const submitRetranslate = () => {
-    const trimmed = instruct.trim();
-    onRetranslate(trimmed || (overflow ? "더 짧게" : undefined));
-  };
-
-  return (
-    <div
-      className={`group relative glass-card rounded-lg border p-2.5 transition-colors hover:border-primary ${
-        span === "long"
-          ? "review-span-full"
-          : span === "med"
-          ? "review-span-2"
-          : ""
-      }`}
-    >
-      {/* hover action panel */}
-      {!editing && (
-        <div className="absolute top-1 right-1.5 hidden group-hover:flex gap-0.5 bg-card border rounded-lg p-0.5 shadow-md z-10">
-          <Button size="xs" variant="ghost" className="gap-1 h-6 px-1.5" onClick={onStartEdit}>
-            <Pencil className="w-3 h-3" />
-            수정
-          </Button>
-          {frag.findings.length > 0 && (
-            <Button
-              size="xs"
-              variant="ghost"
-              className="gap-1 h-6 px-1.5 text-muted-foreground"
-              disabled={busy}
-              onClick={onIgnore}
-            >
-              <Ban className="w-3 h-3" />
-              무시
-            </Button>
-          )}
-        </div>
-      )}
-
-      <div className="flex items-center gap-1.5 mb-1 text-[10px] font-semibold text-muted-foreground flex-wrap">
-        <span>{frag.is_note ? "발표자 노트" : `섹션 ${frag.shape}`}</span>
-        {frag.repeat_count > 1 && (
-          <span className="bg-muted rounded-full px-1.5 py-0.5">×{frag.repeat_count}</span>
-        )}
-        {frag.edited && (
-          <span className="text-success bg-success/10 rounded-full px-1.5 py-0.5">수정됨</span>
-        )}
-        {frag.style_status !== "single_style" && (
-          <span className={`rounded-full px-1.5 py-0.5 ${
-            frag.style_status === "preserved"
-              ? "text-success bg-success/10"
-              : "text-warning bg-warning/10"
-          }`}>
-            색상 {styleStatusLabel(frag.style_status)}
-          </span>
-        )}
-        {frag.findings.map((finding, i) => {
-          const s = badgeStyle(finding);
-          return (
-            <span key={i} className={`rounded-full px-1.5 py-0.5 ${s.cls}`}>
-              {s.label}
-            </span>
-          );
-        })}
-      </div>
-
-      {twoCol ? (
-        // 2단 대조 (긴 문단·편집 중)
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div>
-            {editing && (
-              <p className="text-[11px] font-bold text-muted-foreground mb-1">원문</p>
-            )}
-            <div className="text-sm text-foreground/70 leading-snug">{frag.source}</div>
-          </div>
-          {editing ? (
-            <div className="min-w-0">
-              <div className="flex gap-1 rounded-lg bg-muted p-1 mb-2" role="tablist" aria-label="수정 방식">
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={editMode === "manual"}
-                  disabled={busy}
-                  onClick={() => setEditMode("manual")}
-                  className={`flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
-                    editMode === "manual"
-                      ? "bg-card text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  직접 수정
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={editMode === "ai"}
-                  disabled={busy}
-                  onClick={() => setEditMode("ai")}
-                  className={`flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
-                    editMode === "ai"
-                      ? "bg-card text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  AI 재번역
-                </button>
-              </div>
-
-              {editMode === "manual" ? (
-                <div role="tabpanel">
-                  <Textarea
-                    value={editText}
-                    onChange={(e) => onEditTextChange(e.target.value)}
-                    className="min-h-[72px] text-sm"
-                    disabled={busy}
-                    autoFocus
-                  />
-                  <p className="mt-1 text-[10px] text-muted-foreground">
-                    번역문을 직접 고친 뒤 수정 후보를 확인합니다.
-                  </p>
-                </div>
-              ) : (
-                <div role="tabpanel" className="space-y-2">
-                  <div className="rounded-md bg-muted/50 px-2.5 py-2">
-                    <p className="text-[10px] font-bold text-muted-foreground mb-0.5">현재 번역</p>
-                    <p className="text-xs leading-snug">{frag.target}</p>
-                  </div>
-                  <input
-                    type="text"
-                    value={instruct}
-                    onChange={(e) => setInstruct(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !busy) submitRetranslate();
-                    }}
-                    placeholder="추가 요청사항 (선택) · 예: 더 격식있게, 존댓말로"
-                    disabled={busy}
-                    autoFocus
-                    className="w-full text-xs bg-card border rounded px-2.5 py-2 outline-none focus:border-primary disabled:opacity-50"
-                  />
-                  <p className="text-[10px] text-muted-foreground">
-                    요청사항을 비우면 원문을 기준으로 다시 번역합니다.
-                  </p>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="text-sm leading-snug">
-              <StyledText segments={frag.style_segments} fallback={frag.target} />
-            </div>
-          )}
-        </div>
-      ) : (
-        // 컴팩트 (짧은·중간): 번역 크게, 원문 흐리게 아래
-        <div>
-          <div className="text-sm leading-snug">
-            <StyledText segments={frag.style_segments} fallback={frag.target} />
-          </div>
-          <div className="text-[11px] text-foreground/45 leading-snug mt-0.5">
-            {frag.source}
-          </div>
-        </div>
-      )}
-
-      {frag.findings.map((finding, i) => (
-        <div
-          key={i}
-          className="mt-1.5 text-[11px] text-muted-foreground bg-muted/50 rounded px-2 py-1"
-        >
-          {finding.description}
-          {finding.suggested_fix && (
-            <span className="text-foreground"> · 제안: {finding.suggested_fix}</span>
-          )}
-        </div>
-      ))}
-
-      {frag.length_budget !== null && !frag.is_note && (
-        <div className="mt-1 text-[10px] text-muted-foreground">
-          📐 {frag.length_budget}자 · {frag.target.length}자
-          {overflow && <span className="text-destructive font-semibold"> (초과)</span>}
-        </div>
-      )}
-
-      {/* 직접 수정과 AI 재번역이 공유하는 적용 옵션/액션 바 */}
-      {editing && (
-        <div className="mt-2 flex gap-1.5 flex-wrap items-center">
-          <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground mr-auto">
-            <input
-              type="checkbox"
-              checked={propagate}
-              onChange={(e) => onPropagateChange(e.target.checked)}
-              className="accent-primary"
-            />
-            동일 문구 함께 적용
-          </label>
-          <Button size="xs" variant="outline" disabled={busy} onClick={onCancelEdit}>
-            취소
-          </Button>
-          <Button
-            size="xs"
-            className="gap-1"
-            disabled={busy}
-            onClick={editMode === "manual" ? onPreviewManual : submitRetranslate}
-          >
-            {busy ? (
-              <Loader2 className="w-3 h-3 animate-spin" />
-            ) : editMode === "manual" ? (
-              <Check className="w-3 h-3" />
             ) : (
-              <RefreshCw className="w-3 h-3" />
+              <div className="flex flex-1 flex-col items-center justify-center gap-2 px-7 text-center">
+                <CheckCircle2 className="size-10 text-success" />
+                <p className="text-lg font-bold">확인이 필요한 항목이 없습니다.</p>
+                <p className="text-[13px] text-muted-foreground">
+                  번역 결과를 그대로 저장하거나 창을 닫으세요.
+                </p>
+              </div>
             )}
-            {editMode === "manual" ? "확인" : "AI 번역"}
-          </Button>
+
+            <FinishBar
+              remaining={remaining}
+              dirty={dirty}
+              saving={saving}
+              busy={busy}
+              onSave={save}
+              onSkipAll={skipAllRemaining}
+            />
+          </div>
+
+          <GlossaryPane
+            jobId={jobId}
+            disabled={busy || saving}
+            itemSource={current?.items.map((item) => item.source).join(" ") ?? ""}
+            onRegistered={refresh}
+          />
         </div>
       )}
     </div>

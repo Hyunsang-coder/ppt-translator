@@ -19,6 +19,7 @@ from api import (
     generate_output_filename,
 )
 from src.core.ppt_parser import PPTParser
+from src.services.consistency_sweep import Finding
 from src.services.job_manager import JobState, JobType, get_job_manager
 from src.services.review_session import ReviewSession
 from src.utils.config import get_settings
@@ -538,6 +539,129 @@ class TestReviewEndpoints:
             json={"expected_revision": 0},
         )
         assert response.status_code == 409
+
+    def test_fragments_expose_the_container(self, client, review_job):
+        """The queue groups a wrapped sentence by container, not by shape index."""
+        fragment = client.get(
+            f"/api/v1/jobs/{review_job.id}/fragments"
+        ).json()["fragments"][0]
+        assert fragment["container_id"]
+        assert fragment["container_kind"] == "textbox"
+
+    def test_block_edit_applies_as_one_revision(self, client, review_job):
+        """A wrapped sentence is one review item, so it must apply atomically."""
+        with patch("api._record_edit"):
+            response = client.post(
+                f"/api/v1/jobs/{review_job.id}/review/block",
+                json={"edits": {"0": "NEW"}, "expected_revision": 0},
+            )
+        assert response.status_code == 200
+        assert response.json()["changed_indices"] == [0]
+        assert response.json()["revision"] == 1
+        assert review_job.review_session.translated_texts[0] == "NEW"
+        # Staging never changes the published download.
+        assert review_job.output_file.getvalue() == b"published-before-review"
+
+    def test_stale_block_edit_returns_conflict(self, client, review_job):
+        review_job.review_session.apply_edit(0, "OTHER")
+        response = client.post(
+            f"/api/v1/jobs/{review_job.id}/review/block",
+            json={"edits": {"0": "NEW"}, "expected_revision": 0},
+        )
+        assert response.status_code == 409
+        assert review_job.review_session.translated_texts[0] == "OTHER"
+
+    def test_block_edit_rejects_out_of_range_index(self, client, review_job):
+        response = client.post(
+            f"/api/v1/jobs/{review_job.id}/review/block",
+            json={"edits": {"99": "NEW"}, "expected_revision": 0},
+        )
+        assert response.status_code == 400
+        assert review_job.review_session.translated_texts[0] == "OLD"
+
+    def test_fragments_expose_output_filename(self, client, review_job):
+        """The review header names the file without downloading it first."""
+        response = client.get(f"/api/v1/jobs/{review_job.id}/fragments")
+        assert response.status_code == 200
+        assert response.json()["output_filename"] == "review.pptx"
+
+    @staticmethod
+    def _flag(review_job, finding_type: str = "terminology.violation") -> None:
+        review_job.review_session.findings = [
+            Finding(
+                type=finding_type, severity="major", description="x",
+                location={"slide": 1, "shape": 0, "paragraph": 0},
+                segment={"source": "원문", "output": "OLD"}, ordinal=1,
+                fragment_index=0,
+            )
+        ]
+
+    def test_dismiss_then_restore_round_trips(self, client, review_job):
+        """Skipping in the queue is one keystroke, so it has to be undoable."""
+        self._flag(review_job)
+        entry = {"index": 0, "finding_type": "terminology.violation"}
+
+        with patch("api._record_edit") as record:
+            response = client.post(
+                f"/api/v1/jobs/{review_job.id}/review/dismissals",
+                json={"action": "dismiss", "entries": [entry]},
+            )
+        assert response.status_code == 200
+        assert response.json()["changed"] == [entry]
+        assert record.call_count == 1
+        assert client.get(
+            f"/api/v1/jobs/{review_job.id}/fragments"
+        ).json()["fragments"][0]["findings"] == []
+
+        response = client.post(
+            f"/api/v1/jobs/{review_job.id}/review/dismissals",
+            json={"action": "restore", "entries": [entry]},
+        )
+        assert response.status_code == 200
+        assert response.json()["changed"] == [entry]
+        findings = client.get(
+            f"/api/v1/jobs/{review_job.id}/fragments"
+        ).json()["fragments"][0]["findings"]
+        assert [f["type"] for f in findings] == ["terminology.violation"]
+
+    def test_dismissal_reports_only_real_changes(self, client, review_job):
+        """Undo must target what actually changed, not what was sent."""
+        self._flag(review_job)
+        entries = [
+            {"index": 0, "finding_type": "terminology.violation"},
+            {"index": 0, "finding_type": "terminology.violation"},  # duplicate
+            {"index": 99, "finding_type": "fit.overflow"},  # out of range
+        ]
+        with patch("api._record_edit"):
+            response = client.post(
+                f"/api/v1/jobs/{review_job.id}/review/dismissals",
+                json={"action": "dismiss", "entries": entries},
+            )
+        assert response.status_code == 200
+        assert response.json()["changed"] == [entries[0]]
+
+    def test_dismissal_leaves_draft_and_revision_alone(self, client, review_job):
+        """Dismissals carry no expected_revision because they cannot conflict."""
+        self._flag(review_job)
+        with patch("api._record_edit"):
+            response = client.post(
+                f"/api/v1/jobs/{review_job.id}/review/dismissals",
+                json={"action": "dismiss", "entries": [
+                    {"index": 0, "finding_type": "terminology.violation"},
+                ]},
+            )
+        assert response.json()["revision"] == 0
+        assert response.json()["dirty"] is False
+        assert review_job.review_session.translated_texts[0] == "OLD"
+
+    def test_dismissal_requires_a_review_session(self, client):
+        response = client.post(
+            "/api/v1/jobs/missing-job/review/dismissals",
+            json={"action": "dismiss", "entries": [
+                {"index": 0, "finding_type": "fit.overflow"},
+            ]},
+        )
+        assert response.status_code == 404
 
     def test_failed_commit_keeps_published_file(self, client, review_job):
         review_job.review_session.apply_edit(0, "NEW")

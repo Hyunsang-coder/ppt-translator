@@ -488,30 +488,18 @@
   transform: translateY(0);
 }
 
-/* Review screen fragment grid — 반응형 2~4열(짝수), 최대 4열.
-   짧은 조각은 1칸, 중간은 2칸, 긴 문단·편집 중은 전체 폭을 차지한다. */
-.review-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
-  align-items: start;
+/* 큐 항목 전환 — 넘어갔다는 신호만 주고 처리 속도를 방해하지 않을 만큼만 짧게. */
+@keyframes review-item-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
 }
-@media (min-width: 900px) {
-  .review-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+.review-item-enter {
+  animation: review-item-in 140ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .review-item-enter {
+    animation: none;
   }
-}
-/* 좁은 창(2열)에선 중간 조각도 1칸 — span 2면 전체 폭이 돼버리니까. */
-.review-span-2 {
-  grid-column: span 1;
-}
-@media (min-width: 900px) {
-  .review-span-2 {
-    grid-column: span 2;
-  }
-}
-.review-span-full {
-  grid-column: 1 / -1;
 }
 
 /* PPT 글자색은 실제 파일에는 그대로 보존하되, 검토 카드 배경과 대비가
