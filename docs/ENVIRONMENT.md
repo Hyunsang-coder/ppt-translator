@@ -95,8 +95,8 @@ curl -X POST http://localhost:8000/api/v1/jobs \
   -F "provider=anthropic" \
   -F "model=claude-sonnet-5"
 
-# Stream job progress
-curl -N http://localhost:8000/api/v1/jobs/{job_id}/events
+# Poll job progress
+curl http://localhost:8000/api/v1/jobs/{job_id}
 
 # Download result
 curl http://localhost:8000/api/v1/jobs/{job_id}/result -o translated.pptx

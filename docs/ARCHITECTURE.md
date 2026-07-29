@@ -13,11 +13,9 @@
   - `GET /api/v1/models`: Available models list
   - `GET /api/v1/languages`: Supported languages list
   - `POST /api/v1/jobs`: Create translation job
-  - `GET /api/v1/jobs/{job_id}`: Get job status
-  - `GET /api/v1/jobs/{job_id}/events`: SSE progress stream
+  - `GET /api/v1/jobs/{job_id}`: Get job status (polled for progress; see [ADR-0001](adr/0001-poll-job-status-instead-of-sse.md))
   - `GET /api/v1/jobs/{job_id}/result`: Download result
   - `DELETE /api/v1/jobs/{job_id}`: Cancel job
-  - `POST /api/v1/translate`: Synchronous translation (legacy)
   - `POST /api/v1/extract`: Text extraction
   - `POST /api/v1/summarize`: Context summary generation
   - `POST /api/v1/generate-instructions`: Translation style instructions
@@ -40,7 +38,7 @@
   - `JobManager`: In-memory store (max 100 jobs, 1h TTL; periodic background cleanup started in the FastAPI lifespan)
   - `Job`: State tracking (pending/running/completed/failed/cancelled)
   - Concurrency: `running_semaphore` + `try_create_job()` atomic admission (429 on overflow)
-  - Thread-safe: `add_event()` uses `call_soon_threadsafe` for worker→event-loop bridging
+  - Thread-safe: `add_event()` is a plain deque append (atomic under the GIL, no concurrent iterator)
   - Terminal state guards: `complete_job`/`fail_job` skip if already CANCELLED
 
 ## Translation Chain (`src/chains/`)

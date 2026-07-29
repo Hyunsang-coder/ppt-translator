@@ -73,8 +73,8 @@ Monotonic `TranslationProgress.percent`:
 - Frontend: API call-time error handling, no pre-flight health checks
 
 ## Thread Safety
-- Translation in thread pool (`run_in_executor`), SSE/job state on asyncio event-loop
-- `Job.add_event()`: `call_soon_threadsafe` bridges worker→event-loop
+- Translation in thread pool (`run_in_executor`), job state on asyncio event-loop
+- `Job.add_event()`: plain deque append, safe from worker threads (see [ADR-0001](adr/0001-poll-job-status-instead-of-sse.md))
 - `Job._state_lock`: protects terminal state transitions
 - `Job.review_lock`: serializes proposal apply, undo, partial propagation, and final commit
 - Review revision checks reject stale browser proposals with HTTP 409

@@ -4,6 +4,8 @@
 
 This file is the single source of truth for project-level agent instructions. `AGENTS.md` intentionally references this file instead of duplicating instructions. Update this file when project commands, agent roles, or reference docs change.
 
+**This file and `docs/` describe the current state only — never past state.** Decisions, rationale, and "we used to do X" belong in [`docs/adr/`](docs/adr/README.md), one file per decision. When a change is significant enough that someone would later ask "why is it like this?", write an ADR and link it; do not append history here.
+
 ## Project Overview
 
 PPT 번역캣 — Tauri desktop app for PowerPoint translation (LangChain + OpenAI/Anthropic). The UI lives in `frontend/`, the desktop shell in `src-tauri/`, and the local Python sidecar uses `api.py` + `src/`. Preserves original formatting, glossary support, auto language detection, real-time progress via polling, and in-app auto-update from GitHub Releases.
@@ -46,6 +48,7 @@ TAURI_BUILD=1 cargo tauri build
 ## Reference Docs
 
 Detailed documentation in `docs/`:
+- [`docs/adr/`](docs/adr/README.md) — Architecture Decision Records: why the project is shaped this way, and what was replaced
 - [`docs/CICD.md`](docs/CICD.md) — CI/CD pipelines, Vercel bootstrap, desktop release commands
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — Backend/frontend structure, components, tests
 - [`docs/KEY_PATTERNS.md`](docs/KEY_PATTERNS.md) — Translation flow, job flow, text fit, thread safety, error handling

@@ -24,13 +24,17 @@ Analyze the current codebase and update CLAUDE.md to reflect the latest project 
    - **Key Patterns**: Document new patterns, update changed flows
    - **Libraries**: Sync with requirements.txt
 
-4. **Quality Checks**
+4. **Route Decisions to ADRs**
+   - CLAUDE.md and `docs/` describe the current state only. If a change carries rationale, a trade-off, or replaces an earlier approach, write `docs/adr/NNNN-english-slug.md` from `docs/adr/0000-template.md` and add a row to `docs/adr/README.md` — do not append history to CLAUDE.md.
+   - If a change reverses a decision already recorded, write a new ADR and mark the old one `대체됨 (ADR-NNNN)`. Never rewrite a merged ADR's body.
+
+5. **Quality Checks**
    - Remove references to deleted files/functions
    - Add documentation for new public APIs
    - Ensure code examples are accurate
    - Keep descriptions concise but complete
 
-5. **Output**
+6. **Output**
    - Show a summary of changes made
    - Do NOT commit automatically - let user review first
 
