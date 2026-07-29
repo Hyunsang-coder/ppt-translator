@@ -168,6 +168,12 @@ describe("buildQueue", () => {
     expect(buildQueue(fragments, { "s0/sh0#0": "applied" })).toHaveLength(1);
   });
 
+  it("takes in an unflagged block the user opened from the full list", () => {
+    const fragments = [fragment({ index: 0, container_id: "s0/sh0" })];
+
+    expect(buildQueue(fragments, {}, ["s0/sh0#0"])).toHaveLength(1);
+  });
+
   it("speaks about the worst finding in the block", () => {
     const [block] = buildBlocks([
       fragment({ index: 0, paragraph: 0, source: "wrapped", findings: [minor] }),
@@ -334,6 +340,26 @@ describe("queueReducer", () => {
     expect(state.resolved).toEqual({ b: "skipped" });
     expect(state.log).toEqual([later]);
     expect(focusedKey(state)).toBe("a");
+  });
+
+  it("focuses a block pulled in from the full list once it joins the queue", () => {
+    // A pinned block has no findings, so it only enters `order` on the next
+    // sync — the focus has to wait for it.
+    const pinned = reduce(synced, { type: "pin", key: "d" });
+    expect(pinned.pinned).toEqual(["d"]);
+    expect(pinned.mode).toBe("queue");
+
+    const state = reduce(pinned, { type: "sync", keys: [...KEYS, "d"] });
+
+    expect(focusedKey(state)).toBe("d");
+    expect(state.pendingFocus).toBeNull();
+  });
+
+  it("just moves the cursor when the pinned block is already queued", () => {
+    const state = reduce(synced, { type: "pin", key: "c" });
+
+    expect(state.pinned).toEqual([]);
+    expect(focusedKey(state)).toBe("c");
   });
 
   it("leaves the state alone when there is nothing to undo", () => {

@@ -292,9 +292,9 @@ python3 scripts/analyze_fragments.py <덱.pptx> --notes --list-blocks
 | 3 ✅ | 직접 고치기 / AI 재번역 인플레이스 (블록 일괄 적용 API, 다문단은 게이지 1개) |
 | 4 ✅ | `partial_candidates` 큐 카드 (플로팅 시트 제거) |
 | 5 ✅ | FinishBar + 완료 화면 + `PPT 저장` + `남은 항목 모두 넘기기`(벌크) |
-| 6 | GlossaryPane (헤더 폼 이관, 롤백 로직 유지) |
-| 7 | 전체 목록 모드 (블록 단위 2열 대조표) |
-| 8 | 키보드 단축키 + 140ms 전환 + `.review-grid` CSS 삭제 |
+| 6 ✅ | GlossaryPane (헤더 폼 이관, 롤백 로직 유지) |
+| 7 ✅ | 전체 목록 모드 (블록 단위 2열 대조표) |
+| 8 ✅ | 키보드 단축키 + 140ms 전환 + `.review-grid` CSS 삭제 |
 
 **Phase 0 검증**: `npx tsc --noEmit` 통과 · `npm test` 36 passed (신규 24) · `npm run build` 성공 ·
 `pytest tests/ -q` 343 passed. 병합 규칙은 Step 2 실측 반영본이며 `scripts/analyze_fragments.py`와
@@ -343,6 +343,18 @@ Phase 2에서 **넣지 않은 것**:
   `되돌리기` 한 번에 전부 복구. 엔드포인트의 entries 상한은 2000건
 - 완료 화면 통계는 `고친 곳 / 그대로 둔 곳`까지만 낸다. 리듀서의 outcome이 `applied`/`skipped`
   두 가지라 디자인의 `직접 수정 / AI 재번역` 구분은 데이터가 없다 — 굳이 만들지 않았다
+
+**Phase 6·7·8 검증**: `npx tsc --noEmit` 통과 · `npm test` 41 passed · `npm run build` 성공 ·
+`pytest tests/ -q` 344 passed.
+- GlossaryPane: 활성 용어집 항목을 나열하고 **현재 항목 원문에 등장하는 용어를 위로** 올린다.
+  본문에서 문구를 드래그 선택하면 원문 칸이 채워진다 (60자 초과는 무시 — 읽으려고 그은 선택)
+- 전체 목록 모드: 큐에 **없는 문구도 열 수 있어야** 한다 (재설계 전 타일 그리드는 아무 조각이나
+  편집할 수 있었다). 리듀서에 `pin`을 넣어 검출 없는 블록도 큐에 넣는다. `pin`은 다음 `sync`에서
+  `order`에 들어오므로 `pendingFocus`로 포커스를 예약한다
+- 단축키: `⏎` 추천 적용 · `S` 이대로 두기 · `E` 직접 고치기 · `R` AI · `←/→` 이동 ·
+  `⌘/Ctrl+Enter` 편집 적용 · `Esc` 편집취소→목록복귀→화면닫기. 입력 필드에 포커스가 있으면
+  전부 가로채지 않는다. 힌트 칩은 실제로 동작하는 `⏎`/`S`에만 붙였다
+- 항목 전환 140ms `ease-out` (`.review-item-enter`, `prefers-reduced-motion` 존중)
 
 **서식 미리보기 라벨** (Phase 2에서 정정, 실사용 피드백): `색상 미리보기`라는 고정 라벨이
 색이 없는 문단에서 "색이 안 나온다"로 읽힌다. 실제로는 `style_status`에 따라 보여주는 것이 다르다 —

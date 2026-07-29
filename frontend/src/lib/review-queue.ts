@@ -173,10 +173,18 @@ export function compareBlocks(a: ReviewBlock, b: ReviewBlock): number {
  */
 export function buildQueue(
   fragments: readonly FragmentItem[],
-  resolved: ResolvedMap
+  resolved: ResolvedMap,
+  /** Blocks the user opened from the full list, findings or not. */
+  pinned: readonly string[] = []
 ): ReviewBlock[] {
+  const opened = new Set(pinned);
   return buildBlocks(fragments)
-    .filter((block) => blockFindings(block).length > 0 || block.key in resolved)
+    .filter(
+      (block) =>
+        blockFindings(block).length > 0 ||
+        block.key in resolved ||
+        opened.has(block.key)
+    )
     .sort(compareBlocks);
 }
 
@@ -405,8 +413,12 @@ export interface QueueState {
   /** Queue order, frozen on first sight so handled items keep their place. */
   order: readonly string[];
   resolved: ResolvedMap;
+  /** Unflagged blocks the user pulled in from the full list. */
+  pinned: readonly string[];
   log: readonly ReviewLogEntry[];
   cursor: number;
+  /** A pin cannot focus until the next sync puts the block in `order`. */
+  pendingFocus: string | null;
   mode: ReviewMode;
   editor: EditorMode;
 }
@@ -414,8 +426,10 @@ export interface QueueState {
 export const initialQueueState: QueueState = {
   order: [],
   resolved: {},
+  pinned: [],
   log: [],
   cursor: 0,
+  pendingFocus: null,
   mode: "queue",
   editor: "none",
 };
@@ -425,6 +439,8 @@ export type QueueAction =
   | { type: "sync"; keys: readonly string[] }
   | { type: "move"; delta: number }
   | { type: "focus"; key: string }
+  /** Open a block from the full list, whether or not it has findings. */
+  | { type: "pin"; key: string }
   | { type: "resolve"; entry: ReviewLogEntry }
   /** Take back an optimistic `resolve` whose server call then failed. */
   | { type: "rollback"; entry: ReviewLogEntry }
@@ -457,12 +473,15 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
       // New findings (a partial apply can raise one) land at the end rather
       // than shuffling the item under the cursor.
       const order = [...kept, ...action.keys.filter((key) => !known.has(key))];
-      const focused = state.order[state.cursor];
+      const pending =
+        state.pendingFocus && incoming.has(state.pendingFocus) ? state.pendingFocus : null;
+      const focused = pending ?? state.order[state.cursor];
       const at = focused ? order.indexOf(focused) : -1;
       return {
         ...state,
         order,
         cursor: at >= 0 ? at : clamp(state.cursor, order.length - 1),
+        pendingFocus: pending ? null : state.pendingFocus,
       };
     }
     case "move":
@@ -475,6 +494,21 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
       const at = state.order.indexOf(action.key);
       if (at < 0) return state;
       return { ...state, cursor: at, mode: "queue", editor: "none" };
+    }
+    case "pin": {
+      const at = state.order.indexOf(action.key);
+      if (at >= 0) {
+        return { ...state, cursor: at, mode: "queue", editor: "none" };
+      }
+      return {
+        ...state,
+        pinned: state.pinned.includes(action.key)
+          ? state.pinned
+          : [...state.pinned, action.key],
+        pendingFocus: action.key,
+        mode: "queue",
+        editor: "none",
+      };
     }
     case "resolve": {
       const outcome: ReviewOutcome = action.entry.kind === "edit" ? "applied" : "skipped";

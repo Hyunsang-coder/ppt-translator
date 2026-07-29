@@ -15,7 +15,10 @@ interface SlideRailProps {
   slides: SlideProgress[];
   doneSlides: number;
   activeSlide: number | null;
+  /** Total blocks in the deck, for the link into the full list. */
+  allCount: number;
   onSelectSlide: (slide: number) => void;
+  onShowAll: () => void;
 }
 
 /** How far the queue has come and where the remaining work sits. */
@@ -25,7 +28,9 @@ export function SlideRail({
   slides,
   doneSlides,
   activeSlide,
+  allCount,
   onSelectSlide,
+  onShowAll,
 }: SlideRailProps) {
   const percent = total > 0 ? (resolved / total) * 100 : 0;
 
@@ -87,15 +92,20 @@ export function SlideRail({
           );
         })}
 
+        <div className="mx-2 my-2.5 h-px bg-border" />
         {doneSlides > 0 && (
-          <>
-            <div className="mx-2 my-2.5 h-px bg-border" />
-            <p className="flex items-center gap-2 px-2.5 py-1.5 text-xs text-muted-foreground">
-              <Check className="size-3.5 text-success" />
-              확인 끝난 슬라이드 {doneSlides}개
-            </p>
-          </>
+          <p className="flex items-center gap-2 px-2.5 py-1.5 text-xs text-muted-foreground">
+            <Check className="size-3.5 text-success" />
+            확인 끝난 슬라이드 {doneSlides}개
+          </p>
         )}
+        <button
+          type="button"
+          onClick={onShowAll}
+          className="px-2.5 py-1.5 text-left text-xs font-medium text-primary hover:underline"
+        >
+          전체 {allCount}개 문구 보기
+        </button>
       </div>
     </nav>
   );

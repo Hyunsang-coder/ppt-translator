@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { apiClient } from "@/lib/api-client";
@@ -9,19 +9,30 @@ import { useGlossaryStore } from "@/stores/glossary-store";
 import { Loader2, Plus } from "lucide-react";
 import { toast } from "sonner";
 
+/** Longer than this is a sentence the user highlighted to read, not a term. */
+const MAX_PICKED_TERM_CHARS = 60;
+
 interface GlossaryPaneProps {
   jobId: string;
   disabled: boolean;
+  /** Source text of the item on screen, used to float its terms to the top. */
+  itemSource: string;
   /** Findings are swept again after a term lands, so the queue must reload. */
   onRegistered: () => Promise<void>;
 }
 
 /** The glossary quick-add, moved out of the header into its own column. */
-export function GlossaryPane({ jobId, disabled, onRegistered }: GlossaryPaneProps) {
+export function GlossaryPane({
+  jobId,
+  disabled,
+  itemSource,
+  onRegistered,
+}: GlossaryPaneProps) {
   const [source, setSource] = useState("");
   const [target, setTarget] = useState("");
   const [busy, setBusy] = useState(false);
   const [glossaryId, setGlossaryId] = useState("");
+  const paneRef = useRef<HTMLElement | null>(null);
 
   const glossaries = useGlossaryStore((s) => s.glossaries);
   const activeGlossaryIds = useGlossaryStore((s) => s.activeGlossaryIds);
@@ -47,6 +58,41 @@ export function GlossaryPane({ jobId, disabled, onRegistered }: GlossaryPaneProp
     (total, glossary) => total + glossary.entries.length,
     0
   );
+
+  // Terms that appear in the item on screen come first — those are the ones
+  // the reviewer is deciding about right now.
+  const entries = useMemo(() => {
+    const haystack = itemSource.toLowerCase();
+    const seen = new Set<string>();
+    const all = activeGlossaries.flatMap((glossary) => glossary.entries);
+    const unique = all.filter((entry) => {
+      const key = glossaryTermKey(entry.source);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    return unique
+      .map((entry) => ({
+        entry,
+        hit: Boolean(entry.source) && haystack.includes(entry.source.toLowerCase()),
+      }))
+      .sort((a, b) => Number(b.hit) - Number(a.hit));
+  }, [activeGlossaries, itemSource]);
+
+  // Highlighting a phrase in the item fills the source box — the term is
+  // usually already on screen, and retyping it invites a typo.
+  useEffect(() => {
+    const pickSelection = () => {
+      const picked = window.getSelection()?.toString().trim() ?? "";
+      if (!picked || picked.length > MAX_PICKED_TERM_CHARS) return;
+      const anchor = window.getSelection()?.anchorNode ?? null;
+      // Selecting inside the pane itself (or its inputs) must not overwrite it.
+      if (anchor && paneRef.current?.contains(anchor)) return;
+      setSource(picked);
+    };
+    document.addEventListener("mouseup", pickSelection);
+    return () => document.removeEventListener("mouseup", pickSelection);
+  }, []);
 
   const register = async () => {
     const src = source.trim();
@@ -104,7 +150,10 @@ export function GlossaryPane({ jobId, disabled, onRegistered }: GlossaryPaneProp
   };
 
   return (
-    <aside className="flex w-[264px] shrink-0 flex-col border-l border-border bg-card">
+    <aside
+      ref={paneRef}
+      className="flex w-[264px] shrink-0 flex-col border-l border-border bg-card"
+    >
       <div className="border-b border-border px-4 pb-3.5 pt-4">
         <p className="text-[13px] font-bold">이 덱의 용어집</p>
         <p className="truncate text-xs text-muted-foreground">
@@ -114,8 +163,23 @@ export function GlossaryPane({ jobId, disabled, onRegistered }: GlossaryPaneProp
         </p>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-4 py-3 text-xs text-muted-foreground">
-        용어를 추가하면 이 작업의 검출을 다시 계산합니다.
+      <div className="flex flex-1 flex-col gap-2.5 overflow-y-auto px-4 py-3">
+        {entries.length === 0 && (
+          <p className="text-xs text-muted-foreground">
+            등록된 용어가 없습니다. 아래에서 추가하면 이 작업의 검출을 다시 계산합니다.
+          </p>
+        )}
+        {entries.map(({ entry, hit }) => (
+          <div
+            key={entry.id}
+            className={`border-b border-border/70 pb-2.5 ${
+              hit ? "-mx-2 rounded bg-primary/[0.06] px-2" : ""
+            }`}
+          >
+            <p className="text-[13px] font-semibold">{entry.source}</p>
+            <p className="text-[13px] text-muted-foreground">{entry.target}</p>
+          </div>
+        ))}
       </div>
 
       <div className="border-t border-border px-4 pb-4 pt-3">

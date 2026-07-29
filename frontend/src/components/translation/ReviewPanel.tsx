@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ApiError, apiClient } from "@/lib/api-client";
 import { DoneScreen } from "@/components/translation/review/DoneScreen";
 import { FinishBar } from "@/components/translation/review/FinishBar";
+import { FragmentList } from "@/components/translation/review/FragmentList";
 import { GlossaryPane } from "@/components/translation/review/GlossaryPane";
 import { PartialMatchCard } from "@/components/translation/review/PartialMatchCard";
 import { QueueItem } from "@/components/translation/review/QueueItem";
@@ -12,6 +13,7 @@ import { SlideRail, type SlideProgress } from "@/components/translation/review/S
 import { StepHeader } from "@/components/translation/review/StepHeader";
 import {
   blockFindings,
+  buildBlocks,
   buildQueue,
   initialQueueState,
   isReviewComplete,
@@ -101,9 +103,10 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
   }, [load]);
 
   const queue = useMemo(
-    () => buildQueue(fragments, queueState.resolved),
-    [fragments, queueState.resolved]
+    () => buildQueue(fragments, queueState.resolved, queueState.pinned),
+    [fragments, queueState.resolved, queueState.pinned]
   );
+  const allBlocks = useMemo(() => buildBlocks(fragments), [fragments]);
   const blocksByKey = useMemo(
     () => new Map(queue.map((block) => [block.key, block])),
     [queue]
@@ -415,6 +418,67 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
     }
   };
 
+  /**
+   * One key per action, but only while the queue itself has focus: typing an
+   * `s` into the editor must stay an `s`.
+   */
+  const handleKey = (event: KeyboardEvent) => {
+    const target = event.target as HTMLElement | null;
+    const typing =
+      target instanceof HTMLElement &&
+      (target.isContentEditable ||
+        ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
+
+    if (event.key === "Escape") {
+      if (queueState.editor !== "none" || proposalFor) setEditor("none");
+      else if (queueState.mode === "list") dispatch({ type: "mode", mode: "queue" });
+      else onClose();
+      return;
+    }
+    if (typing || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (loading || error || queueState.mode === "list") return;
+    if (partialCandidates.length > 0 || (complete && !reopened)) return;
+    if (!current) return;
+    const handled = current.key in queueState.resolved;
+
+    switch (event.key) {
+      case "Enter":
+        if (suggestion && !handled && queueState.editor === "none") {
+          event.preventDefault();
+          void applySuggestion();
+        }
+        break;
+      case "ArrowLeft":
+        dispatch({ type: "move", delta: -1 });
+        break;
+      case "ArrowRight":
+        dispatch({ type: "move", delta: 1 });
+        break;
+      default:
+        switch (event.key.toLowerCase()) {
+          case "s":
+            if (!handled) void skip();
+            break;
+          case "e":
+            setEditor("manual");
+            break;
+          case "r":
+            setEditor("ai");
+            break;
+        }
+    }
+  };
+
+  // The listener is registered once; the ref keeps it reading current state
+  // instead of the state it was created with.
+  const keyHandler = useRef(handleKey);
+  keyHandler.current = handleKey;
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => keyHandler.current(event);
+    window.addEventListener("keydown", listener);
+    return () => window.removeEventListener("keydown", listener);
+  }, []);
+
   const save = async () => {
     setSaving(true);
     try {
@@ -466,11 +530,20 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
             slides={slides}
             doneSlides={doneSlides}
             activeSlide={current?.slide ?? null}
+            allCount={allBlocks.length}
             onSelectSlide={selectSlide}
+            onShowAll={() => dispatch({ type: "mode", mode: "list" })}
           />
 
           <div className="flex min-w-0 flex-1 flex-col">
-            {partialCandidates.length > 0 ? (
+            {queueState.mode === "list" ? (
+              <FragmentList
+                blocks={allBlocks}
+                resolved={queueState.resolved}
+                onOpen={(key) => dispatch({ type: "pin", key })}
+                onBack={() => dispatch({ type: "mode", mode: "queue" })}
+              />
+            ) : partialCandidates.length > 0 ? (
               <PartialMatchCard
                 candidates={partialCandidates}
                 selected={selectedPartial}
@@ -495,36 +568,38 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
                 onReopen={() => setReopened(true)}
               />
             ) : current && subject ? (
-              <QueueItem
-                block={current}
-                finding={currentFinding}
-                subject={subject}
-                suggestion={suggestion}
-                proposal={proposalFor?.key === current.key ? proposalFor.response : null}
-                proposalPending={pendingKey === current.key}
-                position={queueState.cursor + 1}
-                total={total}
-                handled={current.key in queueState.resolved}
-                busy={busy}
-                editor={queueState.editor}
-                editTexts={editTexts}
-                instruction={instruction}
-                propagate={propagate}
-                onEditTextChange={(index, value) =>
-                  setEditTexts((previous) => ({ ...previous, [index]: value }))
-                }
-                onInstructionChange={setInstruction}
-                onPropagateChange={setPropagate}
-                onPrevious={() => dispatch({ type: "move", delta: -1 })}
-                onNext={() => dispatch({ type: "move", delta: 1 })}
-                onEditor={setEditor}
-                onApplySuggestion={applySuggestion}
-                onApplyEdits={applyEdits}
-                onRetranslate={retranslate}
-                onApplyProposal={applyProposal}
-                onCancelProposal={() => setEditor("none")}
-                onSkip={skip}
-              />
+              <div key={current.key} className="review-item-enter flex min-h-0 flex-1 flex-col">
+                <QueueItem
+                  block={current}
+                  finding={currentFinding}
+                  subject={subject}
+                  suggestion={suggestion}
+                  proposal={proposalFor?.key === current.key ? proposalFor.response : null}
+                  proposalPending={pendingKey === current.key}
+                  position={queueState.cursor + 1}
+                  total={total}
+                  handled={current.key in queueState.resolved}
+                  busy={busy}
+                  editor={queueState.editor}
+                  editTexts={editTexts}
+                  instruction={instruction}
+                  propagate={propagate}
+                  onEditTextChange={(index, value) =>
+                    setEditTexts((previous) => ({ ...previous, [index]: value }))
+                  }
+                  onInstructionChange={setInstruction}
+                  onPropagateChange={setPropagate}
+                  onPrevious={() => dispatch({ type: "move", delta: -1 })}
+                  onNext={() => dispatch({ type: "move", delta: 1 })}
+                  onEditor={setEditor}
+                  onApplySuggestion={applySuggestion}
+                  onApplyEdits={applyEdits}
+                  onRetranslate={retranslate}
+                  onApplyProposal={applyProposal}
+                  onCancelProposal={() => setEditor("none")}
+                  onSkip={skip}
+                />
+              </div>
             ) : (
               <div className="flex flex-1 flex-col items-center justify-center gap-2 px-7 text-center">
                 <CheckCircle2 className="size-10 text-success" />
@@ -545,7 +620,12 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
             />
           </div>
 
-          <GlossaryPane jobId={jobId} disabled={busy || saving} onRegistered={refresh} />
+          <GlossaryPane
+            jobId={jobId}
+            disabled={busy || saving}
+            itemSource={current?.items.map((item) => item.source).join(" ") ?? ""}
+            onRegistered={refresh}
+          />
         </div>
       )}
     </div>

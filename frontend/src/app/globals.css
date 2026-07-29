@@ -488,6 +488,20 @@
   transform: translateY(0);
 }
 
+/* 큐 항목 전환 — 넘어갔다는 신호만 주고 처리 속도를 방해하지 않을 만큼만 짧게. */
+@keyframes review-item-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+.review-item-enter {
+  animation: review-item-in 140ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .review-item-enter {
+    animation: none;
+  }
+}
+
 /* PPT 글자색은 실제 파일에는 그대로 보존하되, 검토 카드 배경과 대비가
    부족한 경우 화면에서만 기본 전경색으로 바꿔 번역문을 읽을 수 있게 한다. */
 .review-style-color {
