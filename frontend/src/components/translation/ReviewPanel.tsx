@@ -8,11 +8,6 @@ import { GlossaryPane } from "@/components/translation/review/GlossaryPane";
 import { QueueItem } from "@/components/translation/review/QueueItem";
 import { SlideRail, type SlideProgress } from "@/components/translation/review/SlideRail";
 import { StepHeader } from "@/components/translation/review/StepHeader";
-import { StyledText } from "@/components/translation/review/StyledText";
-import {
-  stylePreviewNote,
-  styleStatusLabel,
-} from "@/components/translation/review/finding-labels";
 import {
   blockFindings,
   buildQueue,
@@ -54,11 +49,16 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [proposal, setProposal] = useState<FragmentProposalResponse | null>(null);
+  // A re-translation belongs to the item it was made for: navigating away must
+  // not offer it for the next one.
+  const [proposalFor, setProposalFor] = useState<
+    { key: string; response: FragmentProposalResponse } | null
+  >(null);
+  const [pendingKey, setPendingKey] = useState<string | null>(null);
   const [partialCandidates, setPartialCandidates] = useState<PartialCandidate[]>([]);
   const [selectedPartial, setSelectedPartial] = useState<Set<number>>(new Set());
   const [applyingPartial, setApplyingPartial] = useState(false);
-  const [editText, setEditText] = useState("");
+  const [editTexts, setEditTexts] = useState<Record<number, string>>({});
   const [instruction, setInstruction] = useState("");
   const [propagate, setPropagate] = useState(true);
   const [queueState, dispatch] = useReducer(queueReducer, initialQueueState);
@@ -159,8 +159,13 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
   };
 
   const setEditor = (editor: EditorMode) => {
-    if (editor === "manual" && subject) setEditText(subject.target);
+    if (editor === "manual" && current) {
+      setEditTexts(
+        Object.fromEntries(current.items.map((item) => [item.index, item.target]))
+      );
+    }
     if (editor === "ai") setInstruction("");
+    if (editor === "none") setProposalFor(null);
     dispatch({ type: "editor", editor });
   };
 
@@ -234,72 +239,86 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
     }
   };
 
-  const previewEdit = async () => {
-    if (!subject) return;
-    setBusy(true);
+  const applyEdits = async () => {
+    if (!current) return;
+    const edits: Record<number, string> = {};
+    for (const item of current.items) {
+      const next = editTexts[item.index] ?? item.target;
+      if (next !== item.target) edits[item.index] = next;
+    }
+    const indices = Object.keys(edits).map(Number);
+    if (indices.length === 0) {
+      dispatch({ type: "editor", editor: "none" });
+      return;
+    }
+    const entry: ReviewLogEntry = { kind: "edit", keys: [current.key], revision };
+    dispatch({ type: "resolve", entry });
     try {
-      setProposal(
-        await apiClient.proposeJobFragment(jobId, subject.index, {
-          action: "edit",
-          target: editText,
-          propagate_identical: propagate,
-        })
-      );
+      if (indices.length === 1) {
+        // 문단 하나면 propose 경로가 낫다 — 동일 문구 전파와 부분 일치 후보를 준다.
+        const resp = await proposeAndApply(indices[0], edits[indices[0]]);
+        setRevision(resp.revision);
+        setDirty(resp.dirty);
+        setPartialCandidates(resp.partial_candidates);
+        setSelectedPartial(new Set());
+      } else {
+        // 여러 문단이면 한 요청으로 — 되돌리기 한 번에 문장 전체가 복구돼야 한다.
+        // 대신 이 경로에는 동일 문구 전파·부분 일치 후보가 없다.
+        const resp = await apiClient.applyReviewBlockEdit(jobId, edits, revision);
+        setRevision(resp.revision);
+        setDirty(resp.dirty);
+      }
+      await refresh();
     } catch {
-      toast.error("수정 미리보기를 만들지 못했습니다.");
-    } finally {
-      setBusy(false);
+      dispatch({ type: "rollback", entry });
+      toast.error("수정을 적용하지 못했습니다.");
+      await refresh();
     }
   };
 
   const retranslate = async () => {
-    if (!subject) return;
+    if (!current || !subject) return;
     const trimmed = instruction.trim();
     const overBudget =
       subject.length_budget !== null &&
       !subject.is_note &&
       subject.target.length > subject.length_budget;
-    setBusy(true);
+    setProposalFor(null);
+    setPendingKey(current.key);
     try {
-      setProposal(
-        await apiClient.proposeJobFragment(jobId, subject.index, {
-          action: "retranslate",
-          instruction: trimmed || (overBudget ? "더 짧게" : undefined),
-          propagate_identical: propagate,
-        })
-      );
+      const response = await apiClient.proposeJobFragment(jobId, subject.index, {
+        action: "retranslate",
+        instruction: trimmed || (overBudget ? "더 짧게" : undefined),
+        propagate_identical: propagate,
+      });
+      setProposalFor({ key: current.key, response });
     } catch {
       toast.error("재번역에 실패했습니다.");
     } finally {
-      setBusy(false);
+      setPendingKey(null);
     }
   };
 
   const applyProposal = async () => {
-    if (!proposal || !current) return;
-    setBusy(true);
+    if (!current || proposalFor?.key !== current.key) return;
+    const proposalId = proposalFor.response.proposal_id;
+    const entry: ReviewLogEntry = { kind: "edit", keys: [current.key], revision };
+    setProposalFor(null);
+    dispatch({ type: "resolve", entry });
     try {
-      const resp = await apiClient.applyJobFragmentProposal(
-        jobId,
-        proposal.proposal_id,
-        revision
-      );
+      const resp = await apiClient.applyJobFragmentProposal(jobId, proposalId, revision);
       setRevision(resp.revision);
       setDirty(resp.dirty);
       setPartialCandidates(resp.partial_candidates);
       // 부분 일치는 문맥 검토가 필요한 보조 후보이므로 사용자가 직접 고른다.
       setSelectedPartial(new Set());
-      setProposal(null);
-      dispatch({
-        type: "resolve",
-        entry: { kind: "edit", keys: [current.key], revision: resp.revision },
-      });
       await refresh();
     } catch {
-      toast.error("적용에 실패했습니다. 목록을 새로 확인해주세요.");
+      // A proposal is bound to the revision it was made against, so a conflict
+      // means re-running the model — the user decides whether that is worth it.
+      dispatch({ type: "rollback", entry });
+      toast.error("AI 번역 결과를 적용하지 못했습니다. 다시 시도해주세요.");
       await refresh();
-    } finally {
-      setBusy(false);
     }
   };
 
@@ -343,7 +362,7 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
         setDirty(resp.dirty);
       }
       dispatch({ type: "undo" });
-      setProposal(null);
+      setProposalFor(null);
       setPartialCandidates([]);
       await refresh();
     } catch {
@@ -368,8 +387,6 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
       setSaving(false);
     }
   };
-
-  const proposalFragment = fragments.find((item) => item.index === proposal?.index) ?? null;
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-background">
@@ -416,23 +433,29 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
                 finding={currentFinding}
                 subject={subject}
                 suggestion={suggestion}
+                proposal={proposalFor?.key === current.key ? proposalFor.response : null}
+                proposalPending={pendingKey === current.key}
                 position={queueState.cursor + 1}
                 total={total}
                 handled={current.key in queueState.resolved}
                 busy={busy}
                 editor={queueState.editor}
-                editText={editText}
+                editTexts={editTexts}
                 instruction={instruction}
                 propagate={propagate}
-                onEditTextChange={setEditText}
+                onEditTextChange={(index, value) =>
+                  setEditTexts((previous) => ({ ...previous, [index]: value }))
+                }
                 onInstructionChange={setInstruction}
                 onPropagateChange={setPropagate}
                 onPrevious={() => dispatch({ type: "move", delta: -1 })}
                 onNext={() => dispatch({ type: "move", delta: 1 })}
                 onEditor={setEditor}
                 onApplySuggestion={applySuggestion}
-                onPreviewEdit={previewEdit}
+                onApplyEdits={applyEdits}
                 onRetranslate={retranslate}
+                onApplyProposal={applyProposal}
+                onCancelProposal={() => setEditor("none")}
                 onSkip={skip}
               />
             ) : (
@@ -452,65 +475,7 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
         </div>
       )}
 
-      {proposal && (
-        <div className="absolute inset-0 z-20 flex items-center justify-center bg-background/75 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-2xl space-y-4 rounded-xl border bg-card p-4 shadow-xl">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h3 className="font-bold">수정 후보 비교</h3>
-                <p className="text-xs text-muted-foreground">
-                  색상과 강조를 확인한 뒤 초안에 적용하세요.
-                </p>
-              </div>
-              <Button variant="ghost" size="icon-sm" onClick={() => setProposal(null)}>
-                <X className="size-4" />
-              </Button>
-            </div>
-            <div className="rounded-lg border bg-muted/30 p-3">
-              <p className="mb-1 text-[11px] font-bold text-muted-foreground">원문</p>
-              <p className="text-sm leading-snug">{proposalFragment?.source ?? ""}</p>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="rounded-lg bg-muted/50 p-3">
-                <p className="mb-1 text-[11px] font-bold text-muted-foreground">현재 번역</p>
-                <p className="text-sm">{proposal.old_target}</p>
-              </div>
-              <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
-                <p className="mb-1 text-[11px] font-bold text-muted-foreground">
-                  수정 후보
-                  {stylePreviewNote(proposal.style_status) &&
-                    ` · ${stylePreviewNote(proposal.style_status)}`}
-                </p>
-                <StyledText segments={proposal.style_segments} fallback={proposal.target} />
-              </div>
-            </div>
-            <div className="flex flex-wrap gap-2 text-xs">
-              <span className="rounded-full bg-muted px-2 py-1">
-                서식 {styleStatusLabel(proposal.style_status)}
-              </span>
-              {proposal.changed_indices.length > 1 && (
-                <span className="rounded-full bg-info/10 px-2 py-1 text-info">
-                  동일 문구 {proposal.changed_indices.length}곳
-                </span>
-              )}
-              {proposal.over_budget && (
-                <span className="rounded-full bg-destructive/10 px-2 py-1 text-destructive">
-                  예상 박스 용량 초과
-                </span>
-              )}
-            </div>
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setProposal(null)}>취소</Button>
-              <Button onClick={applyProposal} disabled={busy}>
-                {busy && <Loader2 className="mr-2 size-4 animate-spin" />}
-                적용
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {partialCandidates.length > 0 && !proposal && (
+      {partialCandidates.length > 0 && (
         <div className="absolute bottom-4 left-1/2 z-10 w-[min(680px,calc(100%-2rem))] -translate-x-1/2 rounded-xl border bg-card p-4 shadow-xl">
           <div className="mb-3 flex items-start justify-between gap-3">
             <div>

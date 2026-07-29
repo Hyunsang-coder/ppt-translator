@@ -8,7 +8,7 @@ import {
   stylePreviewNote,
 } from "@/components/translation/review/finding-labels";
 import type { BlockFinding, EditorMode, FixSuggestion, ReviewBlock } from "@/lib/review-queue";
-import type { FragmentItem } from "@/types/api";
+import type { FragmentItem, FragmentProposalResponse } from "@/types/api";
 import {
   Ban,
   Check,
@@ -26,23 +26,29 @@ interface QueueItemProps {
   subject: FragmentItem;
   /** Ready-made replacement, when the wrong wording could be located. */
   suggestion: FixSuggestion | null;
+  /** A re-translation waiting to be accepted, and whether one is being made. */
+  proposal: FragmentProposalResponse | null;
+  proposalPending: boolean;
   position: number;
   total: number;
   handled: boolean;
   busy: boolean;
   editor: EditorMode;
-  editText: string;
+  /** Draft text per paragraph of the block, keyed by fragment index. */
+  editTexts: Record<number, string>;
   instruction: string;
   propagate: boolean;
-  onEditTextChange: (value: string) => void;
+  onEditTextChange: (index: number, value: string) => void;
   onInstructionChange: (value: string) => void;
   onPropagateChange: (value: boolean) => void;
   onPrevious: () => void;
   onNext: () => void;
   onEditor: (mode: EditorMode) => void;
   onApplySuggestion: () => void;
-  onPreviewEdit: () => void;
+  onApplyEdits: () => void;
   onRetranslate: () => void;
+  onApplyProposal: () => void;
+  onCancelProposal: () => void;
   onSkip: () => void;
 }
 
@@ -50,17 +56,19 @@ interface QueueItemProps {
  * The queue shows short title fragments and full paragraphs in the same slot,
  * so the type scales down instead of pushing the actions off-screen.
  */
-function bodyTextClass(text: string, isNote: boolean): string {
+function bodyTextClass(length: number, isNote: boolean): string {
   if (isNote) return "text-[15px]";
-  if (text.length <= 60) return "text-[22px]";
-  if (text.length <= 160) return "text-[18px]";
+  if (length <= 60) return "text-[22px]";
+  if (length <= 160) return "text-[18px]";
   return "text-[15px]";
 }
 
-function LengthGauge({ fragment }: { fragment: FragmentItem }) {
-  if (fragment.length_budget === null || fragment.is_note) return null;
-  const used = fragment.target.length;
-  const budget = fragment.length_budget;
+/**
+ * Paragraphs of one block share a text frame, so they share its capacity too —
+ * one gauge for the item, not one per line.
+ */
+function LengthGauge({ used, budget }: { used: number; budget: number | null }) {
+  if (budget === null) return null;
   const over = used > budget;
   return (
     <span className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -80,12 +88,14 @@ export function QueueItem({
   finding,
   subject,
   suggestion,
+  proposal,
+  proposalPending,
   position,
   total,
   handled,
   busy,
   editor,
-  editText,
+  editTexts,
   instruction,
   propagate,
   onEditTextChange,
@@ -95,18 +105,28 @@ export function QueueItem({
   onNext,
   onEditor,
   onApplySuggestion,
-  onPreviewEdit,
+  onApplyEdits,
   onRetranslate,
+  onApplyProposal,
+  onCancelProposal,
   onSkip,
 }: QueueItemProps) {
   const badge = finding ? findingBadge(finding.finding) : null;
   const longest = Math.max(...block.items.map((item) => item.target.length));
-  const textClass = bodyTextClass("x".repeat(longest), subject.is_note);
+  const textClass = bodyTextClass(longest, subject.is_note);
   const noteClamp = subject.is_note ? "max-h-40 overflow-y-auto" : "";
   const styleNote = stylePreviewNote(subject.style_status);
+  const budget = subject.is_note ? null : subject.length_budget;
+  const currentLength = block.items.reduce((sum, item) => sum + item.target.length, 0);
+  const draftLength = block.items.reduce(
+    (sum, item) => sum + (editTexts[item.index] ?? item.target).length,
+    0
+  );
+  const busyHere = busy || proposalPending;
   // Without a located replacement there is nothing to one-click, so the
   // re-translation becomes the obvious move instead of a secondary one.
   const promoteAi = !suggestion && !handled;
+  const idle = editor === "none" && !proposal && !proposalPending;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -177,7 +197,7 @@ export function QueueItem({
               <span className="ml-2 font-normal tracking-normal">· {styleNote}</span>
             )}
           </p>
-          <LengthGauge fragment={subject} />
+          <LengthGauge used={currentLength} budget={budget} />
         </div>
         <div className={`space-y-1 ${textClass} leading-[1.45] tracking-[-0.01em] ${noteClamp}`}>
           {block.items.map((item) => (
@@ -187,7 +207,67 @@ export function QueueItem({
           ))}
         </div>
 
-        {suggestion && editor === "none" && !handled && (
+        {proposalPending && (
+          <div className="mt-4 flex items-center gap-2 rounded-xl border border-primary/40 bg-primary/[0.06] px-4 py-3.5 text-[13px] text-muted-foreground">
+            <Loader2 className="size-4 animate-spin" />
+            AI가 다시 번역하는 중…
+          </div>
+        )}
+
+        {proposal && !proposalPending && (
+          <div className="mt-4 rounded-xl border border-primary/40 bg-primary/[0.06] px-4 py-3.5">
+            <p className="mb-2 flex items-baseline gap-2">
+              <span className="text-[11px] font-bold tracking-[0.04em] text-primary">
+                AI 번역 결과
+              </span>
+              <span className="text-[11px] text-muted-foreground">
+                {stylePreviewNote(proposal.style_status) ?? "단일 서식"}
+              </span>
+            </p>
+            <p className={`mb-3.5 ${textClass} leading-[1.45] tracking-[-0.01em]`}>
+              <StyledText segments={proposal.style_segments} fallback={proposal.target} />
+            </p>
+            {proposal.over_budget && (
+              <p className="mb-2 text-xs text-destructive">예상 박스 용량을 넘습니다.</p>
+            )}
+            <div className="flex flex-wrap items-center gap-2.5">
+              <Button
+                className="h-[38px] gap-2 px-[18px] text-sm font-semibold"
+                disabled={busyHere}
+                onClick={onApplyProposal}
+              >
+                <Check className="size-4" />
+                적용하고 다음
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-[34px] gap-1.5"
+                disabled={busyHere}
+                onClick={onRetranslate}
+              >
+                <RefreshCw className="size-3.5" />
+                다시 시도
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-[34px]"
+                disabled={busyHere}
+                onClick={onCancelProposal}
+              >
+                취소
+              </Button>
+              {proposal.changed_indices.length > 1 && (
+                <span className="text-xs text-muted-foreground">
+                  동일 문구 {proposal.changed_indices.length}곳도 함께 바뀝니다
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+
+        {suggestion && idle && !handled && (
           <div className="mt-4 rounded-xl border border-primary/40 bg-primary/[0.06] px-4 py-3.5">
             <p className="mb-2 flex items-baseline gap-2">
               <span className="text-[11px] font-bold tracking-[0.04em] text-primary">
@@ -205,14 +285,10 @@ export function QueueItem({
             <div className="flex flex-wrap items-center gap-2.5">
               <Button
                 className="h-[38px] gap-2 px-[18px] text-sm font-semibold"
-                disabled={busy}
+                disabled={busyHere}
                 onClick={onApplySuggestion}
               >
-                {busy ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <Check className="size-4" />
-                )}
+                <Check className="size-4" />
                 적용하고 다음
               </Button>
               {subject.repeat_count > 1 && (
@@ -224,19 +300,35 @@ export function QueueItem({
           </div>
         )}
 
-        {editor === "manual" && (
+        {editor === "manual" && !proposal && (
           <div className="mt-4 rounded-xl border border-primary/40 bg-primary/[0.06] px-4 py-3.5">
-            <Textarea
-              value={editText}
-              onChange={(event) => onEditTextChange(event.target.value)}
-              className="min-h-[88px] text-[15px]"
-              disabled={busy}
-              autoFocus
-            />
-            <p className="mt-1.5 text-xs text-muted-foreground">
-              이전: <s className="text-foreground/50">{subject.target}</s>
-            </p>
-            {subject.repeat_count > 1 && (
+            <div className="space-y-2">
+              {block.items.map((item, order) => (
+                <Textarea
+                  key={item.index}
+                  value={editTexts[item.index] ?? item.target}
+                  onChange={(event) => onEditTextChange(item.index, event.target.value)}
+                  onKeyDown={(event) => {
+                    // ⌘/Ctrl+Enter applies; a bare Enter still breaks the line.
+                    if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && !busyHere) {
+                      event.preventDefault();
+                      onApplyEdits();
+                    }
+                  }}
+                  className="min-h-[88px] text-[15px]"
+                  disabled={busyHere}
+                  autoFocus={order === 0}
+                  aria-label={`번역 ${order + 1}`}
+                />
+              ))}
+            </div>
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+              <p className="text-xs text-muted-foreground">
+                이전: <s className="text-foreground/50">{subject.target}</s>
+              </p>
+              <LengthGauge used={draftLength} budget={budget} />
+            </div>
+            {block.items.length === 1 && subject.repeat_count > 1 && (
               <label className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
                 <input
                   type="checkbox"
@@ -248,14 +340,19 @@ export function QueueItem({
               </label>
             )}
             <div className="mt-3 flex items-center gap-2.5">
-              <Button size="sm" disabled={busy} className="gap-1.5" onClick={onPreviewEdit}>
-                {busy ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
-                확인
+              <Button
+                className="h-[38px] gap-2 px-[18px] text-sm font-semibold"
+                disabled={busyHere}
+                onClick={onApplyEdits}
+              >
+                <Check className="size-4" />
+                적용하고 다음
               </Button>
               <Button
                 variant="outline"
                 size="sm"
-                disabled={busy}
+                className="h-[34px]"
+                disabled={busyHere}
                 onClick={() => onEditor("none")}
               >
                 취소
@@ -264,33 +361,30 @@ export function QueueItem({
           </div>
         )}
 
-        {editor === "ai" && (
+        {editor === "ai" && !proposal && !proposalPending && (
           <div className="mt-4 rounded-xl border border-primary/40 bg-primary/[0.06] px-4 py-3.5">
             <input
               type="text"
               value={instruction}
               onChange={(event) => onInstructionChange(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter" && !busy) onRetranslate();
+                if (event.key === "Enter" && !busyHere) onRetranslate();
               }}
               placeholder="추가 요청사항 (선택) · 예: 더 짧게, 더 격식있게"
-              disabled={busy}
+              disabled={busyHere}
               autoFocus
               className="w-full rounded-md border bg-card px-2.5 py-2 text-sm outline-none focus:border-primary disabled:opacity-50"
             />
             <div className="mt-3 flex items-center gap-2.5">
-              <Button size="sm" disabled={busy} className="gap-1.5" onClick={onRetranslate}>
-                {busy ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <RefreshCw className="size-4" />
-                )}
+              <Button size="sm" className="h-[34px] gap-1.5" disabled={busyHere} onClick={onRetranslate}>
+                <RefreshCw className="size-3.5" />
                 AI 번역
               </Button>
               <Button
                 variant="outline"
                 size="sm"
-                disabled={busy}
+                className="h-[34px]"
+                disabled={busyHere}
                 onClick={() => onEditor("none")}
               >
                 취소
@@ -302,13 +396,13 @@ export function QueueItem({
           </div>
         )}
 
-        {editor === "none" && (
+        {idle && (
           <div className="mt-5 flex items-center gap-2">
             <Button
               variant="outline"
               size="sm"
               className="h-[34px] gap-1.5"
-              disabled={busy}
+              disabled={busyHere}
               onClick={() => onEditor("manual")}
             >
               <Pencil className="size-3.5" />
@@ -318,7 +412,7 @@ export function QueueItem({
               variant={promoteAi ? "default" : "outline"}
               size="sm"
               className={promoteAi ? "h-[38px] gap-1.5 px-[18px] font-semibold" : "h-[34px] gap-1.5"}
-              disabled={busy}
+              disabled={busyHere}
               onClick={() => onEditor("ai")}
             >
               <RefreshCw className="size-3.5" />
@@ -329,7 +423,7 @@ export function QueueItem({
                 variant="ghost"
                 size="sm"
                 className="h-[34px] gap-1.5 text-muted-foreground"
-                disabled={busy}
+                disabled={busyHere}
                 onClick={onSkip}
               >
                 <Ban className="size-3.5" />

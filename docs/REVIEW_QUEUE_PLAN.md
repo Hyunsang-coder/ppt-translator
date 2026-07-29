@@ -289,7 +289,7 @@ python3 scripts/analyze_fragments.py <덱.pptx> --notes --list-blocks
 | 0 ✅ | 순수 헬퍼(`lib/review-queue.ts`: **병합 규칙** + 큐 정렬 + 제안문) + **큐 리듀서** + vitest, `StyledText` 모듈 분리 (동작 무변경) |
 | 1 ✅ | 3분할 셸 + StepHeader + SlideRail + **블록 큐** + 페이저 + `이대로 두기` + `refresh()` 분리 |
 | 2 ✅ | 추천 수정 원클릭 (propose→apply, 409 재-propose, **낙관적 커서 전진**) + 서식 미리보기 라벨 정정 |
-| 3 | 직접 고치기 / AI 재번역 인플레이스 (블록 일괄 적용 API, 다문단은 게이지 1개) |
+| 3 ✅ | 직접 고치기 / AI 재번역 인플레이스 (블록 일괄 적용 API, 다문단은 게이지 1개) |
 | 4 | `partial_candidates` 큐 카드 (플로팅 시트 제거) |
 | 5 | FinishBar + 완료 화면 + `PPT 저장` + `남은 항목 모두 넘기기`(벌크) |
 | 6 | GlossaryPane (헤더 폼 이관, 롤백 로직 유지) |
@@ -324,6 +324,16 @@ Phase 2에서 **넣지 않은 것**:
   세그먼트로 쪼개져 렌더되므로 하이라이트 범위를 겹치려면 세그먼트를 잘라 재조립해야 한다.
   추천 카드가 바뀌는 부분을 보여주므로 비용 대비 이득이 없다
 - `⏎` 키 힌트 칩: 단축키는 Phase 8. 동작하지 않는 키를 광고하지 않는다
+
+**Phase 3 검증**: `npx tsc --noEmit` 통과 · `npm test` 38 passed · `npm run build` 성공.
+비교 모달 삭제. 편집 경로는 **바뀐 문단 수로 갈린다**:
+- 1문단 → `proposeJobFragment` → `applyJobFragmentProposal` (동일 문구 전파 + 부분 일치 후보를 얻는다)
+- 2문단 이상 → `applyReviewBlockEdit` 한 요청 (revision 1회 · 스냅샷 1개). **이 경로에는
+  `propagate_identical`도 `partial_candidates`도 없다** — 엔드포인트가 지원하지 않는다.
+  병합 블록이 덱당 0~4개뿐(Step 2)이라 감수한다
+- AI 재번역 결과는 **만들어진 항목의 key에 묶어** 둔다. 커서가 옮겨가면 따라가지 않는다
+- AI 결과 적용이 409면 **자동 재시도하지 않는다** — proposal이 무효라 모델을 다시 돌려야 하므로
+  사용자가 결정한다 (추천 수정의 자동 재-propose와 다른 지점)
 
 **서식 미리보기 라벨** (Phase 2에서 정정, 실사용 피드백): `색상 미리보기`라는 고정 라벨이
 색이 없는 문단에서 "색이 안 나온다"로 읽힌다. 실제로는 `style_status`에 따라 보여주는 것이 다르다 —
