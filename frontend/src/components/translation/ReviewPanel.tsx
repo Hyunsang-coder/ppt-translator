@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ApiError, apiClient } from "@/lib/api-client";
+import { DoneScreen } from "@/components/translation/review/DoneScreen";
 import { FinishBar } from "@/components/translation/review/FinishBar";
 import { GlossaryPane } from "@/components/translation/review/GlossaryPane";
+import { PartialMatchCard } from "@/components/translation/review/PartialMatchCard";
 import { QueueItem } from "@/components/translation/review/QueueItem";
 import { SlideRail, type SlideProgress } from "@/components/translation/review/SlideRail";
 import { StepHeader } from "@/components/translation/review/StepHeader";
@@ -12,6 +14,7 @@ import {
   blockFindings,
   buildQueue,
   initialQueueState,
+  isReviewComplete,
   lastAction,
   primaryFinding,
   queueReducer,
@@ -25,7 +28,7 @@ import type {
   FragmentProposalResponse,
   PartialCandidate,
 } from "@/types/api";
-import { AlertTriangle, CheckCircle2, Loader2, X } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 interface ReviewPanelProps {
@@ -120,6 +123,14 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
   const total = queueState.order.length;
   const remaining = remainingCount(queueState);
   const undoable = lastAction(queueState) !== null;
+  const complete = isReviewComplete(queueState);
+  // The done screen is a destination, not a wall: `처리한 항목 다시 보기` steps
+  // back into the queue, and new findings put it away on their own.
+  const [reopened, setReopened] = useState(false);
+  useEffect(() => {
+    if (!complete) setReopened(false);
+  }, [complete]);
+  const outcomes = Object.values(queueState.resolved);
   const suggestion = useMemo(
     () => (subject && currentFinding ? suggestFix(subject.target, currentFinding.finding) : null),
     [subject, currentFinding]
@@ -169,6 +180,12 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
     dispatch({ type: "editor", editor });
   };
 
+  const receivePartials = (list: PartialCandidate[]) => {
+    setPartialCandidates(list);
+    // 후보가 하나면 고를 것이 없다 — 체크박스 없이 적용/건너뛰기만 남긴다.
+    setSelectedPartial(new Set(list.length === 1 ? [list[0].index] : []));
+  };
+
   const skip = async () => {
     if (!current) return;
     const entries = blockFindings(current).map(({ index, finding }) => ({
@@ -187,6 +204,36 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
       await refresh();
     } catch {
       toast.error("처리에 실패했습니다.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * One request for every finding still open, so `되돌리기` brings them all
+   * back in one step. Dismissals only add to a set, so no lock or revision
+   * check is involved — 40 items would otherwise be 40 round trips.
+   */
+  const skipAllRemaining = async () => {
+    const keys = queueState.order.filter((key) => !(key in queueState.resolved));
+    const entries = keys.flatMap((key) => {
+      const block = blocksByKey.get(key);
+      return block
+        ? blockFindings(block).map(({ index, finding }) => ({
+            index,
+            finding_type: finding.type,
+          }))
+        : [];
+    });
+    if (entries.length === 0) return;
+    setBusy(true);
+    try {
+      const resp = await apiClient.updateReviewDismissals(jobId, "dismiss", entries);
+      setDirty(resp.dirty);
+      dispatch({ type: "resolve", entry: { kind: "dismiss", keys, entries: resp.changed } });
+      await refresh();
+    } catch {
+      toast.error("남은 항목을 넘기지 못했습니다.");
     } finally {
       setBusy(false);
     }
@@ -229,8 +276,7 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
       const resp = await proposeAndApply(subject.index, suggestion.target);
       setRevision(resp.revision);
       setDirty(resp.dirty);
-      setPartialCandidates(resp.partial_candidates);
-      setSelectedPartial(new Set());
+      receivePartials(resp.partial_candidates);
       await refresh();
     } catch {
       dispatch({ type: "rollback", entry });
@@ -259,8 +305,7 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
         const resp = await proposeAndApply(indices[0], edits[indices[0]]);
         setRevision(resp.revision);
         setDirty(resp.dirty);
-        setPartialCandidates(resp.partial_candidates);
-        setSelectedPartial(new Set());
+        receivePartials(resp.partial_candidates);
       } else {
         // 여러 문단이면 한 요청으로 — 되돌리기 한 번에 문장 전체가 복구돼야 한다.
         // 대신 이 경로에는 동일 문구 전파·부분 일치 후보가 없다.
@@ -309,9 +354,7 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
       const resp = await apiClient.applyJobFragmentProposal(jobId, proposalId, revision);
       setRevision(resp.revision);
       setDirty(resp.dirty);
-      setPartialCandidates(resp.partial_candidates);
-      // 부분 일치는 문맥 검토가 필요한 보조 후보이므로 사용자가 직접 고른다.
-      setSelectedPartial(new Set());
+      receivePartials(resp.partial_candidates);
       await refresh();
     } catch {
       // A proposal is bound to the revision it was made against, so a conflict
@@ -427,7 +470,31 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
           />
 
           <div className="flex min-w-0 flex-1 flex-col">
-            {current && subject ? (
+            {partialCandidates.length > 0 ? (
+              <PartialMatchCard
+                candidates={partialCandidates}
+                selected={selectedPartial}
+                busy={applyingPartial}
+                onToggle={(index) =>
+                  setSelectedPartial((currentSelection) => {
+                    const next = new Set(currentSelection);
+                    if (next.has(index)) next.delete(index);
+                    else next.add(index);
+                    return next;
+                  })
+                }
+                onApply={applySelectedPartial}
+                onSkip={() => receivePartials([])}
+              />
+            ) : complete && !reopened ? (
+              <DoneScreen
+                edited={outcomes.filter((outcome) => outcome === "applied").length}
+                skipped={outcomes.filter((outcome) => outcome === "skipped").length}
+                saving={saving}
+                onSave={save}
+                onReopen={() => setReopened(true)}
+              />
+            ) : current && subject ? (
               <QueueItem
                 block={current}
                 finding={currentFinding}
@@ -468,82 +535,17 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
               </div>
             )}
 
-            <FinishBar remaining={remaining} dirty={dirty} saving={saving} onSave={save} />
+            <FinishBar
+              remaining={remaining}
+              dirty={dirty}
+              saving={saving}
+              busy={busy}
+              onSave={save}
+              onSkipAll={skipAllRemaining}
+            />
           </div>
 
           <GlossaryPane jobId={jobId} disabled={busy || saving} onRegistered={refresh} />
-        </div>
-      )}
-
-      {partialCandidates.length > 0 && (
-        <div className="absolute bottom-4 left-1/2 z-10 w-[min(680px,calc(100%-2rem))] -translate-x-1/2 rounded-xl border bg-card p-4 shadow-xl">
-          <div className="mb-3 flex items-start justify-between gap-3">
-            <div>
-              <h3 className="text-sm font-bold">부분 일치 문구도 변경할까요?</h3>
-              <p className="text-xs text-muted-foreground">
-                문장 구조가 다른 위치는 원문을 확인하고 필요한 항목만 선택하세요.
-              </p>
-              {partialCandidates[0] && (
-                <p className="mt-1 text-xs font-medium">
-                  &ldquo;{partialCandidates[0].old_phrase}&rdquo; → &ldquo;
-                  {partialCandidates[0].new_phrase || "(삭제)"}&rdquo;
-                </p>
-              )}
-            </div>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              disabled={applyingPartial}
-              onClick={() => setPartialCandidates([])}
-            >
-              <X className="size-4" />
-            </Button>
-          </div>
-          <div className="max-h-48 space-y-2 overflow-y-auto">
-            {partialCandidates.map((candidate) => (
-              <label key={candidate.index} className="flex gap-2 rounded-lg bg-muted/50 p-2 text-xs">
-                <input
-                  type="checkbox"
-                  checked={selectedPartial.has(candidate.index)}
-                  disabled={applyingPartial}
-                  onChange={(event) => {
-                    setSelectedPartial((currentSelection) => {
-                      const next = new Set(currentSelection);
-                      if (event.target.checked) next.add(candidate.index);
-                      else next.delete(candidate.index);
-                      return next;
-                    });
-                  }}
-                />
-                <span className="min-w-0 space-y-0.5">
-                  <span className="block text-muted-foreground">
-                    <b className="text-foreground">S{candidate.slide}</b>
-                    {candidate.is_note && " · 발표자 노트"} · 원문: {candidate.source}
-                  </span>
-                  <span className="block">{candidate.target}</span>
-                  <span className="block text-primary">→ {candidate.proposed_target}</span>
-                </span>
-              </label>
-            ))}
-          </div>
-          <div className="mt-3 flex justify-end gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={applyingPartial}
-              onClick={() => setPartialCandidates([])}
-            >
-              건너뛰기
-            </Button>
-            <Button
-              size="sm"
-              onClick={applySelectedPartial}
-              disabled={applyingPartial || selectedPartial.size === 0}
-            >
-              {applyingPartial && <Loader2 className="mr-2 size-4 animate-spin" />}
-              {applyingPartial ? "적용 중" : `선택한 ${selectedPartial.size}건 적용`}
-            </Button>
-          </div>
         </div>
       )}
     </div>
