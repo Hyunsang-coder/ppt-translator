@@ -269,6 +269,11 @@ class FragmentItem(BaseModel):
     edited: bool = False
     style_segments: List[StyleSegment] = []
     style_status: Literal["single_style", "preserved", "partial", "dropped"] = "single_style"
+    # Text frame this paragraph belongs to. Unique per text box / table cell /
+    # grouped child — unlike (slide, shape, paragraph), which collides across
+    # table cells. Lets the review screen group a wrapped sentence into one item.
+    container_id: str = ""
+    container_kind: str = "textbox"
 
 
 class FragmentsResponse(BaseModel):
@@ -352,6 +357,14 @@ class PartialApplyRequest(BaseModel):
 
 
 class ReviewRevisionRequest(BaseModel):
+    expected_revision: int
+
+
+class BlockEditRequest(BaseModel):
+    """Apply new text to several paragraphs of one block in a single revision."""
+
+    # fragment index -> new target text
+    edits: Dict[int, str] = Field(..., min_length=1, max_length=200)
     expected_revision: int
 
 
@@ -1192,6 +1205,8 @@ async def get_job_fragments(job_id: str) -> FragmentsResponse:
                 edited=view.edited,
                 style_segments=[StyleSegment(**segment) for segment in view.style_segments],
                 style_status=view.style_status,
+                container_id=view.container_id,
+                container_kind=view.container_kind,
             )
         )
     return FragmentsResponse(
@@ -1493,6 +1508,71 @@ async def apply_review_partial_candidates(
         revision=session.revision,
         committed_revision=session.committed_revision,
         dirty=session.dirty,
+    )
+
+
+@app.post(
+    "/api/v1/jobs/{job_id}/review/block",
+    response_model=ReviewMutationResponse,
+)
+async def apply_review_block_edit(
+    job_id: str, body: BlockEditRequest
+) -> ReviewMutationResponse:
+    """Apply edits to several paragraphs of one block atomically.
+
+    The review screen presents a hard-return-wrapped sentence as a single item.
+    Applying it paragraph by paragraph would bump the revision once per line,
+    leave a half-applied block behind on failure, and make ``되돌리기`` restore
+    only the last line. One request, one history entry, one revision.
+    """
+    job = get_job_manager().get_job(job_id)
+    if job is None or job.review_session is None:
+        raise HTTPException(status_code=404, detail="Review session not found")
+    session = job.review_session
+
+    previous = dict(enumerate(session.translated_texts))
+    async with job.review_lock:
+        try:
+            loop = asyncio.get_running_loop()
+            changed = await loop.run_in_executor(
+                None,
+                functools.partial(
+                    session.apply_block_edit,
+                    body.edits,
+                    expected_revision=body.expected_revision,
+                    model=session.model or DEFAULT_TRANSLATION_MODEL,
+                    provider=session.provider,
+                ),
+            )
+            findings = await loop.run_in_executor(None, session.run_final_sweep)
+        except IndexError:
+            raise HTTPException(status_code=400, detail="Fragment index out of range")
+        except RuntimeError:
+            raise HTTPException(
+                status_code=409,
+                detail="검토 내용이 변경되었습니다. 다시 확인해주세요.",
+            )
+        except Exception as exc:
+            LOGGER.exception("Block edit failed: %s", exc)
+            raise HTTPException(status_code=500, detail="수정 적용에 실패했습니다.")
+
+    recorder = QualityRecorder(quality_dir=get_settings().quality_dir)
+    doc_ref = f"deck:{job.output_filename or 'deck.pptx'}"
+    for index in changed:
+        _record_edit(
+            recorder, session, index,
+            session.paragraphs[index].original_text or "",
+            previous[index],
+            corrected=session.translated_texts[index],
+            disposition="accepted", doc_ref=doc_ref,
+        )
+
+    return ReviewMutationResponse(
+        changed_indices=changed,
+        revision=session.revision,
+        committed_revision=session.committed_revision,
+        dirty=session.dirty,
+        findings_count=len(findings),
     )
 
 

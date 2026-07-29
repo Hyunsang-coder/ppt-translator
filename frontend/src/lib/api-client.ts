@@ -330,6 +330,25 @@ export const apiClient = {
   },
 
   /**
+   * Apply edits to several paragraphs of one block in a single revision.
+   *
+   * A wrapped sentence is one review item, so it must apply atomically:
+   * one undo step, and no half-applied block if something fails.
+   */
+  async applyReviewBlockEdit(
+    jobId: string,
+    edits: Record<number, string>,
+    expectedRevision: number
+  ): Promise<ReviewMutationResponse> {
+    const response = await fetch(await apiUrl(`/api/v1/jobs/${jobId}/review/block`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ edits, expected_revision: expectedRevision }),
+    });
+    return handleResponse<ReviewMutationResponse>(response);
+  },
+
+  /**
    * Hide findings from the review queue, or bring dismissed ones back.
    *
    * Bulk in one call so "남은 항목 모두 넘기기" is a single undoable step.

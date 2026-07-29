@@ -540,6 +540,45 @@ class TestReviewEndpoints:
         )
         assert response.status_code == 409
 
+    def test_fragments_expose_the_container(self, client, review_job):
+        """The queue groups a wrapped sentence by container, not by shape index."""
+        fragment = client.get(
+            f"/api/v1/jobs/{review_job.id}/fragments"
+        ).json()["fragments"][0]
+        assert fragment["container_id"]
+        assert fragment["container_kind"] == "textbox"
+
+    def test_block_edit_applies_as_one_revision(self, client, review_job):
+        """A wrapped sentence is one review item, so it must apply atomically."""
+        with patch("api._record_edit"):
+            response = client.post(
+                f"/api/v1/jobs/{review_job.id}/review/block",
+                json={"edits": {"0": "NEW"}, "expected_revision": 0},
+            )
+        assert response.status_code == 200
+        assert response.json()["changed_indices"] == [0]
+        assert response.json()["revision"] == 1
+        assert review_job.review_session.translated_texts[0] == "NEW"
+        # Staging never changes the published download.
+        assert review_job.output_file.getvalue() == b"published-before-review"
+
+    def test_stale_block_edit_returns_conflict(self, client, review_job):
+        review_job.review_session.apply_edit(0, "OTHER")
+        response = client.post(
+            f"/api/v1/jobs/{review_job.id}/review/block",
+            json={"edits": {"0": "NEW"}, "expected_revision": 0},
+        )
+        assert response.status_code == 409
+        assert review_job.review_session.translated_texts[0] == "OTHER"
+
+    def test_block_edit_rejects_out_of_range_index(self, client, review_job):
+        response = client.post(
+            f"/api/v1/jobs/{review_job.id}/review/block",
+            json={"edits": {"99": "NEW"}, "expected_revision": 0},
+        )
+        assert response.status_code == 400
+        assert review_job.review_session.translated_texts[0] == "OLD"
+
     def test_fragments_expose_output_filename(self, client, review_job):
         """The review header names the file without downloading it first."""
         response = client.get(f"/api/v1/jobs/{review_job.id}/fragments")

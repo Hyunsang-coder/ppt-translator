@@ -123,12 +123,21 @@ overflow가 약 5배 과소 검출된다. 표 셀은 `owner.width`가 None이라
 불릿 8개짜리 본문 상자도 텍스트 프레임 하나다. 한 항목으로 묶으면 "한 화면에 판단할 것이 하나"가
 깨지고 22px 8줄이면 추천 카드가 화면 밖으로 밀린다. **보수적 연속 병합**으로 좁힌다:
 
-- 같은 컨테이너의 **연속** 문단
+- 같은 `container_id`의 **연속** 문단 (`paragraph_index`가 이어질 것 — 사이에 빈 문단이 있으면 구분자로 읽는다)
+- `container_kind`가 `body`(불릿 목록) / `notes`가 **아니고**
 - 앞 문단이 문장 종결부호로 끝나지 **않고**
-- 뒤 문단에 불릿/번호 마커(`a:buChar` / `a:buAutoNum`)가 **없고**
 - 병합 상한 4문단
 
-그 외에는 항목을 나누되 블록 전체를 맥락으로 표시. 임계값은 §5 Step 2 실측으로 확정.
+> **불릿 마커로는 판별할 수 없다** (실측): 불릿 본문 플레이스홀더와 일반 텍스트 상자 **둘 다
+> 문단 `pPr`가 비어 있다** — 불릿은 레이아웃/마스터의 list style에서 상속되기 때문이다.
+> 대신 `shape.is_placeholder` + `placeholder_format.type`이 확정적 신호다:
+> 불릿 목록은 `body`, 줄바꿈된 문장은 `textbox`로 깨끗하게 갈린다.
+
+그 외에는 항목을 나누되 블록 전체를 맥락으로 표시. 임계값은 §5 Step 2 실측으로 조정.
+
+**이 규칙은 프론트의 순수 함수로 둔다.** 서버는 블록이 무엇인지 알 필요가 없다 — `container_id` /
+`container_kind`(구조적·확정적)와 일괄 적용 엔드포인트(`{index: text}`)만 제공하면 된다.
+규칙을 TS에 두면 vitest로 덮고 임계값도 파이썬 왕복 없이 조정할 수 있다.
 
 ### 3.3 "남은 항목 모두 넘기기 → 확인 없이 전부 ignore (되돌리기 가능)" — 되돌릴 수 없다
 
@@ -201,30 +210,54 @@ overflow가 약 5배 과소 검출된다. 표 셀은 `owner.width`가 None이라
 신규 테스트 11건 (`test_review_session.py::DismissRestoreTestCase` 4,
 `test_api.py::TestReviewEndpoints` 4, `test_job_manager.py::TestCleanupAgesFromLastActivity` 3)
 
-### Step 2 — 측정 (실제 덱 필요)
+### Step 3 — 백엔드 본체 ✅ 완료 (프론트 계약 동결)
 
-`scripts/analyze_fragments.py`에 §3.2 병합 규칙을 넣고 실제 덱에 실행:
+**1. 컨테이너 식별자** (`ppt_parser.py`) — `ParagraphInfo.container_id` / `container_kind`
+- 경로: `s{slide}/sh{shape}` + 그룹 중첩 `/g{n}` + 표 셀 `/r{n}c{n}`, 노트는 `s{slide}/notes`
+- **표 셀 충돌 해소** (D-5): 4개 셀이 `(shape, paragraph)`를 공유하지만 `container_id`는 전부 다르다.
+  그룹 자식도 마찬가지 (부모 `shape_index`를 공유하지만 경로가 다르다)
+- `container_kind`: `title` / `body` / `textbox` / `placeholder` / `table_cell` / `notes`
+- `FragmentView` → `FragmentItem` → `frontend/src/types/api.ts`까지 노출
+
+**2. 블록 일괄 적용** (§2.5) — `ReviewSession.apply_block_edit(edits, expected_revision, ...)`
++ `POST /api/v1/jobs/{id}/review/block`
+- 스냅샷 1개 + revision 1회 → `되돌리기` 한 번에 문장 전체 복구
+- 색상 매핑을 **변경 전에** 계산해 실패해도 초안이 그대로 남는다
+- 범위 밖 인덱스는 400, revision 불일치는 409 — 둘 다 초안을 건드리기 전에 거부
+- `apiClient.applyReviewBlockEdit()`
+
+**3. 진단 스크립트를 프로덕션 파서로 전환** — `PPTParser`를 직접 쓰고 §3.2 병합 규칙을 시뮬레이션.
+병합 거부 사유(`container` / `gap` / `kind` / `cap` / `sentence_end`)를 집계해 임계값 튜닝 근거를 준다.
+
+**검증**: `pytest tests/ -q` 343 passed · `npx tsc --noEmit` 통과 · `npm test` 12 passed · `npm run build` 성공
+신규 테스트 14건 (`ContainerIdentityTestCase` 5, `BlockEditTestCase` 5, `TestReviewEndpoints` 4)
+
+### Step 2 — 측정 (실제 덱 필요, 프론트 상수 튜닝용)
+
+Step 3에서 백엔드가 블록을 몰라도 되게 정리했으므로, 측정은 **프론트 병합 규칙의 임계값을
+고르는 용도**로 내려간다. 백엔드는 이 측정 없이 동결됐다.
 
 ```bash
 python3 scripts/analyze_fragments.py <덱.pptx> --notes --list-blocks
 ```
 
-확인 항목: 조각 길이 분포 / 블록당 문단 수 / 병합 후 항목 감소폭 / `<a:br/>` 규모 / 표·그룹 비율
-→ **병합 임계값 확정**
-
-### Step 3 — 백엔드 본체 (프론트 계약 동결)
-
-4. `ParagraphInfo`에 컨테이너 경로 (그룹 중첩 `g{n}`, 표 셀 `r{n}c{n}`) → 표 셀 충돌 해소 (D-5)
-5. `FragmentItem`에 `block_id` / `block_pos` / `block_size` 노출
-6. **블록 일괄 적용 엔드포인트** `POST /jobs/{id}/review/block`
-   (`{edits: {index: text}, expected_revision}` → 스냅샷 1개 + revision 1회) (§2.5)
-7. `tests/test_review_session.py`에 그룹·표·일반 텍스트 상자 그룹핑 + 블록 적용 테스트
+확인 항목: 문단 길이 분포 / 병합 후 항목 감소폭 / **병합 거부 사유 분포** / `<a:br/>` 규모 / 유형별 비율
+→ `NON_MERGING_KINDS`, `MAX_MERGE_PARAGRAPHS`, `SENTENCE_END` 확정
 
 ### Step 4 — 프론트엔드
 
+동결된 백엔드 계약 (Step 1·3에서 확정, 프론트가 쓸 것 전부):
+
+| 용도 | 계약 |
+|---|---|
+| 블록 그룹핑 | `FragmentItem.container_id` / `container_kind` |
+| 헤더 파일명 | `FragmentsResponse.output_filename` |
+| 블록 편집 | `apiClient.applyReviewBlockEdit(jobId, {index: text}, revision)` |
+| 무시 / 되돌리기 / 모두 넘기기 | `apiClient.updateReviewDismissals(jobId, "dismiss"\|"restore", entries)` |
+
 | Phase | 내용 |
 |---|---|
-| 0 | 순수 헬퍼(`lib/review-queue.ts`) + **큐 리듀서** + vitest, `StyledText` 모듈 분리 (동작 무변경) |
+| 0 | 순수 헬퍼(`lib/review-queue.ts`: **병합 규칙** + 큐 정렬 + 제안문) + **큐 리듀서** + vitest, `StyledText` 모듈 분리 (동작 무변경) |
 | 1 | 3분할 셸 + StepHeader + SlideRail + **블록 큐** + 페이저 + `이대로 두기` + `refresh()` 분리 |
 | 2 | 추천 수정 원클릭 (propose→apply, 409 재-propose, **낙관적 커서 전진**) |
 | 3 | 직접 고치기 / AI 재번역 인플레이스 (블록 일괄 적용 API, 다문단은 게이지 1개) |
