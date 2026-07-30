@@ -26,7 +26,7 @@
 1. Frontend `POST /api/v1/jobs` with file, settings, filename_settings, compress_images, length_limit
 2. Backend `try_create_job()` atomic admission (429 if full)
 3. Returns `job_id`; job waits on `running_semaphore`
-4. Frontend polls `GET /api/v1/jobs/{job_id}` (2s interval)
+4. Frontend polls `GET /api/v1/jobs/{job_id}` (1s interval)
 5. Backend tracks progress: `started`, `progress`, `complete`, `error`, `cancelled`
 6. Completed jobs open the review draft; proposal endpoints generate edit/retranslation candidates without mutation
 7. Applying a proposal changes only the versioned draft; undo and partial propagation are revision-checked

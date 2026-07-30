@@ -13,7 +13,7 @@ export interface SSEClientOptions {
   onError?: SSEEventHandler;
   onStarted?: SSEEventHandler;
   onCancelled?: SSEEventHandler;
-  /** Polling interval in ms (default: 2000) */
+  /** Polling interval in ms (default: 1000) */
   pollingInterval?: number;
   /** Job status fetcher */
   getJobStatus: (jobId: string) => Promise<JobStatusResponse>;
@@ -29,7 +29,7 @@ export class SSEClient {
 
   constructor(_url: string, options: SSEClientOptions) {
     this.options = {
-      pollingInterval: 2000,
+      pollingInterval: 1000,
       ...options,
     };
   }
