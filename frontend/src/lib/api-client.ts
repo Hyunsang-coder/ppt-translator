@@ -3,6 +3,7 @@
  */
 
 import type {
+  BlockRetranslateResponse,
   ConfigResponse,
   ExtractionResponse,
   ExtractionSettings,
@@ -23,6 +24,9 @@ import type {
 } from "@/types/api";
 import { ensureApiBase } from "@/lib/api-base";
 import type { GlossaryEntry } from "@/lib/glossary";
+
+/** Mirrors the server's cap on `ReviewDismissalRequest.entries`. */
+const MAX_DISMISSAL_ENTRIES = 2000;
 
 class ApiError extends Error {
   constructor(
@@ -330,6 +334,28 @@ export const apiClient = {
   },
 
   /**
+   * Re-translate a block's paragraphs as one sentence.
+   *
+   * Returns the proposed text per paragraph — apply it with
+   * `applyReviewBlockEdit` so the whole sentence lands in one revision.
+   */
+  async retranslateReviewBlock(
+    jobId: string,
+    indices: number[],
+    instruction?: string
+  ): Promise<BlockRetranslateResponse> {
+    const response = await fetch(
+      await apiUrl(`/api/v1/jobs/${jobId}/review/block/retranslate`),
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ indices, instruction }),
+      }
+    );
+    return handleResponse<BlockRetranslateResponse>(response);
+  },
+
+  /**
    * Apply edits to several paragraphs of one block in a single revision.
    *
    * A wrapped sentence is one review item, so it must apply atomically:
@@ -338,12 +364,17 @@ export const apiClient = {
   async applyReviewBlockEdit(
     jobId: string,
     edits: Record<number, string>,
-    expectedRevision: number
+    expectedRevision: number,
+    propagateIdentical: boolean
   ): Promise<ReviewMutationResponse> {
     const response = await fetch(await apiUrl(`/api/v1/jobs/${jobId}/review/block`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ edits, expected_revision: expectedRevision }),
+      body: JSON.stringify({
+        edits,
+        expected_revision: expectedRevision,
+        propagate_identical: propagateIdentical,
+      }),
     });
     return handleResponse<ReviewMutationResponse>(response);
   },
@@ -354,18 +385,34 @@ export const apiClient = {
    * Bulk in one call so "남은 항목 모두 넘기기" is a single undoable step.
    * Returns only the entries that actually changed — feed those back with
    * `action: "restore"` to undo.
+   *
+   * A large deck can carry more findings than one request may hold
+   * (`ReviewDismissalRequest.entries`, 2000), so the batch is split and the
+   * changed entries reported as one set. Dismissals are commutative and take no
+   * lock, so the split is invisible to everything but the wire.
    */
   async updateReviewDismissals(
     jobId: string,
     action: "dismiss" | "restore",
     entries: ReviewDismissalEntry[]
   ): Promise<ReviewDismissalResponse> {
-    const response = await fetch(await apiUrl(`/api/v1/jobs/${jobId}/review/dismissals`), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action, entries }),
-    });
-    return handleResponse<ReviewDismissalResponse>(response);
+    const url = await apiUrl(`/api/v1/jobs/${jobId}/review/dismissals`);
+    const changed: ReviewDismissalEntry[] = [];
+    let last: ReviewDismissalResponse | null = null;
+    for (let at = 0; at < entries.length; at += MAX_DISMISSAL_ENTRIES) {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action,
+          entries: entries.slice(at, at + MAX_DISMISSAL_ENTRIES),
+        }),
+      });
+      last = await handleResponse<ReviewDismissalResponse>(response);
+      changed.push(...last.changed);
+    }
+    if (!last) throw new Error("no dismissal entries");
+    return { ...last, changed };
   },
 
   async undoReview(jobId: string, expectedRevision: number): Promise<ReviewMutationResponse> {

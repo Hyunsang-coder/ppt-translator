@@ -46,10 +46,12 @@ export function reviewColorContrast(color: string | null): {
   };
 }
 
+// Size and leading come from the block around it: the queue scales its body
+// text to the fragment's length, and a size of its own would undo that.
 export function StyledText({ segments, fallback }: { segments: StyleSegment[]; fallback: string }) {
-  if (segments.length === 0) return <span className="text-sm">{fallback}</span>;
+  if (segments.length === 0) return <span>{fallback}</span>;
   return (
-    <span className="text-sm leading-snug">
+    <span>
       {segments.map((segment, index) => {
         const contrast = reviewColorContrast(segment.color);
         return (

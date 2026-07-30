@@ -182,6 +182,13 @@ export interface FragmentProposalResponse {
   over_budget: boolean;
 }
 
+/** A block re-translation: proposed text per paragraph, nothing applied yet. */
+export interface BlockRetranslateResponse {
+  base_revision: number;
+  edits: Record<number, string>;
+  over_budget: boolean;
+}
+
 export interface ApplyProposalResponse {
   index: number;
   target: string;

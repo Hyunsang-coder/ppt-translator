@@ -24,11 +24,12 @@ import {
   suggestFix,
   type EditorMode,
   type ReviewLogEntry,
+  type ReviewProposal,
 } from "@/lib/review-queue";
 import type {
   FragmentItem,
-  FragmentProposalResponse,
   PartialCandidate,
+  ReviewDismissalEntry,
 } from "@/types/api";
 import { AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -57,7 +58,7 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
   // A re-translation belongs to the item it was made for: navigating away must
   // not offer it for the next one.
   const [proposalFor, setProposalFor] = useState<
-    { key: string; response: FragmentProposalResponse } | null
+    { key: string; proposal: ReviewProposal } | null
   >(null);
   const [pendingKey, setPendingKey] = useState<string | null>(null);
   const [partialCandidates, setPartialCandidates] = useState<PartialCandidate[]>([]);
@@ -112,10 +113,16 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
     [queue]
   );
   const queueKeys = useMemo(() => queue.map((block) => block.key), [queue]);
+  // Blocks the latest sweep still flags — an applied edit that left one behind
+  // has not finished the item, so `sync` puts it back in the queue.
+  const flaggedKeys = useMemo(
+    () => queue.filter((block) => blockFindings(block).length > 0).map((block) => block.key),
+    [queue]
+  );
 
   useEffect(() => {
-    dispatch({ type: "sync", keys: queueKeys });
-  }, [queueKeys]);
+    dispatch({ type: "sync", keys: queueKeys, flagged: flaggedKeys });
+  }, [queueKeys, flaggedKeys]);
 
   const currentKey = queueState.order[queueState.cursor] ?? null;
   const current = currentKey ? blocksByKey.get(currentKey) ?? null : null;
@@ -189,13 +196,23 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
     setSelectedPartial(new Set(list.length === 1 ? [list[0].index] : []));
   };
 
+  // `busy` guards the shortcut as much as the button: a second `s` before the
+  // first dismissal returns would log an undo step the server knows nothing of.
   const skip = async () => {
-    if (!current) return;
+    if (!current || busy) return;
     const entries = blockFindings(current).map(({ index, finding }) => ({
       index,
       finding_type: finding.type,
     }));
-    if (entries.length === 0) return;
+    if (entries.length === 0) {
+      // A block opened from the full list carries nothing to dismiss — the
+      // server has no work, but the queue still has to let it be handled.
+      dispatch({
+        type: "resolve",
+        entry: { kind: "dismiss", keys: [current.key], entries: [] },
+      });
+      return;
+    }
     setBusy(true);
     try {
       const resp = await apiClient.updateReviewDismissals(jobId, "dismiss", entries);
@@ -228,12 +245,18 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
           }))
         : [];
     });
-    if (entries.length === 0) return;
+    if (keys.length === 0) return;
     setBusy(true);
     try {
-      const resp = await apiClient.updateReviewDismissals(jobId, "dismiss", entries);
-      setDirty(resp.dirty);
-      dispatch({ type: "resolve", entry: { kind: "dismiss", keys, entries: resp.changed } });
+      // Blocks pulled in from the full list have no findings to dismiss; they
+      // still belong to the batch so `되돌리기` brings the whole step back.
+      let changed: ReviewDismissalEntry[] = [];
+      if (entries.length > 0) {
+        const resp = await apiClient.updateReviewDismissals(jobId, "dismiss", entries);
+        setDirty(resp.dirty);
+        changed = resp.changed;
+      }
+      dispatch({ type: "resolve", entry: { kind: "dismiss", keys, entries: changed } });
       await refresh();
     } catch {
       toast.error("남은 항목을 넘기지 못했습니다.");
@@ -311,8 +334,8 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
         receivePartials(resp.partial_candidates);
       } else {
         // 여러 문단이면 한 요청으로 — 되돌리기 한 번에 문장 전체가 복구돼야 한다.
-        // 대신 이 경로에는 동일 문구 전파·부분 일치 후보가 없다.
-        const resp = await apiClient.applyReviewBlockEdit(jobId, edits, revision);
+        // 동일 문구 전파는 이 경로에도 있고, 부분 일치 후보만 없다.
+        const resp = await apiClient.applyReviewBlockEdit(jobId, edits, revision, propagate);
         setRevision(resp.revision);
         setDirty(resp.dirty);
       }
@@ -327,19 +350,34 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
   const retranslate = async () => {
     if (!current || !subject) return;
     const trimmed = instruction.trim();
+    const used = current.items.reduce((sum, item) => sum + item.target.length, 0);
     const overBudget =
-      subject.length_budget !== null &&
-      !subject.is_note &&
-      subject.target.length > subject.length_budget;
+      subject.length_budget !== null && !subject.is_note && used > subject.length_budget;
+    const hint = trimmed || (overBudget ? "더 짧게" : undefined);
     setProposalFor(null);
     setPendingKey(current.key);
     try {
-      const response = await apiClient.proposeJobFragment(jobId, subject.index, {
-        action: "retranslate",
-        instruction: trimmed || (overBudget ? "더 짧게" : undefined),
-        propagate_identical: propagate,
-      });
-      setProposalFor({ key: current.key, response });
+      // A merged block is one sentence: re-translating a single paragraph of it
+      // is what left the wording under review, so the whole item goes together.
+      let proposal: ReviewProposal;
+      if (current.items.length > 1) {
+        const resp = await apiClient.retranslateReviewBlock(
+          jobId,
+          current.items.map((item) => item.index),
+          hint
+        );
+        proposal = { kind: "block", edits: resp.edits, overBudget: resp.over_budget };
+      } else {
+        proposal = {
+          kind: "fragment",
+          response: await apiClient.proposeJobFragment(jobId, subject.index, {
+            action: "retranslate",
+            instruction: hint,
+            propagate_identical: propagate,
+          }),
+        };
+      }
+      setProposalFor({ key: current.key, proposal });
     } catch {
       toast.error("재번역에 실패했습니다.");
     } finally {
@@ -349,15 +387,30 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
 
   const applyProposal = async () => {
     if (!current || proposalFor?.key !== current.key) return;
-    const proposalId = proposalFor.response.proposal_id;
+    const pending = proposalFor.proposal;
     const entry: ReviewLogEntry = { kind: "edit", keys: [current.key], revision };
     setProposalFor(null);
     dispatch({ type: "resolve", entry });
     try {
-      const resp = await apiClient.applyJobFragmentProposal(jobId, proposalId, revision);
-      setRevision(resp.revision);
-      setDirty(resp.dirty);
-      receivePartials(resp.partial_candidates);
+      if (pending.kind === "block") {
+        const resp = await apiClient.applyReviewBlockEdit(
+          jobId,
+          pending.edits,
+          revision,
+          propagate
+        );
+        setRevision(resp.revision);
+        setDirty(resp.dirty);
+      } else {
+        const resp = await apiClient.applyJobFragmentProposal(
+          jobId,
+          pending.response.proposal_id,
+          revision
+        );
+        setRevision(resp.revision);
+        setDirty(resp.dirty);
+        receivePartials(resp.partial_candidates);
+      }
       await refresh();
     } catch {
       // A proposal is bound to the revision it was made against, so a conflict
@@ -375,12 +428,20 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
     const first = partialCandidates[0];
     setApplyingPartial(true);
     try {
-      await apiClient.applyPartialCandidates(jobId, {
+      const resp = await apiClient.applyPartialCandidates(jobId, {
         indices: Array.from(selectedPartial),
         old_phrase: first.old_phrase,
         new_phrase: first.new_phrase,
         expected_revision: revision,
       });
+      setRevision(resp.revision);
+      setDirty(resp.dirty);
+      // This pushed a draft snapshot on the server, so the client log has to
+      // grow with it — otherwise the next `되돌리기` pops this one while
+      // claiming to undo the edit before it. No keys: nothing was handled here.
+      if (resp.changed_indices.length > 0) {
+        dispatch({ type: "resolve", entry: { kind: "edit", keys: [], revision } });
+      }
       setPartialCandidates([]);
       setSelectedPartial(new Set());
       await refresh();
@@ -574,7 +635,7 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
                   finding={currentFinding}
                   subject={subject}
                   suggestion={suggestion}
-                  proposal={proposalFor?.key === current.key ? proposalFor.response : null}
+                  proposal={proposalFor?.key === current.key ? proposalFor.proposal : null}
                   proposalPending={pendingKey === current.key}
                   position={queueState.cursor + 1}
                   total={total}

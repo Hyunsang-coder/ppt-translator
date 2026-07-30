@@ -16,7 +16,7 @@ import re
 import uuid
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Sequence
 
 from lxml import etree
 
@@ -81,6 +81,44 @@ class _DraftSnapshot:
     texts: Dict[int, str]
     colors: Dict[int, Optional[list]]
     edited_indices: set
+
+
+def _cut_at_boundary(text: str, want: int) -> int:
+    """Offset to break `text` at: the space nearest `want`, else `want` itself.
+
+    Scripts that do not space their words (Korean, Japanese, Chinese) wrap
+    anywhere, so an exact cut is the normal outcome for them.
+    """
+    for offset in range(max(4, want // 4) + 1):
+        for candidate in (want - offset, want + offset):
+            if 0 < candidate < len(text) and text[candidate].isspace():
+                return candidate
+    return want
+
+
+def _wrap_to_weights(text: str, weights: Sequence[int]) -> List[str]:
+    """Split `text` over `len(weights)` lines, each taking its share of it.
+
+    Used to put a re-translated sentence back into the paragraphs the source
+    deck wrapped it across, so the lines keep the proportions they had.
+    """
+    lines: List[str] = []
+    rest = text.strip()
+    remaining_weight = sum(weights)
+    for position, weight in enumerate(weights[:-1]):
+        # Every line after this one still needs a character of its own.
+        room = len(rest) - (len(weights) - position - 1)
+        if room <= 0:
+            lines.append("")
+            remaining_weight -= weight
+            continue
+        want = min(max(round(len(rest) * weight / remaining_weight), 1), room)
+        cut = min(max(_cut_at_boundary(rest, want), 1), room)
+        lines.append(rest[:cut].strip())
+        rest = rest[cut:].lstrip()
+        remaining_weight -= weight
+    lines.append(rest)
+    return lines
 
 
 @dataclass
@@ -411,6 +449,7 @@ class ReviewSession:
         expected_revision: int,
         model: str,
         provider: str,
+        propagate_identical: bool = False,
     ) -> List[int]:
         """Stage edits to several paragraphs as one revision.
 
@@ -418,6 +457,11 @@ class ReviewSession:
         so applying it has to be atomic: one history entry (so ``되돌리기``
         restores the whole sentence, not its last line) and one revision bump
         (so a half-applied block cannot exist).
+
+        ``propagate_identical`` carries the same wording to every other fragment
+        that repeats it, as the single-paragraph path does. A paragraph the
+        caller edited explicitly keeps its own text: two lines of one block can
+        start out identical and still be edited apart.
         """
         if expected_revision != self.revision:
             raise RuntimeError("review revision conflict")
@@ -426,8 +470,12 @@ class ReviewSession:
         for index, target in edits.items():
             if not (0 <= index < len(self.translated_texts)):
                 raise IndexError(f"fragment index {index} out of range")
-            if self.translated_texts[index] != target:
-                changed[index] = target
+            others = self.identical_indices(index) if propagate_identical else [index]
+            for other in others:
+                if other != index and other in edits:
+                    continue
+                if self.translated_texts[other] != target:
+                    changed[other] = target
         if not changed:
             return []
 
@@ -496,22 +544,27 @@ class ReviewSession:
             self.run_final_sweep()
         return dict(merged)
 
-    def retranslate_fragment(
+    def _translate_candidate(
         self,
         index: int,
+        source_text: str,
         instruction: Optional[str],
+        budget: Optional[int],
         *,
         model: str,
         provider: str,
-    ) -> tuple[str, Optional[list]]:
-        """Generate one candidate, retrying once when it exceeds box capacity."""
+    ) -> str:
+        """One model call for `source_text`, retried once when it overruns `budget`.
+
+        `index` only supplies the paragraph metadata the prompt is built from;
+        the text translated is `source_text`, which for a merged block is the
+        block's paragraphs joined rather than any single one of them.
+        """
         from src.chains.translation_chain import create_translation_chain, translate_with_progress
         from src.utils.glossary_loader import GlossaryLoader
         from src.utils.helpers import chunk_paragraphs
 
         info = self._source_paragraphs[index]
-        budget = self.length_budget(index)
-        source_text = info.original_text or ""
         matching_glossary = GlossaryLoader.filter_matching_terms(
             self.glossary, [source_text]
         )
@@ -561,13 +614,74 @@ class ReviewSession:
                 )
             return result
 
-        new_target = translate_once(False)
-        if budget is not None and len(new_target) > budget:
-            new_target = translate_once(True)
+        candidate = translate_once(False)
+        if budget is not None and len(candidate) > budget:
+            candidate = translate_once(True)
+        return candidate
+
+    def retranslate_fragment(
+        self,
+        index: int,
+        instruction: Optional[str],
+        *,
+        model: str,
+        provider: str,
+    ) -> tuple[str, Optional[list]]:
+        """Generate one candidate, retrying once when it exceeds box capacity."""
+        new_target = self._translate_candidate(
+            index,
+            self._source_paragraphs[index].original_text or "",
+            instruction,
+            self.length_budget(index),
+            model=model,
+            provider=provider,
+        )
         color_segments = self._map_color_distribution(
             index, new_target, model=model, provider=provider
         )
         return new_target, color_segments
+
+    def retranslate_block(
+        self,
+        indices: Sequence[int],
+        instruction: Optional[str],
+        *,
+        model: str,
+        provider: str,
+    ) -> Dict[int, str]:
+        """Re-translate the paragraphs of one block as a single sentence.
+
+        A merged block is a sentence the source deck hard-wrapped across
+        paragraphs, so translating the halves one at a time is what produced the
+        wording under review. The joined source goes to the model once and the
+        result is wrapped back over the same paragraphs: the box keeps its lines,
+        and each one takes the share of the sentence its source had.
+
+        A line the wrapping leaves empty is left out of the result rather than
+        written blank — an empty paragraph would change the box's layout.
+        """
+        ordered = sorted(indices)
+        for index in ordered:
+            if not (0 <= index < len(self.translated_texts)):
+                raise IndexError(f"fragment index {index} out of range")
+        sources = [
+            (self._source_paragraphs[index].original_text or "").strip()
+            for index in ordered
+        ]
+        joined = " ".join(text for text in sources if text)
+        if not joined:
+            return {}
+
+        translated = self._translate_candidate(
+            ordered[0],
+            joined,
+            instruction,
+            self.length_budget(ordered[0]),
+            model=model,
+            provider=provider,
+        )
+        lines = _wrap_to_weights(translated, [max(len(text), 1) for text in sources])
+        return {index: line for index, line in zip(ordered, lines) if line}
 
     @staticmethod
     def _changed_phrase(old: str, new: str) -> tuple[str, str]:

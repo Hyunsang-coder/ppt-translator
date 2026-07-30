@@ -32,7 +32,11 @@ export function GlossaryPane({
   const [target, setTarget] = useState("");
   const [busy, setBusy] = useState(false);
   const [glossaryId, setGlossaryId] = useState("");
+  // Below `lg` there is no room for a third column, so the same panel opens
+  // over the item instead of disappearing with it.
+  const [open, setOpen] = useState(false);
   const paneRef = useRef<HTMLElement | null>(null);
+  const drawerRef = useRef<HTMLElement | null>(null);
 
   const glossaries = useGlossaryStore((s) => s.glossaries);
   const activeGlossaryIds = useGlossaryStore((s) => s.activeGlossaryIds);
@@ -86,13 +90,31 @@ export function GlossaryPane({
       const picked = window.getSelection()?.toString().trim() ?? "";
       if (!picked || picked.length > MAX_PICKED_TERM_CHARS) return;
       const anchor = window.getSelection()?.anchorNode ?? null;
-      // Selecting inside the pane itself (or its inputs) must not overwrite it.
-      if (anchor && paneRef.current?.contains(anchor)) return;
+      // Selecting inside the panel itself (or its inputs) must not overwrite it.
+      if (
+        anchor &&
+        (paneRef.current?.contains(anchor) || drawerRef.current?.contains(anchor))
+      ) {
+        return;
+      }
       setSource(picked);
     };
     document.addEventListener("mouseup", pickSelection);
     return () => document.removeEventListener("mouseup", pickSelection);
   }, []);
+
+  // The review screen closes itself on Escape; while the drawer is open, Escape
+  // belongs to the drawer. Capture phase, so that window listener never sees it.
+  useEffect(() => {
+    if (!open) return;
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      setOpen(false);
+    };
+    window.addEventListener("keydown", dismiss, true);
+    return () => window.removeEventListener("keydown", dismiss, true);
+  }, [open]);
 
   const register = async () => {
     const src = source.trim();
@@ -149,13 +171,8 @@ export function GlossaryPane({
     }
   };
 
-  return (
-    <aside
-      ref={paneRef}
-      // The window opens at 1100 and can shrink to 800: below ~1024 the three
-      // columns leave the item too narrow to read, and the item is the point.
-      className="hidden w-[264px] shrink-0 flex-col border-l border-border bg-card lg:flex"
-    >
+  const body = (
+    <>
       <div className="border-b border-border px-4 pb-3.5 pt-4">
         <p className="text-[13px] font-bold">이 덱의 용어집</p>
         <p className="truncate text-xs text-muted-foreground">
@@ -235,6 +252,62 @@ export function GlossaryPane({
           라이브러리와 이 작업에 동시에 반영 · 다음 번역부터 자동 적용됩니다.
         </p>
       </div>
-    </aside>
+    </>
+  );
+
+  return (
+    <>
+      <aside
+        ref={paneRef}
+        // Below ~1024 the three columns leave the item too narrow to read, and
+        // the item is the point.
+        className="hidden w-[264px] shrink-0 flex-col border-l border-border bg-card lg:flex"
+      >
+        {body}
+      </aside>
+
+      {/* Collapsing the column cannot mean losing the feature: the quick-add
+          lives nowhere else, so at narrow widths it opens over the item. */}
+      {!open && (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="fixed bottom-[76px] right-5 z-10 h-9 gap-1.5 shadow-md lg:hidden"
+          onClick={() => setOpen(true)}
+        >
+          <Plus className="size-3.5" />
+          용어집
+        </Button>
+      )}
+
+      {open && (
+        <div className="fixed inset-0 z-20 flex justify-end bg-foreground/20 lg:hidden">
+          <button
+            type="button"
+            className="flex-1"
+            aria-label="용어집 닫기"
+            onClick={() => setOpen(false)}
+          />
+          <aside
+            ref={drawerRef}
+            className="flex w-[288px] max-w-[85vw] flex-col border-l border-border bg-card"
+          >
+            <div className="flex justify-end px-2 pt-2">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-7"
+                onClick={() => setOpen(false)}
+              >
+                닫기
+              </Button>
+            </div>
+            {body}
+          </aside>
+        </div>
+      )}
+    </>
   );
 }

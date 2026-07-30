@@ -13,6 +13,7 @@ import type {
   ContainerKind,
   FragmentFinding,
   FragmentItem,
+  FragmentProposalResponse,
   ReviewDismissalEntry,
 } from "@/types/api";
 import { glossaryTermKey } from "@/lib/glossary";
@@ -393,6 +394,20 @@ function findSimilarSpan(
   return best;
 }
 
+// --- re-translation ---------------------------------------------------------
+
+/**
+ * A re-translation waiting for a decision.
+ *
+ * One paragraph goes through the proposal endpoint, which also offers deck-wide
+ * propagation and partial-match candidates. A merged block cannot: it is one
+ * sentence split over paragraphs, so it is translated as a whole and comes back
+ * as text per paragraph, applied through the block endpoint.
+ */
+export type ReviewProposal =
+  | { kind: "fragment"; response: FragmentProposalResponse }
+  | { kind: "block"; edits: Record<number, string>; overBudget: boolean };
+
 // --- queue state (§3.3) -----------------------------------------------------
 
 export type ReviewOutcome = "applied" | "skipped";
@@ -436,7 +451,7 @@ export const initialQueueState: QueueState = {
 
 export type QueueAction =
   /** Reconcile with a freshly loaded fragment list (keys in severity order). */
-  | { type: "sync"; keys: readonly string[] }
+  | { type: "sync"; keys: readonly string[]; flagged?: readonly string[] }
   | { type: "move"; delta: number }
   | { type: "focus"; key: string }
   /** Open a block from the full list, whether or not it has findings. */
@@ -464,6 +479,26 @@ function nextUnresolved(
   return from;
 }
 
+/**
+ * Blocks marked `applied` that a fresh sweep still flags are not handled.
+ * Returns the map unchanged when there is nothing to reopen, so the queue memo
+ * that reads it does not re-run on every reload.
+ */
+function reopenFlagged(
+  resolved: ResolvedMap,
+  flagged: readonly string[] | undefined
+): ResolvedMap {
+  if (!flagged) return resolved;
+  const stillFlagged = new Set(flagged);
+  const reopened = Object.keys(resolved).filter(
+    (key) => resolved[key] === "applied" && stillFlagged.has(key)
+  );
+  if (reopened.length === 0) return resolved;
+  const next = { ...resolved };
+  for (const key of reopened) delete next[key];
+  return next;
+}
+
 export function queueReducer(state: QueueState, action: QueueAction): QueueState {
   switch (action.type) {
     case "sync": {
@@ -477,9 +512,15 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
         state.pendingFocus && incoming.has(state.pendingFocus) ? state.pendingFocus : null;
       const focused = pending ?? state.order[state.cursor];
       const at = focused ? order.indexOf(focused) : -1;
+      // A block can carry more than one finding, and a fix for the first can
+      // leave — or cause — a second one. An edit that did not clear the block
+      // therefore goes back into the queue; a skip is the user's own decision
+      // about the whole block and stays.
+      const resolved = reopenFlagged(state.resolved, action.flagged);
       return {
         ...state,
         order,
+        resolved,
         cursor: at >= 0 ? at : clamp(state.cursor, order.length - 1),
         pendingFocus: pending ? null : state.pendingFocus,
       };

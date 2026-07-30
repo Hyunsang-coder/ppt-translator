@@ -7,8 +7,14 @@ import {
   findingBadge,
   stylePreviewNote,
 } from "@/components/translation/review/finding-labels";
-import type { BlockFinding, EditorMode, FixSuggestion, ReviewBlock } from "@/lib/review-queue";
-import type { FragmentItem, FragmentProposalResponse } from "@/types/api";
+import type {
+  BlockFinding,
+  EditorMode,
+  FixSuggestion,
+  ReviewBlock,
+  ReviewProposal,
+} from "@/lib/review-queue";
+import type { FragmentItem } from "@/types/api";
 import {
   Ban,
   Check,
@@ -27,7 +33,7 @@ interface QueueItemProps {
   /** Ready-made replacement, when the wrong wording could be located. */
   suggestion: FixSuggestion | null;
   /** A re-translation waiting to be accepted, and whether one is being made. */
-  proposal: FragmentProposalResponse | null;
+  proposal: ReviewProposal | null;
   proposalPending: boolean;
   position: number;
   total: number;
@@ -112,6 +118,11 @@ export function QueueItem({
   onSkip,
 }: QueueItemProps) {
   const badge = finding ? findingBadge(finding.finding) : null;
+  // Both apply paths propagate identical text deck-wide, so the consent has to
+  // be offered whenever any paragraph of the block repeats — not only when the
+  // block happens to be a single paragraph.
+  const repeatCount = Math.max(...block.items.map((item) => item.repeat_count));
+  const merged = block.items.length > 1;
   const longest = Math.max(...block.items.map((item) => item.target.length));
   const textClass = bodyTextClass(longest, subject.is_note);
   const noteClamp = subject.is_note ? "max-h-40 overflow-y-auto" : "";
@@ -221,13 +232,28 @@ export function QueueItem({
                 AI 번역 결과
               </span>
               <span className="text-[11px] text-muted-foreground">
-                {stylePreviewNote(proposal.style_status) ?? "단일 서식"}
+                {proposal.kind === "block"
+                  ? `${block.items.length}줄을 한 문장으로 다시 번역했습니다`
+                  : stylePreviewNote(proposal.response.style_status) ?? "단일 서식"}
               </span>
             </p>
-            <p className={`mb-3.5 ${textClass} leading-[1.45] tracking-[-0.01em]`}>
-              <StyledText segments={proposal.style_segments} fallback={proposal.target} />
-            </p>
-            {proposal.over_budget && (
+            {proposal.kind === "block" ? (
+              <div className={`mb-3.5 space-y-1 ${textClass} leading-[1.45] tracking-[-0.01em]`}>
+                {block.items.map((item) => (
+                  <p key={item.index}>{proposal.edits[item.index] ?? item.target}</p>
+                ))}
+              </div>
+            ) : (
+              <p className={`mb-3.5 ${textClass} leading-[1.45] tracking-[-0.01em]`}>
+                <StyledText
+                  segments={proposal.response.style_segments}
+                  fallback={proposal.response.target}
+                />
+              </p>
+            )}
+            {(proposal.kind === "block"
+              ? proposal.overBudget
+              : proposal.response.over_budget) && (
               <p className="mb-2 text-xs text-destructive">예상 박스 용량을 넘습니다.</p>
             )}
             <div className="flex flex-wrap items-center gap-2.5">
@@ -258,9 +284,15 @@ export function QueueItem({
               >
                 취소
               </Button>
-              {proposal.changed_indices.length > 1 && (
+              {(proposal.kind === "block"
+                ? propagate && repeatCount > 1
+                : proposal.response.changed_indices.length > 1) && (
                 <span className="text-xs text-muted-foreground">
-                  동일 문구 {proposal.changed_indices.length}곳도 함께 바뀝니다
+                  동일 문구{" "}
+                  {proposal.kind === "block"
+                    ? repeatCount
+                    : proposal.response.changed_indices.length}
+                  곳도 함께 바뀝니다
                 </span>
               )}
             </div>
@@ -327,7 +359,7 @@ export function QueueItem({
               </p>
               <LengthGauge used={draftLength} budget={budget} />
             </div>
-            {block.items.length === 1 && subject.repeat_count > 1 && (
+            {repeatCount > 1 && (
               <label className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
                 <input
                   type="checkbox"
@@ -335,7 +367,7 @@ export function QueueItem({
                   onChange={(event) => onPropagateChange(event.target.checked)}
                   className="accent-primary"
                 />
-                똑같은 문구 {subject.repeat_count}곳도 함께 바꾸기
+                똑같은 문구 {repeatCount}곳도 함께 바꾸기
               </label>
             )}
             <div className="mt-3 flex items-center gap-2.5">
@@ -362,6 +394,11 @@ export function QueueItem({
 
         {editor === "ai" && !proposal && !proposalPending && (
           <div className="mt-4 rounded-xl border border-primary/40 bg-primary/[0.06] px-4 py-3.5">
+            {merged && (
+              <p className="mb-2 text-xs text-muted-foreground">
+                {block.items.length}줄을 한 문장으로 묶어 번역하고, 결과를 다시 줄로 나눠 넣습니다.
+              </p>
+            )}
             <input
               type="text"
               value={instruction}

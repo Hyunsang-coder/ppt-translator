@@ -88,6 +88,39 @@ def review_job():
     manager._jobs.pop(job.id, None)
 
 
+@pytest.fixture
+def wrapped_review_job():
+    """A text box whose sentence the deck hard-wrapped across two paragraphs."""
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    box = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(5), Inches(1))
+    frame = box.text_frame
+    frame.text = "우리는 이 기능을"
+    frame.add_paragraph().text = "다음 분기에 출시합니다"
+    source = io.BytesIO()
+    presentation.save(source)
+    source_bytes = source.getvalue()
+    paragraphs, parsed = PPTParser().extract_paragraphs(io.BytesIO(source_bytes))
+    session = ReviewSession(
+        presentation=parsed,
+        paragraphs=paragraphs,
+        translated_texts=["we will ship this", "next quarter"],
+        findings=[],
+        source_lang="한국어",
+        target_lang="영어",
+        model="stub",
+        source_pptx=source_bytes,
+    )
+    manager = get_job_manager()
+    job = manager.create_job(JobType.TRANSLATION)
+    job.state = JobState.COMPLETED
+    job.review_session = session
+    job.output_file = io.BytesIO(b"published-before-review")
+    job.output_filename = "wrapped.pptx"
+    yield job
+    manager._jobs.pop(job.id, None)
+
+
 class TestFilenameGeneration:
     """Tests for output filename generation."""
 
@@ -570,6 +603,43 @@ class TestReviewEndpoints:
         )
         assert response.status_code == 409
         assert review_job.review_session.translated_texts[0] == "OTHER"
+
+    def test_block_retranslate_returns_text_per_paragraph(
+        self, client, wrapped_review_job
+    ):
+        """The whole sentence goes to the model once, and comes back per line."""
+        with patch.object(
+            ReviewSession,
+            "_translate_candidate",
+            return_value="We will ship this feature next quarter",
+        ) as translate:
+            response = client.post(
+                f"/api/v1/jobs/{wrapped_review_job.id}/review/block/retranslate",
+                json={"indices": [1, 0], "instruction": "더 짧게"},
+            )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["base_revision"] == 0
+        assert sorted(body["edits"]) == ["0", "1"]
+        assert (
+            " ".join(body["edits"][key] for key in ("0", "1"))
+            == "We will ship this feature next quarter"
+        )
+        # One call, on the joined source, with the instruction passed through.
+        assert translate.call_count == 1
+        assert translate.call_args.args[1] == "우리는 이 기능을 다음 분기에 출시합니다"
+        assert translate.call_args.args[2] == "더 짧게"
+        # Nothing is staged: the client applies this through /review/block.
+        session = wrapped_review_job.review_session
+        assert session.translated_texts == ["we will ship this", "next quarter"]
+        assert session.revision == 0
+
+    def test_block_retranslate_rejects_out_of_range_index(self, client, review_job):
+        response = client.post(
+            f"/api/v1/jobs/{review_job.id}/review/block/retranslate",
+            json={"indices": [0, 9]},
+        )
+        assert response.status_code == 400
 
     def test_block_edit_rejects_out_of_range_index(self, client, review_job):
         response = client.post(

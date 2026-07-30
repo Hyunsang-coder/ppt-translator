@@ -366,6 +366,26 @@ class BlockEditRequest(BaseModel):
     # fragment index -> new target text
     edits: Dict[int, str] = Field(..., min_length=1, max_length=200)
     expected_revision: int
+    # Carry each edited paragraph's new text to fragments that repeat it.
+    propagate_identical: bool = False
+
+
+class BlockRetranslateRequest(BaseModel):
+    """Re-translate the paragraphs of one block as a single sentence."""
+
+    # The block's fragment indices, in any order. `MAX_MERGE_PARAGRAPHS` on the
+    # client is 4; the cap here only keeps one request from joining a whole deck.
+    indices: List[int] = Field(..., min_length=2, max_length=8)
+    instruction: Optional[str] = None
+
+
+class BlockRetranslateResponse(BaseModel):
+    """Proposed text per paragraph, ready to be sent back as a block edit."""
+
+    base_revision: int
+    # fragment index -> proposed target text; lines left empty are omitted.
+    edits: Dict[int, str] = {}
+    over_budget: bool = False
 
 
 class ReviewDismissalEntry(BaseModel):
@@ -1512,6 +1532,56 @@ async def apply_review_partial_candidates(
 
 
 @app.post(
+    "/api/v1/jobs/{job_id}/review/block/retranslate",
+    response_model=BlockRetranslateResponse,
+)
+async def retranslate_review_block(
+    job_id: str, body: BlockRetranslateRequest
+) -> BlockRetranslateResponse:
+    """Re-translate a block's paragraphs as one sentence, without applying it.
+
+    The single-fragment proposal endpoint rewrites exactly one paragraph, which
+    on a hard-wrapped sentence leaves the other half in its old wording. Here the
+    joined source is translated once and wrapped back over the same paragraphs;
+    the caller applies the result through ``/review/block`` so it stays one
+    revision and one undo step.
+    """
+    job = get_job_manager().get_job(job_id)
+    if job is None or job.review_session is None:
+        raise HTTPException(status_code=404, detail="Review session not found")
+    session = job.review_session
+    if any(not (0 <= index < len(session.paragraphs)) for index in body.indices):
+        raise HTTPException(status_code=400, detail="Fragment index out of range")
+
+    # The model call must not hold review_lock: nothing is mutated here, and a
+    # glossary update or an apply would otherwise stall behind it.
+    try:
+        loop = asyncio.get_running_loop()
+        edits = await loop.run_in_executor(
+            None,
+            functools.partial(
+                session.retranslate_block,
+                body.indices,
+                body.instruction,
+                model=session.model or DEFAULT_TRANSLATION_MODEL,
+                provider=session.provider,
+            ),
+        )
+    except Exception as exc:
+        LOGGER.exception("Block re-translation failed: %s", exc)
+        raise HTTPException(status_code=500, detail="재번역에 실패했습니다.")
+
+    budget = session.length_budget(min(body.indices))
+    return BlockRetranslateResponse(
+        base_revision=session.revision,
+        edits=edits,
+        over_budget=(
+            budget is not None and sum(len(text) for text in edits.values()) > budget
+        ),
+    )
+
+
+@app.post(
     "/api/v1/jobs/{job_id}/review/block",
     response_model=ReviewMutationResponse,
 )
@@ -1542,6 +1612,7 @@ async def apply_review_block_edit(
                     expected_revision=body.expected_revision,
                     model=session.model or DEFAULT_TRANSLATION_MODEL,
                     provider=session.provider,
+                    propagate_identical=body.propagate_identical,
                 ),
             )
             findings = await loop.run_in_executor(None, session.run_final_sweep)

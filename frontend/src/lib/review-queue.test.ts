@@ -325,6 +325,43 @@ describe("queueReducer", () => {
     expect(focusedKey(restored)).toBe("a");
   });
 
+  it("reopens an applied block the next sweep still flags", () => {
+    // The glossary fix landed and the term is right, but the longer wording now
+    // overflows its box — the block carries a second finding and is not done.
+    const applied = reduce(synced, {
+      type: "resolve",
+      entry: { kind: "edit", keys: ["a"], revision: 4 },
+    });
+
+    const reloaded = reduce(applied, { type: "sync", keys: KEYS, flagged: ["a", "b"] });
+
+    expect(reloaded.resolved).toEqual({});
+    expect(remainingCount(reloaded)).toBe(3);
+  });
+
+  it("keeps an applied block handled once its findings clear", () => {
+    const applied = reduce(synced, {
+      type: "resolve",
+      entry: { kind: "edit", keys: ["a"], revision: 4 },
+    });
+
+    const reloaded = reduce(applied, { type: "sync", keys: KEYS, flagged: ["b", "c"] });
+
+    expect(reloaded.resolved).toEqual({ a: "applied" } satisfies Record<string, ReviewOutcome>);
+  });
+
+  it("leaves a skipped block skipped whatever the sweep says", () => {
+    // 이대로 두기 is a decision about the block, not about one finding.
+    const skipped = reduce(synced, {
+      type: "resolve",
+      entry: { kind: "dismiss", keys: ["a"], entries: [] },
+    });
+
+    const reloaded = reduce(skipped, { type: "sync", keys: KEYS, flagged: ["a"] });
+
+    expect(reloaded.resolved).toEqual({ a: "skipped" } satisfies Record<string, ReviewOutcome>);
+  });
+
   it("takes back a failed optimistic apply without disturbing later ones", () => {
     // The cursor advances before the server answers, so by the time an apply
     // fails the user may already have handled the next item.

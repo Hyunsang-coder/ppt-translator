@@ -19,7 +19,7 @@ from src.core.ppt_parser import PPTParser
 from src.core.ppt_writer import snapshot_fit_geometry
 from src.services.consistency_sweep import Finding
 from src.services.quality_records import QualityRecorder
-from src.services.review_session import ReviewSession
+from src.services.review_session import ReviewSession, _wrap_to_weights
 
 
 def _deck(text: str, n: int) -> io.BytesIO:
@@ -242,6 +242,72 @@ class BlockEditTestCase(unittest.TestCase):
             )
         self.assertEqual(sess.translated_texts, ["one", "two"])
         self.assertEqual(sess.revision, 0)
+
+    def test_block_edit_propagates_to_identicals(self) -> None:
+        sess = _session("반복", 3, targets=["one", "one", "one"])
+        changed = sess.apply_block_edit(
+            {0: "ONE"}, expected_revision=0, model="m", provider="anthropic",
+            propagate_identical=True,
+        )
+        self.assertEqual(changed, [0, 1, 2])
+        self.assertEqual(sess.translated_texts, ["ONE", "ONE", "ONE"])
+
+    def test_an_explicit_edit_is_not_overwritten_by_propagation(self) -> None:
+        # Two lines of one block can start out identical and still be edited apart.
+        sess = _session("반복", 3, targets=["one", "one", "one"])
+        sess.apply_block_edit(
+            {0: "ONE", 1: "TWO"}, expected_revision=0, model="m", provider="anthropic",
+            propagate_identical=True,
+        )
+        self.assertEqual(sess.translated_texts[0], "ONE")
+        self.assertEqual(sess.translated_texts[1], "TWO")
+
+
+class WrapToWeightsTestCase(unittest.TestCase):
+    """A re-translated sentence goes back into the lines it was wrapped across."""
+
+    def test_splits_at_the_space_nearest_the_proportional_point(self) -> None:
+        self.assertEqual(
+            _wrap_to_weights("brand new sentence here", [1, 1]),
+            ["brand new", "sentence here"],
+        )
+
+    def test_lines_take_the_share_their_source_had(self) -> None:
+        self.assertEqual(
+            _wrap_to_weights("one two three four", [15, 5]),
+            ["one two three", "four"],
+        )
+
+    def test_scripts_without_spaces_cut_exactly(self) -> None:
+        self.assertEqual(_wrap_to_weights("가나다라", [1, 1]), ["가나", "다라"])
+
+    def test_every_line_keeps_a_character(self) -> None:
+        self.assertEqual(_wrap_to_weights("ab", [10, 1]), ["a", "b"])
+
+
+class BlockRetranslateTestCase(unittest.TestCase):
+    """A merged block is one sentence, so it is re-translated as one."""
+
+    def test_joined_source_goes_to_the_model_once(self) -> None:
+        sess = _session("A", 2, targets=["old one", "old two"])
+        with mock.patch.object(
+            ReviewSession, "_translate_candidate", return_value="brand new sentence here"
+        ) as translate:
+            edits = sess.retranslate_block([1, 0], None, model="m", provider="anthropic")
+
+        self.assertEqual(translate.call_count, 1)
+        self.assertEqual(translate.call_args.args[1], "A A")
+        self.assertEqual(edits, {0: "brand new", 1: "sentence here"})
+        # Nothing is staged — the caller applies the result as a block edit.
+        self.assertEqual(sess.translated_texts, ["old one", "old two"])
+        self.assertEqual(sess.revision, 0)
+
+    def test_out_of_range_index_is_rejected_before_the_model_call(self) -> None:
+        sess = _session("A", 2)
+        with mock.patch.object(ReviewSession, "_translate_candidate") as translate:
+            with self.assertRaises(IndexError):
+                sess.retranslate_block([0, 99], None, model="m", provider="anthropic")
+        translate.assert_not_called()
 
 
 class DismissRestoreTestCase(unittest.TestCase):
