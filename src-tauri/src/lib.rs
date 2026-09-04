@@ -4,9 +4,10 @@
 //!   1. Store the user's API keys in the OS keychain (macOS Keychain / Windows
 //!      Credential Manager) via the `keyring` crate.
 //!   2. Spawn the bundled Python sidecar (FastAPI server) on a free port,
-//!      injecting the stored keys as environment variables.
+//!      injecting the stored keys and a per-run capability token as environment variables.
 //!   3. Parse the sidecar's `SIDECAR_READY port=N` handshake from stdout and
-//!      expose that port to the WebView so the frontend can reach the API.
+//!      expose the port and token to the trusted WebView so the frontend can
+//!      reach the API.
 //!
 //! The sidecar is a trusted, app-bundled binary, so we spawn it directly with
 //! `std::process::Command` rather than going through tauri-plugin-shell (whose
@@ -18,6 +19,7 @@ use std::sync::Mutex;
 
 use serde::Serialize;
 use tauri::{Emitter, Manager, RunEvent, State};
+use uuid::Uuid;
 
 const KEYRING_SERVICE: &str = "ppt-translator";
 
@@ -49,11 +51,12 @@ impl Serialize for AppError {
     }
 }
 
-/// Shared runtime state: the bound port (once known) and the child handle so we
-/// can terminate the sidecar when the app exits.
+/// Shared runtime state: the bound port, a per-process capability token, and
+/// the child handle so we can terminate the sidecar when the app exits.
 #[derive(Default)]
 struct SidecarState {
     port: Mutex<Option<u16>>,
+    auth_token: Mutex<Option<String>>,
     child: Mutex<Option<Child>>,
 }
 
@@ -63,6 +66,7 @@ struct SidecarState {
 /// NSIS installer copying files such as Pillow's `_imaging*.pyd`.
 fn stop_sidecar(state: &SidecarState) -> Result<(), AppError> {
     *state.port.lock().unwrap() = None;
+    *state.auth_token.lock().unwrap() = None;
 
     if let Some(mut child) = state.child.lock().unwrap().take() {
         let is_running = child
@@ -120,6 +124,13 @@ fn has_api_key(provider: String) -> Result<bool, AppError> {
 #[tauri::command]
 fn get_sidecar_port(state: State<'_, SidecarState>) -> Option<u16> {
     *state.port.lock().unwrap()
+}
+
+/// Return the in-memory capability token to the trusted Tauri WebView only.
+/// The token is never written to disk, logged, or sent in the ready event.
+#[tauri::command]
+fn get_sidecar_auth_token(state: State<'_, SidecarState>) -> Option<String> {
+    state.auth_token.lock().unwrap().clone()
 }
 
 /// Read a stored key, returning None if absent. Used at spawn time.
@@ -205,15 +216,15 @@ fn sidecar_executable(app: &tauri::AppHandle) -> Result<std::path::PathBuf, AppE
 /// `SIDECAR_READY port=N` handshake from stdout on a background thread.
 fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), AppError> {
     let exe = sidecar_executable(app)?;
+    let auth_token = Uuid::new_v4().to_string();
 
     let mut command = Command::new(exe);
     command
         .args(["--host", "127.0.0.1", "--port", "0"])
         .env("PYTHONUNBUFFERED", "1")
-        // The sidecar only ever binds loopback, and the WebView origin varies by
-        // platform/mode (tauri://localhost, https://tauri.localhost,
-        // http://localhost:3000 in dev). Allow any origin in the desktop build.
-        .env("CORS_ALLOW_ALL", "1")
+        // A random per-run token prevents another local process from using the
+        // loopback port even if it discovers the port number.
+        .env("SIDECAR_AUTH_TOKEN", &auth_token)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
@@ -251,6 +262,7 @@ fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), AppError> {
         .lock()
         .unwrap()
         .replace(child);
+    *app.state::<SidecarState>().auth_token.lock().unwrap() = Some(auth_token);
 
     // Read stdout for the READY handshake.
     let app_handle = app.clone();
@@ -300,6 +312,7 @@ pub fn run() {
             delete_api_key,
             has_api_key,
             get_sidecar_port,
+            get_sidecar_auth_token,
             restart_sidecar,
             prepare_for_update,
         ])
@@ -356,12 +369,14 @@ mod tests {
             .expect("failed to start test child process");
         let state = SidecarState {
             port: Mutex::new(Some(54321)),
+            auth_token: Mutex::new(Some("test-token".into())),
             child: Mutex::new(Some(child)),
         };
 
         stop_sidecar(&state).expect("failed to stop test child process");
 
         assert_eq!(*state.port.lock().unwrap(), None);
+        assert_eq!(*state.auth_token.lock().unwrap(), None);
         assert!(state.child.lock().unwrap().is_none());
     }
 }

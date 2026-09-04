@@ -13,6 +13,8 @@ from typing import Dict, Literal
 
 from PIL import Image
 
+from src.utils.security import MAX_IMAGE_PIXELS, validate_zip_archive
+
 LOGGER = logging.getLogger(__name__)
 
 # Supported raster image extensions (case-insensitive)
@@ -52,6 +54,14 @@ def _compress_image(
         img = Image.open(io.BytesIO(image_data))
     except Exception:
         LOGGER.debug("Failed to open image, keeping original.")
+        return None
+
+    width, height = img.size
+    if width <= 0 or height <= 0 or width * height > MAX_IMAGE_PIXELS:
+        LOGGER.warning(
+            "Image exceeds the %d-pixel safety limit; keeping original.",
+            MAX_IMAGE_PIXELS,
+        )
         return None
 
     original_size = len(image_data)
@@ -114,9 +124,14 @@ def compress_pptx_images(
 
     input_buffer.seek(0)
 
-    # Verify it's a valid ZIP before attempting compression
-    if not zipfile.is_zipfile(input_buffer):
-        LOGGER.warning("Input is not a valid ZIP file, returning original.")
+    # Verify archive metadata before reading any member into memory.
+    is_safe, error_message = validate_zip_archive(
+        input_buffer,
+        required_entries=("[Content_Types].xml", "ppt/presentation.xml"),
+        validate_media_images=True,
+    )
+    if not is_safe:
+        LOGGER.warning("Input PPTX archive failed safety validation: %s", error_message)
         input_buffer.seek(0)
         return input_buffer
 
@@ -129,7 +144,9 @@ def compress_pptx_images(
         with zipfile.ZipFile(input_buffer, "r") as zin:
             with zipfile.ZipFile(output_buffer, "w", zipfile.ZIP_DEFLATED) as zout:
                 for item in zin.infolist():
-                    data = zin.read(item.filename)
+                    # Read by ZipInfo, not by name, so duplicate names cannot
+                    # cause the wrong member to be processed.
+                    data = zin.read(item)
 
                     # Only process images in ppt/media/
                     if item.filename.startswith("ppt/media/"):

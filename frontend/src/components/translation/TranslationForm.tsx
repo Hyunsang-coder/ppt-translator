@@ -102,14 +102,14 @@ export function TranslationForm() {
         <FileUploader
           label="PPT 파일"
           required
-          description={`PowerPoint 파일 (.pptx, .ppt) - 최대 ${config?.max_upload_size_mb || 1024}MB`}
+          description={`PowerPoint 파일 (.pptx, .ppt) - 최대 ${config?.max_upload_size_mb || 256}MB`}
           accept={{
             "application/vnd.openxmlformats-officedocument.presentationml.presentation": [
               ".pptx",
             ],
             "application/vnd.ms-powerpoint": [".ppt"],
           }}
-          maxSizeMB={config?.max_upload_size_mb || 1024}
+          maxSizeMB={config?.max_upload_size_mb || 256}
           selectedFile={pptFile}
           onFileSelect={setPptFile}
           disabled={isTranslating}

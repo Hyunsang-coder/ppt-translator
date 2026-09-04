@@ -14,14 +14,21 @@ the Rust shell reads those keys and injects them as `OPENAI_API_KEY` and
 OPENAI_API_KEY=         # Injected by Tauri, or .env for local API dev
 ANTHROPIC_API_KEY=      # Injected by Tauri, or .env for local API dev
 CORS_ALLOWED_ORIGINS=   # Comma-separated (default: http://localhost:3000,http://127.0.0.1:3000)
-CORS_ALLOW_ALL=1        # Set by Tauri for loopback-only desktop sidecar
-MAX_UPLOAD_SIZE_MB=1024 # Max uploaded PPT/PPTX size
+SIDECAR_AUTH_TOKEN=     # Set automatically by the Tauri shell; required when binding beyond loopback
+MAX_UPLOAD_SIZE_MB=256  # Max uploaded PPT/PPTX size
+MAX_REQUEST_BODY_MB=272 # Request envelope limit; keep above the upload limit for multipart overhead
 ```
+
+For local API development, leave `API_HOST` at its loopback default. If a
+non-loopback bind is explicitly required, set a high-entropy
+`SIDECAR_AUTH_TOKEN` and send it as `X-Sidecar-Token`; the Tauri shell creates
+and supplies this token automatically for desktop runs.
 
 ### Tuning Variables
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MAX_UPLOAD_SIZE_MB` | 1024 | Max uploaded PPT/PPTX size |
+| `MAX_UPLOAD_SIZE_MB` | 256 | Max uploaded PPT/PPTX size (capped at 512) |
+| `MAX_REQUEST_BODY_MB` | 272 | Maximum HTTP request body size (capped at 544) |
 | `TRANSLATION_MAX_CONCURRENCY` | 8 | Max concurrent API calls |
 | `TRANSLATION_BATCH_SIZE` | 80 | Default batch size |
 | `TRANSLATION_MIN_BATCH_SIZE` | 60 | Min batch size |

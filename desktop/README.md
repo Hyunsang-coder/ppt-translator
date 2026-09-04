@@ -6,7 +6,8 @@ keychain.
 
 ## Layout
 
-- `requirements-desktop.txt` — slimmed Python deps for the bundled sidecar.
+- `requirements-desktop.txt` — source dependency constraints for the bundled sidecar.
+- `requirements-desktop.lock` — hash-pinned, reproducible desktop runtime dependencies.
 - `sidecar.py` — sidecar entrypoint; binds a free port, prints
   `SIDECAR_READY port=N`, then serves the FastAPI app from `api.py`.
 - `sidecar.spec` — PyInstaller spec (onedir; excludes unused native deps).
@@ -28,7 +29,7 @@ manually:
 ```bash
 # from repo root (macOS/Linux)
 python3 -m venv desktop/.venv-desktop
-desktop/.venv-desktop/bin/pip install -r desktop/requirements-desktop.txt
+desktop/.venv-desktop/bin/python -m pip install --require-hashes -r desktop/requirements-desktop.lock
 
 # Tauri CLI. On this managed Mac, Defender DLP blocks linking from the default
 # temp dir, so build into a Defender-excluded folder:
@@ -39,7 +40,7 @@ On Windows (PowerShell), the venv path differs:
 
 ```powershell
 python -m venv desktop/.venv-desktop
-desktop/.venv-desktop/Scripts/python.exe -m pip install -r desktop/requirements-desktop.txt
+desktop/.venv-desktop/Scripts/python.exe -m pip install --require-hashes -r desktop/requirements-desktop.lock
 cargo install tauri-cli --version "^2.0.0"
 ```
 

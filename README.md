@@ -35,7 +35,7 @@ PowerPoint 번역 데스크톱 앱입니다. Tauri 셸이 Next.js UI를 띄우�
 ### Python sidecar
 ```bash
 python3 -m venv desktop/.venv-desktop
-desktop/.venv-desktop/bin/pip install -r desktop/requirements-desktop.txt
+desktop/.venv-desktop/bin/python -m pip install --require-hashes -r desktop/requirements-desktop.lock
 ```
 
 ### Frontend

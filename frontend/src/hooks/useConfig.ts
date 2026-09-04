@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { apiClient } from "@/lib/api-client";
 import type { ConfigResponse, LanguageInfo, ModelInfo } from "@/types/api";
 
-const DEFAULT_MAX_UPLOAD_SIZE_MB = 1024;
+const DEFAULT_MAX_UPLOAD_SIZE_MB = 256;
 
 // A-2: the backend (`/api/v1/config`, `/api/v1/models`, `/api/v1/languages`) is
 // the single source of truth for the model/language lists. The desktop shell
@@ -17,10 +17,10 @@ const DEFAULT_MAX_UPLOAD_SIZE_MB = 1024;
 function normalizeConfig(config: ConfigResponse): ConfigResponse {
   return {
     ...config,
-    max_upload_size_mb: Math.max(
-      config.max_upload_size_mb || DEFAULT_MAX_UPLOAD_SIZE_MB,
-      DEFAULT_MAX_UPLOAD_SIZE_MB
-    ),
+    max_upload_size_mb:
+      config.max_upload_size_mb > 0
+        ? config.max_upload_size_mb
+        : DEFAULT_MAX_UPLOAD_SIZE_MB,
   };
 }
 

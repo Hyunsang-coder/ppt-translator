@@ -20,7 +20,10 @@ class Settings:
 
     openai_api_key: Optional[str]
     anthropic_api_key: Optional[str] = None
-    max_upload_size_mb: int = 1024
+    # Keep the default small enough that a malformed presentation cannot
+    # consume the sidecar's entire memory budget before validation.
+    max_upload_size_mb: int = 256
+    max_request_body_mb: int = 272
     batch_size: int = 80
     max_retries: int = 3
     # P-1: keep the floor low enough that a mid-size deck can fill max_concurrency
@@ -60,12 +63,24 @@ def get_settings() -> Settings:
     max_upload_raw = os.getenv("MAX_UPLOAD_SIZE_MB")
     if max_upload_raw:
         try:
-            max_upload_size_mb = max(1, int(max_upload_raw))
+            max_upload_size_mb = max(1, min(512, int(max_upload_raw)))
         except ValueError:
             LOGGER.warning(
                 "Invalid MAX_UPLOAD_SIZE_MB=%s; using default %d.",
                 max_upload_raw,
                 max_upload_size_mb,
+            )
+
+    max_request_body_mb = min(544, max(base_settings.max_request_body_mb, max_upload_size_mb + 16))
+    max_request_body_raw = os.getenv("MAX_REQUEST_BODY_MB")
+    if max_request_body_raw:
+        try:
+            max_request_body_mb = max(1, min(544, int(max_request_body_raw)))
+        except ValueError:
+            LOGGER.warning(
+                "Invalid MAX_REQUEST_BODY_MB=%s; using default %d.",
+                max_request_body_raw,
+                max_request_body_mb,
             )
 
     concurrency_raw = os.getenv("TRANSLATION_MAX_CONCURRENCY")
@@ -213,6 +228,7 @@ def get_settings() -> Settings:
     return replace(
         base_settings,
         max_upload_size_mb=max_upload_size_mb,
+        max_request_body_mb=max_request_body_mb,
         batch_size=batch_size,
         min_batch_size=min_batch_size,
         max_batch_size=max_batch_size,

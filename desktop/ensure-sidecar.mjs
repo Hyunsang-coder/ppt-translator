@@ -49,6 +49,7 @@ function needsBuild() {
     join("desktop", "sidecar.py"),
     join("desktop", "sidecar.spec"),
     join("desktop", "requirements-desktop.txt"),
+    join("desktop", "requirements-desktop.lock"),
   ];
   return inputs.some(
     (input) => newestMtime(join(REPO_ROOT, input)) > stagedMtime,

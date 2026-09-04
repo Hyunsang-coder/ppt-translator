@@ -138,7 +138,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: "pip"
-          cache-dependency-path: desktop/requirements-desktop.txt
+          cache-dependency-path: desktop/requirements-desktop.lock
 
       - name: Install sidecar dependencies
         shell: bash
@@ -149,8 +149,7 @@ jobs:
           else
             PYTHON="desktop/.venv-desktop/bin/python"
           fi
-          "$PYTHON" -m pip install --upgrade pip
-          "$PYTHON" -m pip install -r desktop/requirements-desktop.txt
+          "$PYTHON" -m pip install --require-hashes -r desktop/requirements-desktop.lock
 
       - name: Setup Rust
         shell: bash

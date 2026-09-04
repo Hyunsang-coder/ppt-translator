@@ -167,6 +167,20 @@ class TestFilenameGeneration:
 class TestHealthEndpoint:
     """Tests for the health check endpoint."""
 
+    def test_health_requires_sidecar_token_when_configured(self, client, monkeypatch):
+        """A Tauri-spawned sidecar must reject callers without its capability."""
+        monkeypatch.setenv("SIDECAR_AUTH_TOKEN", "test-sidecar-token")
+
+        assert client.get("/health").status_code == 401
+        assert client.get("/health", headers={"X-Sidecar-Token": "wrong"}).status_code == 401
+        assert (
+            client.get(
+                "/health",
+                headers={"X-Sidecar-Token": "test-sidecar-token"},
+            ).status_code
+            == 200
+        )
+
     def test_health_check(self, client):
         """Test health check returns expected fields."""
         response = client.get("/health")

@@ -39,19 +39,22 @@ const pyinstaller = venvBin("pyinstaller");
 
 if (!existsSync(pyinstaller)) {
   // Provision the desktop venv on first build so `cargo tauri build` works out
-  // of the box. The pip install only runs once; later builds reuse the venv.
+  // of the box. Dependency reconciliation below also repairs an existing venv.
   console.log("==> Desktop venv not found; creating it (one-time setup)");
   const basePython = isWindows ? "python" : "python3";
   run(basePython, ["-m", "venv", VENV]);
-  run(venvBin("python"), ["-m", "pip", "install", "--upgrade", "pip"]);
-  run(venvBin("python"), [
-    "-m",
-    "pip",
-    "install",
-    "-r",
-    join("desktop", "requirements-desktop.txt"),
-  ]);
 }
+
+// Reconcile existing local environments too; otherwise a previously created
+// venv could keep an old or vulnerable package after the lockfile changes.
+run(venvBin("python"), [
+  "-m",
+  "pip",
+  "install",
+  "--require-hashes",
+  "-r",
+  join("desktop", "requirements-desktop.lock"),
+]);
 
 if (!existsSync(pyinstaller)) {
   console.error(

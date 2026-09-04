@@ -2,7 +2,59 @@
 
 from __future__ import annotations
 
-from src.utils.security import sanitize_html_content
+import io
+import zipfile
+
+from PIL import Image
+
+from src.chains.llm_factory import create_rate_limiter
+from src.utils.security import sanitize_html_content, validate_pptx_file
+
+
+def _office_zip(*extra_entries: tuple[str, bytes]) -> io.BytesIO:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", b"types")
+        archive.writestr("ppt/presentation.xml", b"presentation")
+        for name, content in extra_entries:
+            archive.writestr(name, content)
+    buffer.seek(0)
+    return buffer
+
+
+class TestOfficeArchiveValidation:
+    """ZIP metadata and media limits must be enforced before parsing."""
+
+    def test_rejects_path_traversal_entry(self):
+        valid, message = validate_pptx_file(_office_zip(("../escape.txt", b"x")))
+        assert not valid
+        assert message
+
+    def test_rejects_high_compression_ratio(self):
+        valid, message = validate_pptx_file(
+            _office_zip(("ppt/slides/slide1.xml", b"0" * 1_000_000))
+        )
+        assert not valid
+        assert message
+
+    def test_rejects_oversized_raster_image(self):
+        image_buffer = io.BytesIO()
+        Image.new("1", (6500, 6500)).save(image_buffer, format="PNG")
+        valid, message = validate_pptx_file(
+            _office_zip(("ppt/media/oversized.png", image_buffer.getvalue()))
+        )
+        assert not valid
+        assert message
+
+
+def test_rate_limiter_is_shared_per_provider():
+    """Models from one provider must consume one shared limiter budget."""
+    create_rate_limiter.cache_clear()
+    try:
+        assert create_rate_limiter("openai") is create_rate_limiter("openai")
+        assert create_rate_limiter("openai") is not create_rate_limiter("anthropic")
+    finally:
+        create_rate_limiter.cache_clear()
 
 
 class TestSanitizeHtmlContent:

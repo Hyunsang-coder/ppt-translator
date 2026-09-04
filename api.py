@@ -6,7 +6,9 @@ import asyncio
 import concurrent.futures
 import csv
 import functools
+import hmac
 import io
+import ipaddress
 import json
 import logging
 import os
@@ -22,10 +24,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 from urllib.parse import quote
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel, ConfigDict, Field
+from starlette.types import Message, Receive, Scope, Send
 
 from src.chains.translation_chain import TranslationCancelled
 from src.core.text_extractor import ExtractionOptions, docs_to_markdown, extract_pptx_to_docs
@@ -51,8 +54,95 @@ logging.basicConfig(
 )
 LOGGER = logging.getLogger(__name__)
 
+
+def _is_loopback_bind_host(host: str) -> bool:
+    """Return whether *host* binds only to the local machine."""
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
 # Limit thread pool to prevent runaway thread creation
 _thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=3)
+MAX_MARKDOWN_CHARS = 200_000
+MAX_FORM_TEXT_CHARS = 20_000
+
+
+class RequestBodyTooLarge(Exception):
+    """Raised when the request body exceeds the application-level limit."""
+
+
+class RequestSizeLimitMiddleware:
+    """Reject oversized bodies before FastAPI parses JSON or multipart data."""
+
+    def __init__(self, app: Any, max_body_bytes: int) -> None:
+        self.app = app
+        self.max_body_bytes = max_body_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        content_length = next(
+            (value for name, value in scope.get("headers", []) if name.lower() == b"content-length"),
+            None,
+        )
+        if content_length is not None:
+            try:
+                if int(content_length) > self.max_body_bytes:
+                    await self._send_rejection(send)
+                    return
+            except ValueError:
+                await self._send_rejection(send, status_code=400, detail="Invalid Content-Length")
+                return
+
+        received_bytes = 0
+
+        async def limited_receive() -> Message:
+            nonlocal received_bytes
+            message = await receive()
+            if message["type"] == "http.request":
+                received_bytes += len(message.get("body", b""))
+                if received_bytes > self.max_body_bytes:
+                    raise RequestBodyTooLarge
+            return message
+
+        response_started = False
+
+        async def tracked_send(message: Message) -> None:
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await self.app(scope, limited_receive, tracked_send)
+        except RequestBodyTooLarge:
+            if not response_started:
+                await self._send_rejection(send)
+
+    async def _send_rejection(
+        self,
+        send: Send,
+        *,
+        status_code: int = 413,
+        detail: str = "Request body is too large",
+    ) -> None:
+        body = json.dumps({"detail": detail}).encode("utf-8")
+        await send(
+            {
+                "type": "http.response.start",
+                "status": status_code,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode("ascii")),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})
 
 
 @asynccontextmanager
@@ -75,27 +165,31 @@ app = FastAPI(
 )
 
 # CORS middleware - read allowed origins from environment
-_default_origins = "http://localhost:3000,http://127.0.0.1:3000"
+# These are the actual desktop WebView/dev origins. Additional browser clients
+# must opt in via CORS_ALLOWED_ORIGINS rather than receiving wildcard access.
+_default_origins = ",".join(
+    (
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "tauri://localhost",
+        "https://tauri.localhost",
+        "http://tauri.localhost",
+    )
+)
 _cors_origins = [
     origin.strip()
     for origin in os.getenv("CORS_ALLOWED_ORIGINS", _default_origins).split(",")
     if origin.strip()
 ]
-# Desktop (Tauri) build: the WebView origin varies by platform/mode and the
-# server only ever binds loopback, so allow any origin when CORS_ALLOW_ALL=1.
-# allow_credentials must be False with a wildcard origin per the CORS spec; we
-# don't use cookie auth, so that's fine.
-_cors_allow_all = os.getenv("CORS_ALLOW_ALL") == "1"
-_cors_kwargs: Dict[str, Any] = (
-    {"allow_origins": ["*"], "allow_credentials": False}
-    if _cors_allow_all
-    else {"allow_origins": _cors_origins, "allow_credentials": True}
-)
+if "*" in _cors_origins:
+    LOGGER.warning("Ignoring wildcard CORS origin; configure explicit origins instead.")
+    _cors_origins = [origin for origin in _cors_origins if origin != "*"]
 app.add_middleware(
     CORSMiddleware,
-    **_cors_kwargs,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_cors_origins,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "X-Sidecar-Token"],
     expose_headers=[
         "X-Translation-Source-Lang",
         "X-Translation-Target-Lang",
@@ -106,6 +200,26 @@ app.add_middleware(
         "Content-Disposition",
     ],
 )
+
+# Enforce a whole-request cap before Starlette/FastAPI buffers multipart parts
+# or parses JSON. Endpoint-specific limits below still apply to each upload and
+# text field.
+app.add_middleware(
+    RequestSizeLimitMiddleware,
+    max_body_bytes=get_settings().max_request_body_mb * 1024 * 1024,
+)
+
+
+@app.middleware("http")
+async def require_sidecar_capability(request: Request, call_next):
+    """Require the per-process capability token when the sidecar provides one."""
+    expected = os.getenv("SIDECAR_AUTH_TOKEN")
+    protected_path = request.url.path == "/health" or request.url.path.startswith("/api/")
+    if expected and protected_path and request.method != "OPTIONS":
+        presented = request.headers.get("X-Sidecar-Token", "")
+        if not hmac.compare_digest(presented, expected):
+            return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+    return await call_next(request)
 
 # ============================================================================
 # Pydantic Models for API responses
@@ -429,9 +543,11 @@ class ExtractionResponse(BaseModel):
 class SummarizeRequest(BaseModel):
     """Summarization request."""
 
-    markdown: str
-    provider: str = "anthropic"
-    model: str = DEFAULT_LIGHT_MODEL["anthropic"]
+    model_config = ConfigDict(extra="forbid")
+
+    markdown: str = Field(min_length=1, max_length=MAX_MARKDOWN_CHARS)
+    provider: str = Field(default="anthropic", max_length=32)
+    model: str = Field(default=DEFAULT_LIGHT_MODEL["anthropic"], max_length=128)
 
 
 class SummarizeResponse(BaseModel):
@@ -466,6 +582,29 @@ def get_language_code(language: str) -> str:
         "독일어": "DE",
     }
     return code_map.get(language, language)
+
+
+async def _read_upload_limited(
+    upload: UploadFile,
+    *,
+    max_bytes: int,
+    too_large_detail: str,
+) -> bytes:
+    """Read an upload in bounded chunks instead of buffering it unchecked."""
+    if upload.size is not None and upload.size > max_bytes:
+        raise HTTPException(status_code=413, detail=too_large_detail)
+
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await upload.read(min(1024 * 1024, max_bytes - total + 1))
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(status_code=413, detail=too_large_detail)
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def get_model_display_name(model_id: str) -> str:
@@ -816,12 +955,11 @@ async def parse_glossary_file(
         )
 
     try:
-        content = await glossary_file.read()
-        if len(content) > max_bytes:
-            raise HTTPException(
-                status_code=413,
-                detail=f"용어집 파일 크기가 {GlossaryLoader.MAX_FILE_SIZE_MB}MB를 초과합니다.",
-            )
+        content = await _read_upload_limited(
+            glossary_file,
+            max_bytes=max_bytes,
+            too_large_detail=f"용어집 파일 크기가 {GlossaryLoader.MAX_FILE_SIZE_MB}MB를 초과합니다.",
+        )
         entries = GlossaryLoader().load_glossary_entries(io.BytesIO(content))
     except HTTPException:
         raise
@@ -908,22 +1046,29 @@ async def create_job(
     glossary_file: Optional[UploadFile] = File(None, description="Optional Excel glossary file"),
     glossary_json: Optional[str] = Form(
         None,
+        max_length=GlossaryLoader.MAX_JSON_CHARS,
         description="Optional glossary as JSON object {source:target} or [{source,target}]. "
         "Takes precedence over glossary_file when both are provided.",
     ),
     rules_file: Optional[UploadFile] = File(None, description="Optional team translation-rules JSON"),
-    source_lang: str = Form("Auto", description="Source language"),
-    target_lang: str = Form("Auto", description="Target language"),
-    provider: str = Form("anthropic", description="LLM provider"),
-    model: str = Form(DEFAULT_TRANSLATION_MODEL, description="Model to use"),
-    context: Optional[str] = Form(None, description="Background information about the presentation"),
-    instructions: Optional[str] = Form(None, description="Translation style/tone guidelines"),
+    source_lang: str = Form("Auto", max_length=100, description="Source language"),
+    target_lang: str = Form("Auto", max_length=100, description="Target language"),
+    provider: str = Form("anthropic", max_length=32, description="LLM provider"),
+    model: str = Form(DEFAULT_TRANSLATION_MODEL, max_length=128, description="Model to use"),
+    context: Optional[str] = Form(
+        None, max_length=MAX_FORM_TEXT_CHARS, description="Background information about the presentation"
+    ),
+    instructions: Optional[str] = Form(
+        None, max_length=MAX_FORM_TEXT_CHARS, description="Translation style/tone guidelines"
+    ),
     preprocess_repetitions: bool = Form(False, description="Deduplicate repeated phrases"),
     translate_notes: bool = Form(False, description="Also translate speaker notes"),
-    filename_settings: Optional[str] = Form(None, description="Filename settings as JSON"),
-    text_fit_mode: str = Form("none", description="Text fitting mode: none, auto_shrink, expand_box"),
+    filename_settings: Optional[str] = Form(None, max_length=10_000, description="Filename settings as JSON"),
+    text_fit_mode: str = Form("none", max_length=32, description="Text fitting mode: none, auto_shrink, expand_box"),
     min_font_ratio: int = Form(80, description="Minimum font size ratio (50-100) for auto_shrink mode"),
-    compress_images: str = Form("none", description="Image compression preset: none, high, medium, low"),
+    compress_images: Literal["none", "high", "medium", "low"] = Form(
+        "none", description="Image compression preset: none, high, medium, low"
+    ),
     length_limit: Optional[int] = Form(None, description="Translation length limit as percentage of original (110, 130, 150)"),
 ) -> JobCreateResponse:
     """Create a new translation job."""
@@ -968,19 +1113,20 @@ async def create_job(
 
         # Read file content
         try:
-            file_content = await ppt_file.read()
+            file_content = await _read_upload_limited(
+                ppt_file,
+                max_bytes=settings.max_upload_size_mb * 1024 * 1024,
+                too_large_detail=(
+                    f"File size exceeds limit ({settings.max_upload_size_mb}MB)"
+                ),
+            )
+        except HTTPException:
+            raise
         except Exception as exc:
             LOGGER.exception("Failed to read uploaded file: %s", exc)
             raise HTTPException(status_code=400, detail="Failed to read uploaded file")
 
         # Validate file size
-        size_mb = len(file_content) / (1024 * 1024)
-        if size_mb > settings.max_upload_size_mb:
-            raise HTTPException(
-                status_code=413,
-                detail=f"File size ({size_mb:.1f}MB) exceeds limit ({settings.max_upload_size_mb}MB)",
-            )
-
         # Validate file signature. BytesIO copies the bytes, so the original
         # buffer can be released immediately to avoid holding two copies for
         # the entire job duration (memory pressure in the local sidecar/server).
@@ -1007,14 +1153,27 @@ async def create_job(
         glossary = None
         try:
             if glossary_json and glossary_json.strip():
+                if len(glossary_json) > GlossaryLoader.MAX_JSON_CHARS:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"용어집 JSON이 {GlossaryLoader.MAX_JSON_CHARS}자를 초과합니다.",
+                    )
                 glossary = GlossaryLoader.from_json(glossary_json)
                 if glossary:
                     LOGGER.info("Loaded glossary_json with %d terms", len(glossary))
             elif glossary_file and glossary_file.filename:
-                glossary_content = await glossary_file.read()
+                glossary_content = await _read_upload_limited(
+                    glossary_file,
+                    max_bytes=GlossaryLoader.MAX_FILE_SIZE_MB * 1024 * 1024,
+                    too_large_detail=(
+                        f"용어집 파일 크기가 {GlossaryLoader.MAX_FILE_SIZE_MB}MB를 초과합니다."
+                    ),
+                )
                 glossary_buffer = io.BytesIO(glossary_content)
                 glossary = GlossaryLoader().load_glossary(glossary_buffer)
                 LOGGER.info("Loaded glossary file with %d terms", len(glossary))
+        except HTTPException:
+            raise
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=f"Glossary error: {str(exc)}")
         except Exception as exc:
@@ -1027,10 +1186,18 @@ async def create_job(
         team_rules = None
         if rules_file and rules_file.filename:
             try:
-                rules_content = await rules_file.read()
+                rules_content = await _read_upload_limited(
+                    rules_file,
+                    max_bytes=RulesLoader.MAX_FILE_SIZE_MB * 1024 * 1024,
+                    too_large_detail=(
+                        f"규칙집 파일 크기가 {RulesLoader.MAX_FILE_SIZE_MB}MB를 초과합니다."
+                    ),
+                )
                 rules_buffer = io.BytesIO(rules_content)
                 team_rules = RulesLoader().load_rules(rules_buffer)
                 LOGGER.info("Loaded team translation rules from %s", rules_file.filename)
+            except HTTPException:
+                raise
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=f"Rules error: {str(exc)}")
             except Exception as exc:
@@ -1857,20 +2024,21 @@ async def extract_text(
             detail="Invalid file type. Only .pptx files are supported for extraction.",
         )
 
-    # Read file content
+    # Read file content in bounded chunks so validation never follows an
+    # unbounded ``UploadFile.read()`` allocation.
     try:
-        file_content = await ppt_file.read()
+        file_content = await _read_upload_limited(
+            ppt_file,
+            max_bytes=settings.max_upload_size_mb * 1024 * 1024,
+            too_large_detail=(
+                f"File size exceeds limit ({settings.max_upload_size_mb}MB)"
+            ),
+        )
+    except HTTPException:
+        raise
     except Exception as exc:
         LOGGER.exception("Failed to read uploaded file: %s", exc)
         raise HTTPException(status_code=400, detail="Failed to read uploaded file")
-
-    # Validate file size
-    size_mb = len(file_content) / (1024 * 1024)
-    if size_mb > settings.max_upload_size_mb:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File size ({size_mb:.1f}MB) exceeds limit ({settings.max_upload_size_mb}MB)",
-        )
 
     # Validate file signature
     ppt_buffer = io.BytesIO(file_content)
@@ -1963,10 +2131,12 @@ async def summarize_text(request: SummarizeRequest) -> SummarizeResponse:
 class GenerateInstructionsRequest(BaseModel):
     """Request for generating translation instructions."""
 
-    target_lang: str
-    markdown: str
-    provider: str = "anthropic"
-    model: str = DEFAULT_LIGHT_MODEL["anthropic"]
+    model_config = ConfigDict(extra="forbid")
+
+    target_lang: str = Field(min_length=1, max_length=100)
+    markdown: str = Field(min_length=1, max_length=MAX_MARKDOWN_CHARS)
+    provider: str = Field(default="anthropic", max_length=32)
+    model: str = Field(default=DEFAULT_LIGHT_MODEL["anthropic"], max_length=128)
 
 
 class GenerateInstructionsResponse(BaseModel):
@@ -1981,7 +2151,6 @@ async def generate_instructions(request: GenerateInstructionsRequest) -> Generat
 
     Creates style/tone guidelines appropriate for the target language and culture.
     """
-    from langchain_anthropic import ChatAnthropic
     from langchain_core.prompts import ChatPromptTemplate
 
     settings = get_settings()
@@ -2016,11 +2185,14 @@ async def generate_instructions(request: GenerateInstructionsRequest) -> Generat
                 api_key=settings.openai_api_key,
             )
         else:
-            llm = ChatAnthropic(
-                model=request.model,
+            from src.chains.llm_factory import create_llm
+
+            llm = create_llm(
+                provider="anthropic",
+                model_name=request.model,
                 api_key=settings.anthropic_api_key,
                 temperature=0.7,
-                max_tokens=512,  # Limit for concise output (~300 chars)
+                max_tokens=512,
             )
 
         # Truncate markdown if too long (keep first ~2000 chars for context)
@@ -2055,12 +2227,11 @@ async def generate_instructions(request: GenerateInstructionsRequest) -> Generat
         instructions = instructions.strip()
 
         LOGGER.info(
-            "Generated instructions: target_lang=%s, provider=%s, model=%s, result_length=%d, result=%s",
+            "Generated instructions: target_lang=%s, provider=%s, model=%s, result_length=%d",
             request.target_lang,
             request.provider,
             request.model,
             len(instructions),
-            instructions[:200] if instructions else "(empty)",
         )
 
         # Fallback if empty
@@ -2078,4 +2249,11 @@ async def generate_instructions(request: GenerateInstructionsRequest) -> Generat
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    bind_host = os.getenv("API_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    if not _is_loopback_bind_host(bind_host) and not os.getenv("SIDECAR_AUTH_TOKEN"):
+        raise SystemExit(
+            "Refusing to bind the unauthenticated API outside loopback. "
+            "Set SIDECAR_AUTH_TOKEN before using API_HOST for network access."
+        )
+
+    uvicorn.run(app, host=bind_host, port=int(os.getenv("API_PORT", "8000")))

@@ -23,7 +23,7 @@ interface FileUploaderProps {
 
 export function FileUploader({
   accept,
-  maxSizeMB = 1024,
+  maxSizeMB = 256,
   onFileSelect,
   selectedFile,
   label,

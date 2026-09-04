@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from functools import lru_cache
 from typing import Literal, Optional
 
 from dotenv import load_dotenv
@@ -20,13 +21,19 @@ LOGGER = logging.getLogger(__name__)
 Provider = Literal["openai", "anthropic"]
 
 
-def create_rate_limiter() -> InMemoryRateLimiter:
+@lru_cache(maxsize=2)
+def create_rate_limiter(provider: Provider = "openai") -> InMemoryRateLimiter:
     """Create a rate limiter based on application settings.
+
+    The limiter is cached per provider so every model and endpoint in this
+    process shares one request budget. Creating it per model would allow
+    concurrent requests to multiply the intended provider rate.
 
     Returns:
         Configured InMemoryRateLimiter instance.
     """
     settings = get_settings()
+    LOGGER.debug("Creating shared %s provider rate limiter", provider)
     return InMemoryRateLimiter(
         requests_per_second=settings.rate_limit_requests_per_second,
         check_every_n_seconds=settings.rate_limit_check_interval,
@@ -97,7 +104,11 @@ def create_llm(
     Raises:
         ValueError: If the provider is not supported.
     """
-    _rate_limiter = rate_limiter if rate_limiter is not None else create_rate_limiter()
+    _rate_limiter = (
+        rate_limiter
+        if rate_limiter is not None
+        else create_rate_limiter(provider)
+    )
 
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic

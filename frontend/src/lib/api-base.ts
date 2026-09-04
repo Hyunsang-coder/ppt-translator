@@ -22,6 +22,7 @@ declare global {
 }
 
 let sidecarBasePromise: Promise<string> | null = null;
+let sidecarAuthToken: string | null = null;
 
 export function isTauri(): boolean {
   if (typeof window === "undefined") return false;
@@ -43,12 +44,23 @@ export function setSidecarPort(port: number): void {
   }
 }
 
+/** Keep the sidecar capability in module memory; never persist it in storage. */
+export function setSidecarAuthToken(token: string): void {
+  if (token.trim()) sidecarAuthToken = token;
+}
+
+export function getApiAuthHeaders(): Record<string, string> {
+  return sidecarAuthToken ? { "X-Sidecar-Token": sidecarAuthToken } : {};
+}
+
 async function waitForHealth(baseUrl: string): Promise<void> {
   const deadline = Date.now() + SIDECAR_TIMEOUT_MS;
 
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(`${baseUrl}/health`);
+      const res = await fetch(`${baseUrl}/health`, {
+        headers: getApiAuthHeaders(),
+      });
       if (res.ok) return;
     } catch {
       // Sidecar is still importing or binding.
@@ -61,7 +73,7 @@ async function waitForHealth(baseUrl: string): Promise<void> {
 
 async function resolveSidecarBase(): Promise<string> {
   const existingBase = getApiBase();
-  if (existingBase) return existingBase;
+  if (existingBase && (!isTauri() || sidecarAuthToken)) return existingBase;
 
   if (!isTauri()) return BUILD_TIME_BASE;
 
@@ -143,6 +155,11 @@ async function resolveSidecarBase(): Promise<string> {
   });
 
   const port = await portPromise;
+  const authToken = await invoke<string | null>("get_sidecar_auth_token");
+  if (!authToken) {
+    throw new Error("번역 엔진 인증 토큰을 받지 못했습니다.");
+  }
+  setSidecarAuthToken(authToken);
   setSidecarPort(port);
   const baseUrl = getApiBase();
   await waitForHealth(baseUrl);
@@ -151,7 +168,7 @@ async function resolveSidecarBase(): Promise<string> {
 
 export async function ensureApiBase(): Promise<string> {
   const existingBase = getApiBase();
-  if (existingBase || !isTauri()) return existingBase;
+  if ((existingBase && (!isTauri() || sidecarAuthToken)) || !isTauri()) return existingBase;
 
   sidecarBasePromise ??= resolveSidecarBase().catch((error) => {
     sidecarBasePromise = null;

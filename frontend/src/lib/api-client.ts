@@ -22,7 +22,7 @@ import type {
   ReviewMutationResponse,
   TranslationSettings,
 } from "@/types/api";
-import { ensureApiBase } from "@/lib/api-base";
+import { ensureApiBase, getApiAuthHeaders } from "@/lib/api-base";
 import type { GlossaryEntry } from "@/lib/glossary";
 
 /** Mirrors the server's cap on `ReviewDismissalRequest.entries`. */
@@ -72,6 +72,14 @@ async function apiUrl(path: string): Promise<string> {
   return `${base}${path}`;
 }
 
+async function apiFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  for (const [name, value] of Object.entries(getApiAuthHeaders())) {
+    headers.set(name, value);
+  }
+  return fetch(input, { ...init, headers });
+}
+
 export const apiClient = {
   /**
    * Get available models
@@ -82,7 +90,7 @@ export const apiClient = {
       if (provider) {
         url.searchParams.set("provider", provider);
       }
-      const response = await fetch(url.toString());
+      const response = await apiFetch(url.toString());
       const data = await handleResponse<{ models: ModelInfo[] }>(response);
       return data.models;
     } catch {
@@ -96,7 +104,7 @@ export const apiClient = {
    */
   async getLanguages(): Promise<LanguageInfo[]> {
     try {
-      const response = await fetch(await apiUrl("/api/v1/languages"));
+      const response = await apiFetch(await apiUrl("/api/v1/languages"));
       const data = await handleResponse<{ languages: LanguageInfo[] }>(response);
       return data.languages;
     } catch {
@@ -110,7 +118,7 @@ export const apiClient = {
    */
   async getConfig(): Promise<ConfigResponse | null> {
     try {
-      const response = await fetch(await apiUrl("/api/v1/config"));
+      const response = await apiFetch(await apiUrl("/api/v1/config"));
       return handleResponse<ConfigResponse>(response);
     } catch {
       // Return null when backend is unavailable
@@ -126,7 +134,7 @@ export const apiClient = {
   ): Promise<{ entries: { source: string; target: string; notes?: string }[]; count: number }> {
     const formData = new FormData();
     formData.append("glossary_file", glossaryFile);
-    const response = await fetch(await apiUrl("/api/v1/glossary/parse"), {
+    const response = await apiFetch(await apiUrl("/api/v1/glossary/parse"), {
       method: "POST",
       body: formData,
     });
@@ -139,7 +147,7 @@ export const apiClient = {
     entries: GlossaryEntry[],
     format: "csv" | "excel"
   ): Promise<Blob> {
-    const response = await fetch(await apiUrl("/api/v1/glossary/export"), {
+    const response = await apiFetch(await apiUrl("/api/v1/glossary/export"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -190,7 +198,7 @@ export const apiClient = {
       formData.append("length_limit", String(settings.lengthLimit));
     }
 
-    const response = await fetch(await apiUrl("/api/v1/jobs"), {
+    const response = await apiFetch(await apiUrl("/api/v1/jobs"), {
       method: "POST",
       body: formData,
       signal,
@@ -202,7 +210,7 @@ export const apiClient = {
    * Get job status
    */
   async getJobStatus(jobId: string): Promise<JobStatusResponse> {
-    const response = await fetch(await apiUrl(`/api/v1/jobs/${jobId}`));
+    const response = await apiFetch(await apiUrl(`/api/v1/jobs/${jobId}`));
     return handleResponse<JobStatusResponse>(response);
   },
 
@@ -210,7 +218,7 @@ export const apiClient = {
    * Cancel a job
    */
   async cancelJob(jobId: string): Promise<void> {
-    const response = await fetch(await apiUrl(`/api/v1/jobs/${jobId}`), {
+    const response = await apiFetch(await apiUrl(`/api/v1/jobs/${jobId}`), {
       method: "DELETE",
     });
     if (!response.ok) {
@@ -222,7 +230,7 @@ export const apiClient = {
    * Download job result
    */
   async downloadJobResult(jobId: string): Promise<{ blob: Blob; filename: string }> {
-    const response = await fetch(await apiUrl(`/api/v1/jobs/${jobId}/result`));
+    const response = await apiFetch(await apiUrl(`/api/v1/jobs/${jobId}/result`));
     if (!response.ok) {
       throw new ApiError("Failed to download result", response.status);
     }
@@ -246,7 +254,7 @@ export const apiClient = {
    * List reviewable fragments (source/target + detection badges) for a job.
    */
   async getJobFragments(jobId: string): Promise<FragmentsResponse> {
-    const response = await fetch(await apiUrl(`/api/v1/jobs/${jobId}/fragments`));
+    const response = await apiFetch(await apiUrl(`/api/v1/jobs/${jobId}/fragments`));
     return handleResponse<FragmentsResponse>(response);
   },
 
@@ -257,7 +265,7 @@ export const apiClient = {
     jobId: string,
     entries: Record<string, string>
   ): Promise<{ count: number; revision: number; dirty: boolean }> {
-    const response = await fetch(await apiUrl(`/api/v1/jobs/${jobId}/glossary`), {
+    const response = await apiFetch(await apiUrl(`/api/v1/jobs/${jobId}/glossary`), {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ entries }),
@@ -273,7 +281,7 @@ export const apiClient = {
     index: number,
     body: FragmentEditRequest
   ): Promise<FragmentEditResponse> {
-    const response = await fetch(
+    const response = await apiFetch(
       await apiUrl(`/api/v1/jobs/${jobId}/fragments/${index}`),
       {
         method: "POST",
@@ -289,7 +297,7 @@ export const apiClient = {
     index: number,
     body: FragmentProposalRequest
   ): Promise<FragmentProposalResponse> {
-    const response = await fetch(
+    const response = await apiFetch(
       await apiUrl(`/api/v1/jobs/${jobId}/fragments/${index}/proposals`),
       {
         method: "POST",
@@ -305,7 +313,7 @@ export const apiClient = {
     proposalId: string,
     expectedRevision: number
   ): Promise<ApplyProposalResponse> {
-    const response = await fetch(
+    const response = await apiFetch(
       await apiUrl(`/api/v1/jobs/${jobId}/proposals/${proposalId}/apply`),
       {
         method: "POST",
@@ -325,7 +333,7 @@ export const apiClient = {
       expected_revision: number;
     }
   ): Promise<ReviewMutationResponse> {
-    const response = await fetch(await apiUrl(`/api/v1/jobs/${jobId}/review/partial`), {
+    const response = await apiFetch(await apiUrl(`/api/v1/jobs/${jobId}/review/partial`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -344,7 +352,7 @@ export const apiClient = {
     indices: number[],
     instruction?: string
   ): Promise<BlockRetranslateResponse> {
-    const response = await fetch(
+    const response = await apiFetch(
       await apiUrl(`/api/v1/jobs/${jobId}/review/block/retranslate`),
       {
         method: "POST",
@@ -367,7 +375,7 @@ export const apiClient = {
     expectedRevision: number,
     propagateIdentical: boolean
   ): Promise<ReviewMutationResponse> {
-    const response = await fetch(await apiUrl(`/api/v1/jobs/${jobId}/review/block`), {
+    const response = await apiFetch(await apiUrl(`/api/v1/jobs/${jobId}/review/block`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -400,7 +408,7 @@ export const apiClient = {
     const changed: ReviewDismissalEntry[] = [];
     let last: ReviewDismissalResponse | null = null;
     for (let at = 0; at < entries.length; at += MAX_DISMISSAL_ENTRIES) {
-      const response = await fetch(url, {
+      const response = await apiFetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -416,7 +424,7 @@ export const apiClient = {
   },
 
   async undoReview(jobId: string, expectedRevision: number): Promise<ReviewMutationResponse> {
-    const response = await fetch(await apiUrl(`/api/v1/jobs/${jobId}/review/undo`), {
+    const response = await apiFetch(await apiUrl(`/api/v1/jobs/${jobId}/review/undo`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ expected_revision: expectedRevision }),
@@ -425,7 +433,7 @@ export const apiClient = {
   },
 
   async commitReview(jobId: string, expectedRevision: number): Promise<ReviewMutationResponse> {
-    const response = await fetch(await apiUrl(`/api/v1/jobs/${jobId}/review/commit`), {
+    const response = await apiFetch(await apiUrl(`/api/v1/jobs/${jobId}/review/commit`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ expected_revision: expectedRevision }),
@@ -444,7 +452,7 @@ export const apiClient = {
     formData.append("with_notes", String(settings.withNotes));
     formData.append("table_header", String(settings.tableHeader));
 
-    const response = await fetch(await apiUrl("/api/v1/extract"), {
+    const response = await apiFetch(await apiUrl("/api/v1/extract"), {
       method: "POST",
       body: formData,
       signal,
@@ -457,7 +465,7 @@ export const apiClient = {
    */
   async healthCheck(): Promise<boolean> {
     try {
-      const response = await fetch(await apiUrl("/health"));
+      const response = await apiFetch(await apiUrl("/health"));
       return response.ok;
     } catch {
       return false;
