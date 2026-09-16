@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, Any, List, Sequence, Tuple
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
+from src.utils.helpers import run_text_with_breaks
+
 if TYPE_CHECKING:  # pragma: no cover - import for type checking only
     from pptx.text.text import Paragraph
 else:
@@ -109,7 +111,7 @@ class PPTParser:
                 notes_tf = getattr(notes_slide, "notes_text_frame", None)
                 if notes_tf is not None:
                     for para_idx, paragraph in enumerate(notes_tf.paragraphs):
-                        text = "".join(run.text for run in paragraph.runs)
+                        text = "".join(run_text_with_breaks(run) for run in paragraph.runs)
                         if not text or not text.strip():
                             continue
                         paragraphs.append(
@@ -227,7 +229,7 @@ class PPTParser:
 
         collected: List[ParagraphInfo] = []
         for paragraph_index, paragraph in enumerate(paragraphs):
-            text = "".join(run.text for run in paragraph.runs)
+            text = "".join(run_text_with_breaks(run) for run in paragraph.runs)
             if not text or not text.strip():
                 continue
 

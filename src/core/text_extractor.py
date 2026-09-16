@@ -13,6 +13,8 @@ from pptx.shapes.group import GroupShape
 from pptx.shapes.picture import Picture
 from pptx.shapes.shapetree import SlideShapes
 
+from src.utils.helpers import run_text_with_breaks
+
 
 @dataclass(slots=True)
 class TextBlock:
@@ -116,7 +118,7 @@ def _shape_text_lines(shape: Shape) -> List[str]:
     if not hasattr(shape, "text_frame") or shape.text_frame is None:
         return lines
     for paragraph in shape.text_frame.paragraphs:
-        text = "".join(run.text for run in paragraph.runs)
+        text = "".join(run_text_with_breaks(run) for run in paragraph.runs)
         lines.append(text)
     return lines
 

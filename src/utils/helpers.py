@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING, Dict, Iterable, List, Mapping, Optional, Sequence
 
+from lxml import etree
+
 from src.utils.glossary_loader import GlossaryLoader
 
 if TYPE_CHECKING:  # pragma: no cover - import for typing only
@@ -22,6 +24,31 @@ def clean_text(text: str) -> str:
     """
 
     return (text or "").replace("\r", " ").replace("\n", " ").strip()
+
+
+_DRAWINGML_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
+
+
+def run_text_with_breaks(run) -> str:
+    """Return a run's full text, mapping manual line breaks to newlines.
+
+    python-pptx's ``run.text`` only returns the first ``<a:t>`` element, so
+    any text after a manual line break (``<a:br/>``, Shift+Enter) is silently
+    dropped. Walk the run XML directly instead.
+    """
+    r = getattr(run, "_r", None)
+    # iselement guard: unit-test stand-ins use a MagicMock _r, which would
+    # silently iterate as empty — fall back to the plain getter instead.
+    if r is None or not etree.iselement(r):  # pragma: no cover - test mocks
+        return run.text or ""
+    parts: list[str] = []
+    for child in r:
+        tag = child.tag if isinstance(child.tag, str) else ""
+        if tag == f"{{{_DRAWINGML_NS}}}t":
+            parts.append(child.text or "")
+        elif tag == f"{{{_DRAWINGML_NS}}}br":
+            parts.append("\n")
+    return "".join(parts)
 
 
 def calculate_target_character_limit(source_text: str, percentage: int) -> int:

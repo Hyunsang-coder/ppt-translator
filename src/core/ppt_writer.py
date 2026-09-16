@@ -10,7 +10,10 @@ from typing import Iterable, List
 from lxml import etree
 from pptx import Presentation
 from pptx.enum.text import MSO_AUTO_SIZE
+from pptx.oxml.xmlchemy import OxmlElement
 from pptx.util import Pt
+
+from src.utils.helpers import run_text_with_breaks
 
 from copy import deepcopy
 
@@ -61,15 +64,75 @@ def _rpr_key(run) -> str:
 
     Non-visual attributes (lang, dirty, etc.) are excluded so that runs
     differing only in language or proofing metadata are grouped together.
+
+    Hyperlink targets (``<a:hlinkClick>`` / ``<a:hlinkMouseOver>``) live on
+    the run element itself, not in ``rPr`` — include them so a linked run is
+    never merged with plain text. Merging would either spread the link over
+    the whole paragraph (single-group path) or silently drop it (fallback
+    keeps only the longest neutral group); keeping the link separate lets
+    the fallback preserve the body text while isolating the linked run.
     """
     rPr = run._r.rPr
     if rPr is None:
-        return ""
-    from copy import deepcopy
-    cleaned = deepcopy(rPr)
-    for attr_name in _NON_VISUAL_RPR_ATTRS:
-        cleaned.attrib.pop(attr_name, None)
-    return etree.tostring(cleaned, encoding="unicode")
+        key = ""
+    else:
+        from copy import deepcopy
+        cleaned = deepcopy(rPr)
+        for attr_name in _NON_VISUAL_RPR_ATTRS:
+            cleaned.attrib.pop(attr_name, None)
+        key = etree.tostring(cleaned, encoding="unicode")
+    for tag in ("hlinkClick", "hlinkMouseOver"):
+        hlink = run._r.find(f"{{{_A_NS['a']}}}{tag}")
+        # iselement guard: unit-test stand-ins use a MagicMock _r whose
+        # .find() returns another mock instead of None/an element.
+        if hlink is not None and etree.iselement(hlink):
+            key += "|hlink:" + etree.tostring(hlink, encoding="unicode")
+    return key
+
+
+def _set_run_text(run, text: str) -> None:
+    """Write ``text`` into a run, mapping newlines to ``<a:br/>`` breaks.
+
+    python-pptx's ``run.text`` setter only replaces the first ``<a:t>``
+    element: stale ``<a:br/>`` / ``<a:t>`` siblings survive (leaking
+    source-language text into the output) and raw ``\\n`` inside ``<a:t>``
+    is not rendered as a line break by PowerPoint. Rewrite the run's text
+    content fully instead; formatting (``rPr``) and hyperlinks are kept.
+
+    The replacement nodes are built before touching the run so a failure
+    leaves the original content intact for the fallback below.
+    """
+    r = getattr(run, "_r", None)
+    if r is None or not etree.iselement(r):
+        # Non-pptx stand-ins in unit tests (MagicMock runs): use the plain
+        # setter so grouping/fallback logic stays testable. (Checked
+        # explicitly — MagicMock silently absorbs lxml calls without
+        # raising, so exception-driven fallback alone would miss it.)
+        run.text = text
+        return
+    try:
+        ns = _A_NS["a"]
+        new_children = []
+        lines = (
+            (text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        )
+        for index, line in enumerate(lines):
+            if index > 0:
+                new_children.append(OxmlElement("a:br"))
+            t = OxmlElement("a:t")
+            t.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+            t.text = line
+            new_children.append(t)
+        for child in list(r):
+            if isinstance(child.tag, str) and child.tag in (
+                f"{{{ns}}}t",
+                f"{{{ns}}}br",
+            ):
+                r.remove(child)
+        for child in new_children:
+            r.append(child)
+    except Exception:
+        run.text = text
 
 
 def _group_runs_by_format(runs) -> list[list]:
@@ -156,8 +219,8 @@ def _apply_fallback_format(translation: str, groups, runs) -> None:
     target_run = groups[group_idx][0] if groups and groups[group_idx] else runs[0]
 
     for run in runs:
-        run.text = ""
-    target_run.text = translation
+        _set_run_text(run, "")
+    _set_run_text(target_run, translation)
 
 
 def _set_run_rpr(run, src_rpr) -> None:
@@ -207,7 +270,7 @@ def _apply_colored_segments(paragraph, colored_segments, groups, runs) -> bool:
 
         # Clear all existing runs: set text to empty
         for run in runs:
-            run.text = ""
+            _set_run_text(run, "")
 
         # Assign segments to runs.
         # Strategy: for simple ordered case (segments <= existing runs),
@@ -215,7 +278,7 @@ def _apply_colored_segments(paragraph, colored_segments, groups, runs) -> bool:
         # then the last run for remaining text.
         if len(colored_segments) <= len(runs):
             for i, seg in enumerate(colored_segments):
-                runs[i].text = seg.text
+                _set_run_text(runs[i], seg.text)
                 # Copy formatting from the correct group
                 _set_run_rpr(runs[i], group_rprs[seg.group_index])
         else:
@@ -227,7 +290,7 @@ def _apply_colored_segments(paragraph, colored_segments, groups, runs) -> bool:
                 else:
                     run = paragraph.add_run()
                     runs.append(run)
-                run.text = seg.text
+                _set_run_text(run, seg.text)
                 _set_run_rpr(run, group_rprs[seg.group_index])
 
         return True
@@ -545,7 +608,9 @@ def _estimate_text_frame_overflow_ratio(text_frame) -> float | None:
                     else fallback_font_pt
                 )
                 line_font_pt = max(line_font_pt, font_pt)
-                for character in run.text or "":
+                # run.text only returns the first <a:t>; use the full text
+                # so manual breaks (<a:br/>) count as line breaks.
+                for character in run_text_with_breaks(run) or "":
                     if character in {"\n", "\v"}:
                         finish_line()
                         continue
@@ -722,9 +787,9 @@ class PPTWriter:
 
             if len(groups) == 1:
                 # Uniform formatting: put all text in first run, clear the rest
-                runs[0].text = translation
+                _set_run_text(runs[0], translation)
                 for run in runs[1:]:
-                    run.text = ""
+                    _set_run_text(run, "")
             elif color_distributions is not None and para_idx in color_distributions:
                 dist = color_distributions[para_idx]
                 if dist and hasattr(dist[0], "group_index"):
@@ -737,9 +802,9 @@ class PPTWriter:
                 elif len(dist) == len(groups):
                     # Legacy list[str] distribution (contiguous groups)
                     for group, group_text in zip(groups, dist):
-                        group[0].text = group_text
+                        _set_run_text(group[0], group_text)
                         for run in group[1:]:
-                            run.text = ""
+                            _set_run_text(run, "")
                     color_applied_count += 1
                 else:
                     _apply_fallback_format(translation, groups, runs)
