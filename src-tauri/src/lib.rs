@@ -58,6 +58,12 @@ struct SidecarState {
     port: Mutex<Option<u16>>,
     auth_token: Mutex<Option<String>>,
     child: Mutex<Option<Child>>,
+    /// Serializes stop/spawn sequences. Without this, two concurrent
+    /// `restart_sidecar` invokes (double-click save, or save racing the
+    /// updater's recovery restart) each spawn a sidecar and the second
+    /// `child` handle overwrites the first — orphaning a process that keeps
+    /// its port and files. Held across the whole stop → spawn → ready-wait.
+    restart_lock: Mutex<()>,
 }
 
 /// Stop the sidecar and wait until Windows has released every loaded native
@@ -147,7 +153,12 @@ fn read_key(provider: &str) -> Option<String> {
 /// caller can translate immediately afterwards.
 #[tauri::command]
 fn restart_sidecar(app: tauri::AppHandle) -> Result<(), AppError> {
-    stop_sidecar(&app.state::<SidecarState>())?;
+    // Serialize with concurrent restarts and update shutdowns. A second
+    // caller waits here, then performs its own fresh restart — so the final
+    // sidecar always reflects the latest keychain state.
+    let state = app.state::<SidecarState>();
+    let _gate = state.restart_lock.lock().unwrap();
+    stop_sidecar(&state)?;
     spawn_sidecar(&app)?;
 
     // Wait for the stdout reader thread to record the new port.
@@ -168,9 +179,15 @@ fn restart_sidecar(app: tauri::AppHandle) -> Result<(), AppError> {
 /// sidecar through `restart_sidecar`.
 #[tauri::command]
 async fn prepare_for_update(app: tauri::AppHandle) -> Result<(), AppError> {
-    tauri::async_runtime::spawn_blocking(move || stop_sidecar(&app.state::<SidecarState>()))
-        .await
-        .map_err(|e| AppError::Sidecar(format!("failed to join sidecar shutdown task: {e}")))?
+    tauri::async_runtime::spawn_blocking(move || {
+        // Same gate as restart_sidecar: never stop the sidecar while a
+        // restart is mid-sequence (or vice versa).
+        let state = app.state::<SidecarState>();
+        let _gate = state.restart_lock.lock().unwrap();
+        stop_sidecar(&state)
+    })
+    .await
+    .map_err(|e| AppError::Sidecar(format!("failed to join sidecar shutdown task: {e}")))?
 }
 
 /// Resolve the bundled sidecar executable inside the app's resource dir.
@@ -371,6 +388,7 @@ mod tests {
             port: Mutex::new(Some(54321)),
             auth_token: Mutex::new(Some("test-token".into())),
             child: Mutex::new(Some(child)),
+            restart_lock: Mutex::new(()),
         };
 
         stop_sidecar(&state).expect("failed to stop test child process");

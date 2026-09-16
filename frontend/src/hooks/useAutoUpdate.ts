@@ -135,8 +135,8 @@ export function useAutoUpdate() {
       // the current app usable again without requiring a manual restart.
       if (sidecarStopped) {
         try {
-          const { invoke } = await import("@tauri-apps/api/core");
-          await invoke("restart_sidecar");
+          const { restartSidecar } = await import("@/lib/keychain");
+          await restartSidecar();
         } catch (restartError) {
           console.error("[updater] failed to restart sidecar", restartError);
         }

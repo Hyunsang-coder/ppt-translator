@@ -29,4 +29,8 @@ export async function restartSidecar(): Promise<void> {
   if (!isTauri()) return;
   const { invoke } = await import("@tauri-apps/api/core");
   await invoke("restart_sidecar");
+  // The restart binds a NEW random port and rotates the capability token;
+  // re-resolve both so subsequent API calls don't hit the dead address.
+  const { refreshSidecarConnection } = await import("@/lib/api-base");
+  await refreshSidecarConnection();
 }

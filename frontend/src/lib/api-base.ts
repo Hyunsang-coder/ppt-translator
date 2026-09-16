@@ -53,6 +53,42 @@ export function getApiAuthHeaders(): Record<string, string> {
   return sidecarAuthToken ? { "X-Sidecar-Token": sidecarAuthToken } : {};
 }
 
+/** Clear cached sidecar connection state (base URL, token, in-flight resolve). */
+function resetSidecarConnection(): void {
+  sidecarBasePromise = null;
+  sidecarAuthToken = null;
+  if (typeof window !== "undefined") {
+    delete window.__API_BASE__;
+  }
+}
+
+/**
+ * Re-read the current sidecar port/token after a restart.
+ *
+ * `restart_sidecar` only returns once the new sidecar has reported its port,
+ * so direct command reads are deterministic here — no event listening and no
+ * race with the old process's `sidecar-terminated` emission.
+ */
+export async function refreshSidecarConnection(): Promise<string> {
+  resetSidecarConnection();
+  if (!isTauri()) return BUILD_TIME_BASE;
+
+  const { invoke } = await import("@tauri-apps/api/core");
+  const port = await invoke<number | null>("get_sidecar_port");
+  if (!port) {
+    throw new Error("재시작된 번역 엔진의 포트를 받지 못했습니다.");
+  }
+  const authToken = await invoke<string | null>("get_sidecar_auth_token");
+  if (!authToken) {
+    throw new Error("번역 엔진 인증 토큰을 받지 못했습니다.");
+  }
+  setSidecarAuthToken(authToken);
+  setSidecarPort(port);
+  const baseUrl = getApiBase();
+  await waitForHealth(baseUrl);
+  return baseUrl;
+}
+
 async function waitForHealth(baseUrl: string): Promise<void> {
   const deadline = Date.now() + SIDECAR_TIMEOUT_MS;
 
