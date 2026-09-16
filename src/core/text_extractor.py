@@ -16,6 +16,24 @@ from pptx.shapes.shapetree import SlideShapes
 from src.utils.helpers import run_text_with_breaks
 
 
+# SmartArt lives in a <p:graphicFrame> whose graphicData uri is the diagram
+# namespace. python-pptx reports its shape_type as None (not DIAGRAM), so the
+# uri is the only reliable signal. Text inside is not accessible via the
+# public API — extraction emits an explicit placeholder instead of dropping
+# it silently.
+_GRAPHIC_DATA_URI_DIAGRAM = "http://schemas.openxmlformats.org/drawingml/2006/diagram"
+
+
+def _is_smartart_shape(shape) -> bool:
+    """Return True when a shape is a SmartArt diagram frame."""
+    if getattr(shape, "shape_type", None) is not None:
+        return False
+    element = getattr(shape, "_element", None)
+    if element is None:
+        return False
+    return getattr(element, "graphicData_uri", None) == _GRAPHIC_DATA_URI_DIAGRAM
+
+
 @dataclass(slots=True)
 class TextBlock:
     """Represents a chunk of text extracted from a shape."""
@@ -39,7 +57,7 @@ class FigureBlock:
     """Placeholder metadata for figures and charts."""
 
     shape_id: str
-    figure_type: Literal["image", "chart"]
+    figure_type: Literal["image", "chart", "smartart"]
     title: Optional[str]
 
 
@@ -254,6 +272,14 @@ def extract_slide(prs_slide, slide_index: int, options: ExtractionOptions) -> Sl
                             title=None,
                         )
                     )
+            elif _is_smartart_shape(shape):
+                slide_doc.blocks.append(
+                    FigureBlock(
+                        shape_id=str(shape.shape_id),
+                        figure_type="smartart",
+                        title=None,
+                    )
+                )
             else:
                 if getattr(shape, "has_text_frame", False) and shape.text_frame is not None:
                     lines = _shape_text_lines(shape)
@@ -353,6 +379,8 @@ def blocks_to_markdown(blocks: Sequence[SlideBlock], options: ExtractionOptions)
                     lines.append(f"[Figure: Chart, title=\"{title}\"]")
                 elif options.charts == "placeholder":
                     lines.append("[Figure: Chart]")
+            elif block.figure_type == "smartart":
+                lines.append("[Figure: SmartArt]")
             lines.append("")
         elif isinstance(block, NoteBlock):
             lines.append("> NOTE: " + block.text.replace("\n", " ").strip())

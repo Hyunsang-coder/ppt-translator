@@ -7,6 +7,9 @@ docs/MD_EXTRACTION_IMPROVEMENT_PLAN.md.
 
 from __future__ import annotations
 
+import types
+from unittest import mock
+
 import pytest
 from pptx import Presentation
 from pptx.chart.data import CategoryChartData
@@ -16,9 +19,12 @@ from pptx.util import Inches
 from src.core.text_extractor import (
     ChartBlock,
     ExtractionOptions,
+    FigureBlock,
     TextBlock,
+    blocks_to_markdown,
     docs_to_markdown,
     extract_pptx_to_docs,
+    extract_slide,
 )
 
 
@@ -188,3 +194,41 @@ def test_slide1_body_and_note_preserved(markdown):
 
 def test_slide_count(docs):
     assert len(docs) == 3
+
+
+# --- P3: SmartArt placeholder -------------------------------------------------
+# python-pptx reports a SmartArt frame's shape_type as None (not DIAGRAM);
+# the diagram graphicData uri is the only signal. Extraction must mark it
+# instead of dropping it silently.
+
+_DIAGRAM_URI = "http://schemas.openxmlformats.org/drawingml/2006/diagram"
+
+
+def _fake_smartart_shape(shape_id=9):
+    return types.SimpleNamespace(
+        shape_type=None,
+        top=0,
+        left=0,
+        shape_id=shape_id,
+        name="Diagram 1",
+        _element=types.SimpleNamespace(graphicData_uri=_DIAGRAM_URI),
+    )
+
+
+def test_smartart_block_rendered_as_placeholder(options):
+    block = FigureBlock(shape_id="9", figure_type="smartart", title=None)
+    assert blocks_to_markdown([block], options).strip() == "[Figure: SmartArt]"
+
+
+def test_smartart_shape_extracted_as_placeholder(options):
+    shapes = mock.MagicMock()
+    shapes.title = None
+    shapes.__iter__.return_value = [_fake_smartart_shape()]
+    slide = types.SimpleNamespace(shapes=shapes, notes_slide=None)
+
+    doc = extract_slide(slide, 0, options)
+    smartarts = [
+        b for b in doc.blocks if isinstance(b, FigureBlock) and b.figure_type == "smartart"
+    ]
+    assert len(smartarts) == 1
+    assert "[Figure: SmartArt]" in blocks_to_markdown(doc.blocks, options)

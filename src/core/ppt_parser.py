@@ -11,6 +11,7 @@ from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
 from src.utils.helpers import run_text_with_breaks
+from src.core.text_extractor import _is_smartart_shape
 
 if TYPE_CHECKING:  # pragma: no cover - import for type checking only
     from pptx.text.text import Paragraph
@@ -155,7 +156,8 @@ class PPTParser:
         """Count shapes excluded from translation (ADR-0006).
 
         Chart/SmartArt/OLE text stays in the source language. Group children
-        are walked so a chart inside a group is still counted.
+        are walked so a chart inside a group is still counted. SmartArt
+        reports shape_type None, so it is detected by graphicData uri.
         """
         total = 0
         stack: list = []
@@ -172,7 +174,7 @@ class PPTParser:
                     stack.extend(list(shape.shapes))  # type: ignore[attr-defined]
                 except (AttributeError, TypeError):  # pragma: no cover - odd groups
                     pass
-            elif shape_type in _SKIPPED_SHAPE_TYPES:
+            elif shape_type in _SKIPPED_SHAPE_TYPES or _is_smartart_shape(shape):
                 total += 1
         return total
 

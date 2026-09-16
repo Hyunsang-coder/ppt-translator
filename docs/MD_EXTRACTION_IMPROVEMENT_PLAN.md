@@ -107,7 +107,9 @@ for series in chart.plots[0].series:
 - **노트**: 줄 단위로 `> ` prefix를 붙여 다중 라인 blockquote로.
 
 ### P3 항목 (여유 있을 때)
-SmartArt(diagram XML 파싱 또는 `[Figure: SmartArt]` placeholder), 병합 셀 표기, `<a:br>` 개행 처리, 빈 슬라이드 `(내용 없음)` 표기, 숨김 슬라이드 제외 옵션.
+SmartArt는 `[Figure: SmartArt]` 플레이스홀더로 처리한다 (2026-09-16 완료 — diagram XML 파싱은 비용 대비 빈도가 낮아 포기).
+OLE 개체(embedded/linked)는 외부 앱 콘텐츠라 추출·번역 모두 지원하지 않는다 (wontfix).
+남은 것: 병합 셀 표기, `<a:br>` 개행 처리, 빈 슬라이드 `(내용 없음)` 표기, 숨김 슬라이드 제외 옵션.
 
 ## 수용 기준
 
