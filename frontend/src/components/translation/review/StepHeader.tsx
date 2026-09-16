@@ -12,7 +12,8 @@ interface StepHeaderProps {
   onClose: () => void;
 }
 
-/** Where the user is: translation done, review now, saving next. */
+/** Where the user is: translation done, review now. Saving is an anytime
+ * action inside review (not a later stage), so the header stops at step 2. */
 export function StepHeader({ filename, canUndo, busy, onUndo, onClose }: StepHeaderProps) {
   return (
     <div className="flex items-center justify-between gap-4 border-b border-border bg-card px-5 py-3">
@@ -27,13 +28,6 @@ export function StepHeader({ filename, canUndo, busy, onUndo, onClose }: StepHea
             2
           </span>
           <span className="text-[13px] font-bold text-primary">검토</span>
-        </span>
-        <ChevronRight className="size-3.5 stroke-[2.5] text-border" />
-        <span className="flex items-center gap-1.5">
-          <span className="inline-flex size-[18px] items-center justify-center rounded-full border-[1.5px] border-border text-[11px]">
-            3
-          </span>
-          <span className="text-[13px] text-muted-foreground/70">저장</span>
         </span>
       </div>
 
