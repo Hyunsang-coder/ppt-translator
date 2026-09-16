@@ -6,7 +6,7 @@ on:
 
 jobs:
   backend-fast:
-    name: Backend Fast Tests
+    name: Backend Tests
     runs-on: ubuntu-latest
     env:
       OPENAI_API_KEY: test
@@ -27,14 +27,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pytest pytest-asyncio
 
-      - name: Run fast backend tests
-        run: >
-          pytest -q
-          tests/test_security_fix.py
-          tests/test_job_manager.py
-          tests/test_batch_size.py
-          tests/test_image_compressor.py
-          tests/test_translation.py
+      - name: Run backend tests
+        run: pytest -q
 
   frontend-typecheck:
     name: Frontend Type Check
@@ -58,3 +52,56 @@ jobs:
 
       - name: Type check
         run: npx tsc --noEmit
+
+  frontend-tests:
+    name: Frontend Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Run frontend tests
+        run: npm test -- --run
+
+  rust-tests:
+    name: Rust Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run Rust tests
+        run: cargo test --locked
