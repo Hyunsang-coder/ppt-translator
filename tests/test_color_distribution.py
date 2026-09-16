@@ -1196,7 +1196,7 @@ class ColorDistributionModelSelectionTestCase(unittest.TestCase):
 
         model = TranslationService._color_distribution_model(
             "anthropic",
-            "claude-opus-4-8",
+            "claude-opus-5",
         )
 
         self.assertEqual(model, "claude-haiku-4-5-20251001")

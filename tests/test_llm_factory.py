@@ -6,7 +6,7 @@ from langchain_core.rate_limiters import InMemoryRateLimiter
 from src.chains.llm_factory import create_llm
 
 
-@pytest.mark.parametrize("model_name", ["gpt-5.6-sol", "gpt-5.6-luna"])
+@pytest.mark.parametrize("model_name", ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
 def test_gpt_56_models_use_high_reasoning_without_temperature(model_name: str) -> None:
     """Both GPT-5.6 choices should be configured as high-reasoning models."""
     llm = create_llm(

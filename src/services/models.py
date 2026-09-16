@@ -19,10 +19,11 @@ from typing import Any, Callable, Dict, List, Optional
 MODEL_REGISTRY: Dict[str, list[tuple[str, str]]] = {
     "openai": [
         ("gpt-5.6-sol", "GPT-5.6 Sol (High)"),
+        ("gpt-5.6-terra", "GPT-5.6 Terra (High)"),
         ("gpt-5.6-luna", "GPT-5.6 Luna (High)"),
     ],
     "anthropic": [
-        ("claude-opus-4-8", "Claude Opus 4.8"),
+        ("claude-opus-5", "Claude Opus 5"),
         ("claude-sonnet-5", "Claude Sonnet 5"),
         ("claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
     ],
@@ -39,6 +40,7 @@ DEFAULT_LIGHT_MODEL = {
 # (translation, summarization, and post-processing) use the same setting.
 MODEL_REASONING_EFFORT: Dict[str, str] = {
     "gpt-5.6-sol": "high",
+    "gpt-5.6-terra": "high",
     "gpt-5.6-luna": "high",
 }
 
