@@ -132,12 +132,14 @@ def create_llm(
         key = api_key or os.getenv("OPENAI_API_KEY")
         reasoning_effort = MODEL_REASONING_EFFORT.get(model_name)
         LOGGER.debug(
-            "Creating ChatOpenAI with model=%s, reasoning_effort=%s",
+            "Creating ChatOpenAI with model=%s, max_tokens=%d, reasoning_effort=%s",
             model_name,
+            max_tokens,
             reasoning_effort,
         )
         kwargs: dict = dict(
             model=model_name,
+            max_tokens=max_tokens,
             api_key=key,
             rate_limiter=_rate_limiter,
         )
