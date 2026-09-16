@@ -36,6 +36,7 @@ TAURI_BUILD=1 cargo tauri build
 
 - `/commit` — Review & commit
 - `/push` — Push with safety checks
+- `/deploy` — Local production build, then push + web deploy
 - `/dev-desktop` — Build & launch the Tauri desktop app (sidecar + frontend + window, one command)
 - `/dev-backend` / `/dev-frontend` — Start dev servers
 - `/update-docs` — Update CLAUDE.md and any affected docs
