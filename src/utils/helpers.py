@@ -26,6 +26,30 @@ def clean_text(text: str) -> str:
     return (text or "").replace("\r", " ").replace("\n", " ").strip()
 
 
+# Marker for an intra-paragraph line break inside LLM prompts. The numbered
+# batch format ("1. text") joins items with real newlines, so a literal
+# backslash-n (2 chars) stands in for manual breaks (<a:br/>). The model is
+# instructed to reproduce the markers; they are converted back to real
+# newlines after translation (see restore_break_markers).
+BREAK_MARKER = "\\n"
+
+
+def clean_text_for_prompt(text: str) -> str:
+    """Normalise paragraph text for the translation prompt.
+
+    Same as :func:`clean_text` except intra-paragraph line breaks are kept
+    as :data:`BREAK_MARKER` so the model can preserve their positions.
+    """
+
+    return (text or "").replace("\r", " ").replace("\n", BREAK_MARKER).strip()
+
+
+def restore_break_markers(text: str) -> str:
+    """Convert prompt break markers back to real newlines."""
+
+    return (text or "").replace(BREAK_MARKER, "\n")
+
+
 _DRAWINGML_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
 
 
@@ -97,7 +121,9 @@ def chunk_paragraphs(
                 raw_text = prepared_texts[start_idx + offset - 1]
             else:
                 raw_text = paragraph.original_text
-            cleaned = clean_text(raw_text)
+            # Break-preserving clean: markers keep manual line-break
+            # positions visible to the model (restored post-translation).
+            cleaned = clean_text_for_prompt(raw_text)
             text = cleaned or "[EMPTY]"
             lines.append(f"{offset}. {text}")
             if length_limit is not None:

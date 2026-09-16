@@ -16,6 +16,7 @@ from tenacity import (
 )
 
 from src.chains.llm_factory import Provider, create_llm
+from src.utils.helpers import restore_break_markers
 
 LOGGER = logging.getLogger(__name__)
 
@@ -114,6 +115,9 @@ Translate the following texts from {source_lang} to {target_lang}.
 Maintain consistency with the context, background information, and glossary.
 Follow the translation style/tone guidelines if provided.
 If a sentence or phrase appears more than once in the source, translate it identically every time unless the glossary overrides it.
+If a source text contains \\n (a backslash followed by n), it marks a line
+break inside that paragraph — reproduce the same number of \\n markers at the
+matching positions in your translation. Never add \\n where the source has none.
 Return exactly {expected_count} items in the items array — one per numbered source
 text. For each item, set "index" to the source text's number (the digit before the
 "." on its line) and "text" to its translation. Do not skip, merge, or renumber
@@ -285,7 +289,8 @@ def translate_with_progress(
             )
 
         translations.extend(
-            _resolve_batch_parts(chain, batch, result, config, index)
+            restore_break_markers(s)
+            for s in _resolve_batch_parts(chain, batch, result, config, index)
         )
 
     return translations

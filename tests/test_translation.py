@@ -15,7 +15,13 @@ from src.chains.translation_chain import (
     translate_with_progress,
 )
 from src.utils.glossary_loader import GlossaryLoader
-from src.utils.helpers import chunk_paragraphs, split_text_into_segments
+from src.utils.helpers import (
+    BREAK_MARKER,
+    chunk_paragraphs,
+    clean_text_for_prompt,
+    restore_break_markers,
+    split_text_into_segments,
+)
 from src.utils.language_detector import LanguageDetector
 
 
@@ -508,6 +514,52 @@ class ForceMatchExpectedTestCase(unittest.TestCase):
     def test_exact_count_unchanged(self) -> None:
         result = _force_match_expected(["a", "b"], 2, originals=["x", "y"])
         self.assertEqual(result, ["a", "b"])
+
+
+class BreakMarkerTestCase(unittest.TestCase):
+    """Intra-paragraph line breaks must survive the prompt round-trip."""
+
+    def test_clean_for_prompt_keeps_breaks_as_markers(self) -> None:
+        self.assertEqual(clean_text_for_prompt("Hello\nWorld"), f"Hello{BREAK_MARKER}World")
+        self.assertEqual(BREAK_MARKER, "\\n")
+        # No breaks -> identical to clean_text behaviour.
+        self.assertEqual(clean_text_for_prompt("  padded  "), "padded")
+
+    def test_restore_markers_converts_to_newlines(self) -> None:
+        self.assertEqual(restore_break_markers(f"안녕{BREAK_MARKER}세계"), "안녕\n세계")
+        self.assertEqual(restore_break_markers("plain"), "plain")
+
+    def test_chunk_keeps_numbered_structure_with_markers(self) -> None:
+        paragraphs = [_fake_paragraph("Hello\nWorld"), _fake_paragraph("Next")]
+        batches = chunk_paragraphs(paragraphs, batch_size=2, ppt_context="ctx")
+        texts = batches[0]["texts"]
+        # Still exactly 2 numbered lines; the break is an inline marker.
+        self.assertEqual(texts.split("\n"), ["1. Hello\\nWorld", "2. Next"])
+
+    def test_translate_with_progress_restores_breaks(self) -> None:
+        batches = [
+            {
+                "paragraphs": [_fake_paragraph("Hello\nWorld")],
+                "start_idx": 1,
+                "end_idx": 1,
+            }
+        ]
+
+        class FakeChain:
+            def batch_as_completed(self, submitted, config=None):
+                yield (0, TranslationOutput(translations=["안녕\\n세계"]))
+
+        result = translate_with_progress(FakeChain(), batches, max_concurrency=1)
+        self.assertEqual(result, ["안녕\n세계"])
+
+    def test_repetition_keys_distinguish_break_positions(self) -> None:
+        from src.utils.repetition import build_repetition_plan
+
+        plan = build_repetition_plan(
+            [_fake_paragraph("Hello\nWorld"), _fake_paragraph("Hello World")]
+        )
+        # Same words, different break layout -> translated separately.
+        self.assertEqual(plan.unique_indices, [0, 1])
 
 
 if __name__ == "__main__":

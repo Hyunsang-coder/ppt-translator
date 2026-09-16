@@ -6,7 +6,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Dict, List, Sequence, TYPE_CHECKING
 
-from src.utils.helpers import clean_text
+from src.utils.helpers import clean_text_for_prompt
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from src.core.ppt_parser import ParagraphInfo
@@ -30,7 +30,9 @@ class RepetitionPlan:
 def build_repetition_plan(paragraphs: Sequence["ParagraphInfo"]) -> RepetitionPlan:
     """Create a plan describing which paragraphs repeat verbatim."""
 
-    normalized_texts: List[str] = [clean_text(info.original_text) for info in paragraphs]
+    # Break-aware keys: paragraphs differing only in line-break positions
+    # get separate translations so each keeps its own layout.
+    normalized_texts: List[str] = [clean_text_for_prompt(info.original_text) for info in paragraphs]
     counts = Counter(text for text in normalized_texts if text)
 
     canonical_map: Dict[int, int | None] = {}
