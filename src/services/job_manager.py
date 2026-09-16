@@ -186,6 +186,12 @@ class JobManager:
         if job is None:
             return False
 
+        # Completed/failed jobs keep their result so the download still works.
+        # Overwriting them with CANCELLED made a just-finished download 404/400.
+        if job.state in _TERMINAL_STATES:
+            LOGGER.info("Job %s already %s, ignoring cancel", job_id, job.state.value)
+            return True
+
         # C-1: signal the worker thread to stop at the next batch boundary BEFORE
         # cancelling the coroutine. run_in_executor cannot interrupt the thread,
         # so without this the translation keeps calling the LLM (burning tokens

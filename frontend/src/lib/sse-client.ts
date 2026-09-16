@@ -26,6 +26,7 @@ export class SSEClient {
   private closed = false;
   private pollingTimer: ReturnType<typeof setInterval> | null = null;
   private started = false;
+  private inFlight = false;
 
   constructor(_url: string, options: SSEClientOptions) {
     this.options = {
@@ -44,7 +45,9 @@ export class SSEClient {
 
     const poll = async () => {
       if (this.closed) return;
-
+      // 백엔드 지연 시 이전 요청이 끝나기 전 다음 tick이 겹치지 않게 한다.
+      if (this.inFlight) return;
+      this.inFlight = true;
       try {
         const status = await this.options.getJobStatus(this.options.jobId);
         this.handlePolledStatus(status);
@@ -63,6 +66,8 @@ export class SSEClient {
         }
         console.error("Polling failed:", err);
         // Continue polling — transient network errors shouldn't stop us
+      } finally {
+        this.inFlight = false;
       }
     };
 

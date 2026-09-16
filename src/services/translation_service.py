@@ -233,6 +233,9 @@ class ServiceProgressTracker:
         self._start_time = time.time()
         self.total_elapsed: float = 0.0
         self._reported_start = False
+        # tenacity 재시도 시 reset+재크레딧 과정에서 percent가 일시 역행
+        # (60% → 15%)하지 않게 최고치 클램프를 둔다. 재시도 후에도 낮아지지 않는다.
+        self._max_percent = 10
 
     def _calc_percent(self) -> int:
         """Calculate overall percent (translation phase spans 10-80%)."""
@@ -291,6 +294,8 @@ class ServiceProgressTracker:
             else:
                 message = "번역이 완료되었습니다. PPT 반영 중..."
 
+            percent = max(self._calc_percent(), self._max_percent)
+            self._max_percent = percent
             self._callback(
                 TranslationProgress(
                     status=TranslationStatus.TRANSLATING,
@@ -298,7 +303,7 @@ class ServiceProgressTracker:
                     total_batches=self.total_batches,
                     current_sentence=self._current_sentence,
                     total_sentences=self.total_sentences,
-                    percent=self._calc_percent(),
+                    percent=percent,
                     message=message,
                 )
             )

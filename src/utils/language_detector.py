@@ -61,7 +61,11 @@ class LanguageDetector:
 
         if not code:
             return self._DEFAULT_LANGUAGE
-        return self._LANG_CODE_MAPPING.get(code.lower(), self._DEFAULT_LANGUAGE)
+        language = self._LANG_CODE_MAPPING.get(code.lower())
+        if language is None:
+            LOGGER.warning("Unmapped language code '%s'; falling back to default.", code)
+            return self._DEFAULT_LANGUAGE
+        return language
 
     def infer_target_language(self, source_lang: str) -> str:
         """Infer an appropriate target language when 'Auto' is selected.

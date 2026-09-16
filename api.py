@@ -643,6 +643,9 @@ def generate_output_filename(
     """Generate output filename based on settings."""
     if filename_settings.mode == "custom" and filename_settings.customName.strip():
         safe_custom = sanitize_filename(filename_settings.customName.strip(), fallback="translated")
+        # "report.pptx" 입력 시 "report.pptx.pptx"가 되지 않게 확장자를 걷어낸다.
+        if safe_custom.lower().endswith(".pptx"):
+            safe_custom = safe_custom[:-5].strip() or "translated"
         return f"{safe_custom}.pptx"
 
     # Auto mode
