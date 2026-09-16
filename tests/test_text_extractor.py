@@ -182,6 +182,19 @@ def test_chart_rendered_as_table(markdown):
     assert "| 이익 | 5 | 8 | 12 |" in slide3
 
 
+# --- empty slides ----------------------------------------------------------
+
+
+def test_empty_slide_marked_explicitly(tmp_path, options):
+    prs = Presentation()
+    prs.slides.add_slide(prs.slide_layouts[6])  # blank, no shapes
+    path = str(tmp_path / "empty.pptx")
+    prs.save(path)
+
+    markdown = docs_to_markdown(extract_pptx_to_docs(path, options), options)
+    assert "(내용 없음)" in markdown
+
+
 # --- regression guards -------------------------------------------------------
 
 

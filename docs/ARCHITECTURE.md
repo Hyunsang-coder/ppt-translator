@@ -37,7 +37,7 @@
 - `job_manager.py`: Async job management
   - `JobManager`: In-memory store (max 100 jobs, 1h TTL; periodic background cleanup started in the FastAPI lifespan)
   - `Job`: State tracking (pending/running/completed/failed/cancelled)
-  - Concurrency: `running_semaphore` + `try_create_job()` atomic admission (429 on overflow)
+  - Concurrency: `running_semaphore` + `try_create_job()` atomic admission (429 on overflow). Jobs stay PENDING until they hold a slot (`mark_running`), so /health running counts real work
   - Thread-safe: `add_event()` is a plain deque append (atomic under the GIL, no concurrent iterator)
   - Terminal state guards: `complete_job`/`fail_job` skip if already CANCELLED
 

@@ -303,15 +303,41 @@ class JobManager:
         LOGGER.error("Job %s failed: %s", job_id, error_message)
 
     def start_job(self, job_id: str, task: asyncio.Task) -> None:
-        """Mark job as running with associated task."""
+        """Register a job's task without marking it running.
+
+        The job stays PENDING until it actually holds a concurrency slot
+        (see mark_running): a queued job must not inflate the running count
+        reported by /health. Cancellation while queued stays safe — delete_job
+        sets cancel_event regardless, and the worker bails on that flag after
+        acquiring the slot.
+        """
         job = self._jobs.get(job_id)
         if job is None:
             return
 
-        job.state = JobState.RUNNING
         job.started_at = time.time()
         job._task = task
         job.add_event("started", {"message": "Job started"})
+
+    async def mark_running(self, job_id: str) -> bool:
+        """Move a PENDING job to RUNNING once it holds a concurrency slot.
+
+        Returns False when the job is gone or no longer pending (e.g.
+        cancelled while queued) — the caller must bail without doing work.
+        Serialized on the state lock so a racing cancel wins cleanly.
+        """
+        job = self._jobs.get(job_id)
+        if job is None:
+            return False
+
+        async with job._state_lock:
+            if job.state != JobState.PENDING:
+                LOGGER.info(
+                    "Job %s is %s, not starting work", job_id, job.state.value
+                )
+                return False
+            job.state = JobState.RUNNING
+            return True
 
     def _cleanup_old_jobs(self) -> None:
         """Remove old completed/failed jobs."""

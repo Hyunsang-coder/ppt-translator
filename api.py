@@ -854,7 +854,8 @@ async def _run_translation_job(
     settings = get_settings()
 
     # Wait for a concurrency slot before actually starting work.
-    # The job is in RUNNING state, but it waits here until a slot is free.
+    # The job stays PENDING until here so /health running counts only jobs
+    # that really hold a slot.
     async with job_manager.running_semaphore:
         # C-1: pass the job's cancel flag into the request so a DELETE can stop
         # the worker thread's LLM calls at the next batch boundary. A slot may
@@ -863,6 +864,9 @@ async def _run_translation_job(
         cancel_event = job.cancel_event if job is not None else None
         if cancel_event is not None and cancel_event.is_set():
             LOGGER.info("Translation job %s cancelled before start", job_id)
+            return
+        if not await job_manager.mark_running(job_id):
+            LOGGER.info("Translation job %s no longer pending, not starting", job_id)
             return
         try:
             request = TranslationRequest(

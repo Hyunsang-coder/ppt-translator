@@ -393,7 +393,12 @@ def docs_to_markdown(docs: Sequence[SlideDoc], options: ExtractionOptions) -> st
     for doc in docs:
         chunks.append(f"## Slide {doc.slide_index + 1} - {doc.title}")
         chunks.append("")
-        chunks.append(blocks_to_markdown(doc.blocks, options).rstrip())
+        if doc.blocks:
+            chunks.append(blocks_to_markdown(doc.blocks, options).rstrip())
+        else:
+            # An empty section is ambiguous to an LLM reader (extraction
+            # failure vs. genuinely empty slide) — say so explicitly.
+            chunks.append("(내용 없음)")
         chunks.append("")
     return "\n".join(chunks).rstrip() + "\n"
 
