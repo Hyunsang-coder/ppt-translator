@@ -15,6 +15,22 @@ the web deploy so the public download page updates.
    ```
 3. Verify the bundles exist under `src-tauri/target/*/release/bundle/`
    (`.dmg` / `.app` on macOS) and report their paths.
+   (Note: with the DLP workaround, `tauri.sh` redirects `CARGO_TARGET_DIR`
+   under `~/_NOAV/XcodeDerivedData/cargo-target/` — look there, not
+   `src-tauri/target/`.)
+4. Replace the local install with the fresh build (quit first if running,
+   then copy, then smoke-test and quit):
+   ```bash
+   osascript -e 'quit app "ppt-translation-cat"' 2>/dev/null; sleep 2
+   rm -rf /Applications/ppt-translation-cat.app && ditto \
+     "$HOME/_NOAV/XcodeDerivedData/cargo-target/release/bundle/macos/ppt-translation-cat.app" \
+     /Applications/ppt-translation-cat.app
+   open /Applications/ppt-translation-cat.app && sleep 8 && \
+     ps aux | grep -E "ppt-translat" | grep -v grep
+   osascript -e 'quit app "ppt-translation-cat"'
+   ```
+   The smoke test must show both `ppt-translator-desktop` and the
+   `ppt-translator-sidecar` child before quitting.
 
 ## Phase 2 — Commit, push, trigger web deploy
 
@@ -26,12 +42,19 @@ the web deploy so the public download page updates.
    - Push with `git push` (or `git push -u origin <branch>` if no upstream).
 6. Update the web download page (`https://ppt-translator.vercel.app`):
    - On `main`: the push itself triggers `Full Validation`, and `Deploy Web`
-     runs automatically on success. Do NOT fire a manual duplicate — watch the
-     auto-triggered runs instead:
-     ```bash
-     gh run list --workflow=predeploy.yml --branch main --limit 3
-     gh run list --workflow=deploy-web.yml --limit 3
-     ```
+      runs automatically on success. Do NOT fire a manual duplicate — watch the
+      auto-triggered runs instead:
+      ```bash
+      gh run list --workflow=predeploy.yml --branch main --limit 3
+      gh run list --workflow=deploy-web.yml --limit 3
+      ```
+    - If there was nothing to push (clean tree, nothing new on `main`) but a
+      web deploy was explicitly requested, trigger it manually — there is no
+      auto-run to duplicate in that case:
+      ```bash
+      gh workflow run deploy-web.yml --ref main
+      gh run watch <run-id>
+      ```
    - On any other branch: trigger explicitly for the pushed ref, then watch:
      ```bash
      gh workflow run deploy-web.yml --ref <branch>
