@@ -26,7 +26,7 @@
 - `glossary_template.xlsx`: Sample glossary file
 
 ## Core Components (`src/core/`)
-- `ppt_parser.py`: Extracts `ParagraphInfo` objects from PPTX (shapes, tables, groups)
+- `ppt_parser.py`: Extracts `ParagraphInfo` objects from PPTX (shapes, tables, groups). Chart/SmartArt/OLE text is out of scope and kept as-is ([ADR-0006](adr/0006-chart-translation-out-of-scope.md))
 - `ppt_writer.py`: Applies translations preserving run formatting; text fit (auto-shrink, expand-box) and color distribution
 - `text_extractor.py`: PPTX to structured markdown with `ExtractionOptions`
 

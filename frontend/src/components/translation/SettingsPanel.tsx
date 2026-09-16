@@ -401,6 +401,10 @@ export function SettingsPanel({
       </div>
 
       <GlossarySection disabled={disabled} />
+
+      <p className="text-xs text-muted-foreground">
+        차트·SmartArt·OLE 안의 텍스트는 번역되지 않고 원문이 유지됩니다.
+      </p>
     </div>
   );
 }

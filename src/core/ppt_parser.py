@@ -17,6 +17,19 @@ if TYPE_CHECKING:  # pragma: no cover - import for type checking only
 else:
     Paragraph = Any
 
+# 번역에서 제외되는 도형 (ADR-0006: 차트 번역 미지원 명시).
+# 파서는 텍스트 프레임·표·그룹만 수집한다. 차트 제목·카테고리·시리즈명,
+# SmartArt(DIAGRAM), OLE 개체는 조용히 원문 유지되며, 차트가 있으면
+# extract_paragraphs가 경고 로그를 남긴다.
+_SKIPPED_SHAPE_TYPES = frozenset(
+    {
+        MSO_SHAPE_TYPE.CHART,
+        MSO_SHAPE_TYPE.DIAGRAM,
+        MSO_SHAPE_TYPE.EMBEDDED_OLE_OBJECT,
+        MSO_SHAPE_TYPE.LINKED_OLE_OBJECT,
+    }
+)
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -129,7 +142,39 @@ class PPTParser:
                         )
 
         LOGGER.info("Extracted %d paragraphs from %d slides.", len(paragraphs), len(presentation.slides))
+        skipped = self.count_skipped_shapes(presentation)
+        if skipped:
+            LOGGER.warning(
+                "차트·SmartArt·OLE %d개는 번역 대상이 아닙니다 (원문 유지, ADR-0006).",
+                skipped,
+            )
         return paragraphs, presentation
+
+    @staticmethod
+    def count_skipped_shapes(presentation) -> int:
+        """Count shapes excluded from translation (ADR-0006).
+
+        Chart/SmartArt/OLE text stays in the source language. Group children
+        are walked so a chart inside a group is still counted.
+        """
+        total = 0
+        stack: list = []
+        for slide in presentation.slides:
+            stack.extend(list(slide.shapes))
+        while stack:
+            shape = stack.pop()
+            try:
+                shape_type = shape.shape_type
+            except (AttributeError, ValueError):  # pragma: no cover - odd shapes
+                continue
+            if shape_type == MSO_SHAPE_TYPE.GROUP:
+                try:
+                    stack.extend(list(shape.shapes))  # type: ignore[attr-defined]
+                except (AttributeError, TypeError):  # pragma: no cover - odd groups
+                    pass
+            elif shape_type in _SKIPPED_SHAPE_TYPES:
+                total += 1
+        return total
 
     def _extract_from_shape(
         self,

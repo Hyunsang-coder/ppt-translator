@@ -35,3 +35,4 @@
 | [0003](0003-browser-managed-glossary-library.md) | 용어집은 엑셀 업로드 대신 브라우저가 관리한다 | 채택됨 | 2026-07-21 |
 | [0004](0004-review-queue-one-item-at-a-time.md) | 검토 화면은 타일 그리드 대신 한 건씩 처리하는 큐다 | 채택됨 | 2026-07-29 |
 | [0005](0005-desktop-only-distribution.md) | 배포는 Tauri 데스크톱 전용, 웹은 다운로드 페이지만 | 채택됨 | 2026-06-15 |
+| [0006](0006-chart-translation-out-of-scope.md) | 차트 번역은 지원하지 않고 원문 유지임을 명시한다 | 채택됨 | 2026-09-16 |
