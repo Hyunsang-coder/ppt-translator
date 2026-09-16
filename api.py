@@ -64,8 +64,13 @@ def _is_loopback_bind_host(host: str) -> bool:
     except ValueError:
         return False
 
-# Limit thread pool to prevent runaway thread creation
-_thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=3)
+# Separate thread pools so a long translation job can never starve review
+# interactions (head-of-line blocking). Translation workers match
+# max_running_jobs; review work (proposals, sweeps, renders) is bursty and
+# gets its own pool, which is also the loop's default executor — review call
+# sites keep passing None while the translation job passes its pool explicitly.
+_translation_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+_review_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 MAX_MARKDOWN_CHARS = 200_000
 MAX_FORM_TEXT_CHARS = 20_000
 
@@ -149,12 +154,13 @@ class RequestSizeLimitMiddleware:
 async def lifespan(application: FastAPI):  # noqa: ARG001
     """Set a bounded thread pool and start periodic job cleanup on startup."""
     loop = asyncio.get_running_loop()
-    loop.set_default_executor(_thread_pool)
+    loop.set_default_executor(_review_pool)
     job_manager = get_job_manager()
     job_manager.start_cleanup_loop()
     yield
     await job_manager.stop_cleanup_loop()
-    _thread_pool.shutdown(wait=False)
+    _translation_pool.shutdown(wait=False)
+    _review_pool.shutdown(wait=False)
 
 
 app = FastAPI(
@@ -877,9 +883,10 @@ async def _run_translation_job(
             progress_callback = _create_progress_callback(job_id)
             service = TranslationService(settings=settings, progress_callback=progress_callback)
 
-            # Run translation in thread pool to avoid blocking
+            # Run translation on its dedicated pool (minutes-long) so review
+            # interactions on the default pool are never starved behind it.
             loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(None, service.translate, request)
+            result = await loop.run_in_executor(_translation_pool, service.translate, request)
 
             if not result.success:
                 await job_manager.fail_job(job_id, result.error_message or "Translation failed")
@@ -1683,6 +1690,26 @@ async def apply_review_partial_candidates(
     if job is None or job.review_session is None:
         raise HTTPException(status_code=404, detail="Review session not found")
     session = job.review_session
+    # Color mapping may call the LLM — precompute outside review_lock so a
+    # multi-color edit doesn't stall glossary updates or other edits. The
+    # revision check inside apply still rejects stale previews with 409, and
+    # mismatched targets are recomputed inline.
+    try:
+        loop = asyncio.get_running_loop()
+        prepared = await loop.run_in_executor(
+            None,
+            functools.partial(
+                session.prepare_partial_colors,
+                list(body.indices),
+                body.old_phrase,
+                body.new_phrase,
+                model=session.model or DEFAULT_TRANSLATION_MODEL,
+                provider=session.provider,
+            ),
+        )
+    except Exception as exc:
+        LOGGER.exception("Partial precompute failed: %s", exc)
+        raise HTTPException(status_code=500, detail="수정 준비에 실패했습니다.")
     async with job.review_lock:
         previous_targets = {
             index: session.translated_texts[index]
@@ -1701,6 +1728,7 @@ async def apply_review_partial_candidates(
                     expected_revision=body.expected_revision,
                     model=session.model or DEFAULT_TRANSLATION_MODEL,
                     provider=session.provider,
+                    precomputed_colors=prepared,
                 ),
             )
             await loop.run_in_executor(None, session.run_final_sweep)
@@ -1795,6 +1823,28 @@ async def apply_review_block_edit(
         raise HTTPException(status_code=404, detail="Review session not found")
     session = job.review_session
 
+    if any(not (0 <= index < len(session.paragraphs)) for index in body.edits):
+        raise HTTPException(status_code=400, detail="Fragment index out of range")
+    # Same two-phase split as the partial path: color mapping (possibly LLM)
+    # runs outside review_lock; apply revalidates the revision inside.
+    try:
+        loop = asyncio.get_running_loop()
+        prepared = await loop.run_in_executor(
+            None,
+            functools.partial(
+                session.prepare_block_colors,
+                dict(body.edits),
+                propagate_identical=body.propagate_identical,
+                model=session.model or DEFAULT_TRANSLATION_MODEL,
+                provider=session.provider,
+            ),
+        )
+    except IndexError:
+        raise HTTPException(status_code=400, detail="Fragment index out of range")
+    except Exception as exc:
+        LOGGER.exception("Block precompute failed: %s", exc)
+        raise HTTPException(status_code=500, detail="수정 준비에 실패했습니다.")
+
     previous = dict(enumerate(session.translated_texts))
     async with job.review_lock:
         try:
@@ -1808,6 +1858,7 @@ async def apply_review_block_edit(
                     model=session.model or DEFAULT_TRANSLATION_MODEL,
                     provider=session.provider,
                     propagate_identical=body.propagate_identical,
+                    precomputed_colors=prepared,
                 ),
             )
             findings = await loop.run_in_executor(None, session.run_final_sweep)

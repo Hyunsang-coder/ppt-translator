@@ -13,6 +13,7 @@ import io
 import logging
 import math
 import re
+import threading
 import uuid
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -159,6 +160,12 @@ class ReviewSession:
     _theme_colors: Dict[str, str] = field(default_factory=dict, repr=False)
     _history: List[_DraftSnapshot] = field(default_factory=list, repr=False)
     _proposals: Dict[str, ProposedEdit] = field(default_factory=dict, repr=False)
+    # Guards _proposals: creation runs on executor threads outside review_lock,
+    # so the evict-and-insert sequence needs its own mutex. Lock order is
+    # always review_lock (api layer) -> _proposal_lock; never the reverse.
+    _proposal_lock: threading.Lock = field(
+        default_factory=threading.Lock, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         self.translated_texts = list(self.translated_texts)
@@ -450,6 +457,7 @@ class ReviewSession:
         model: str,
         provider: str,
         propagate_identical: bool = False,
+        precomputed_colors: Optional[Dict[int, tuple[str, Optional[list]]]] = None,
     ) -> List[int]:
         """Stage edits to several paragraphs as one revision.
 
@@ -462,6 +470,12 @@ class ReviewSession:
         that repeats it, as the single-paragraph path does. A paragraph the
         caller edited explicitly keeps its own text: two lines of one block can
         start out identical and still be edited apart.
+
+        ``precomputed_colors`` (from :meth:`prepare_block_colors`) lets callers
+        move the potentially LLM-backed color mapping outside ``review_lock``.
+        An entry is reused only when its target still matches; anything else
+        is mapped inline, so a stale preview can only cost recomputation,
+        never correctness.
         """
         if expected_revision != self.revision:
             raise RuntimeError("review revision conflict")
@@ -480,12 +494,19 @@ class ReviewSession:
             return []
 
         # Map colours before mutating: a failure here must leave the draft alone.
-        colors = {
-            index: self._map_color_distribution(
+        precomputed_colors = precomputed_colors or {}
+        colors = {}
+        for index, target in changed.items():
+            prepared = precomputed_colors.get(index)
+            if prepared is not None and prepared[0] == target:
+                if prepared[1]:
+                    colors[index] = prepared[1]
+                continue
+            mapped = self._map_color_distribution(
                 index, target, model=model, provider=provider
             )
-            for index, target in changed.items()
-        }
+            if mapped:
+                colors[index] = mapped
 
         indices = sorted(changed)
         self._history.append(self._snapshot(indices))
@@ -874,13 +895,17 @@ class ReviewSession:
             partial_candidates=partial,
             over_budget=budget is not None and len(new_target) > budget,
         )
-        if len(self._proposals) >= 50:
-            self._proposals.pop(next(iter(self._proposals)))
-        self._proposals[proposal.id] = proposal
+        # Evict-and-insert is atomic under the lock: concurrent creators can
+        # neither overshoot the cap nor lose each other's proposals.
+        with self._proposal_lock:
+            if len(self._proposals) >= 50:
+                self._proposals.pop(next(iter(self._proposals)))
+            self._proposals[proposal.id] = proposal
         return proposal
 
     def apply_proposal(self, proposal_id: str, expected_revision: int) -> ProposedEdit:
-        proposal = self._proposals.get(proposal_id)
+        with self._proposal_lock:
+            proposal = self._proposals.get(proposal_id)
         if proposal is None:
             raise KeyError("proposal not found")
         if expected_revision != self.revision or proposal.base_revision != self.revision:
@@ -892,8 +917,101 @@ class ReviewSession:
             color_segments_by_index=proposal.color_distributions,
         )
         proposal.changed_indices = changed
-        self._proposals.pop(proposal_id, None)
+        with self._proposal_lock:
+            self._proposals.pop(proposal_id, None)
         return proposal
+
+    def preview_block_targets(
+        self, edits: Dict[int, str], *, propagate_identical: bool = False
+    ) -> Dict[int, str]:
+        """Read-only preview of which indices a block edit would change.
+
+        Mirrors the target computation in :meth:`apply_block_edit` without the
+        revision check or any mutation, so callers can precompute color
+        mappings (potentially LLM-backed) before taking ``review_lock``.
+        """
+        targets: Dict[int, str] = {}
+        for index, target in edits.items():
+            if not (0 <= index < len(self.translated_texts)):
+                raise IndexError(f"fragment index {index} out of range")
+            others = self.identical_indices(index) if propagate_identical else [index]
+            for other in others:
+                if other != index and other in edits:
+                    continue
+                if self.translated_texts[other] != target:
+                    targets[other] = target
+        return targets
+
+    def preview_partial_replacements(
+        self, indices: List[int], old_phrase: str, new_phrase: str
+    ) -> Dict[int, str]:
+        """Read-only preview of phrase replacements (see :meth:`preview_block_targets`)."""
+        if (
+            not self._is_meaningful_partial_phrase(old_phrase)
+            or old_phrase == new_phrase
+        ):
+            return {}
+        replacements: Dict[int, str] = {}
+        for idx in indices:
+            if not (0 <= idx < len(self.translated_texts)):
+                continue
+            target = self._replace_partial_phrase_once(
+                self.translated_texts[idx], old_phrase, new_phrase
+            )
+            if target is not None and target != self.translated_texts[idx]:
+                replacements[idx] = target
+        return replacements
+
+    def map_color_targets(
+        self, targets: Dict[int, str], *, model: str, provider: str
+    ) -> Dict[int, tuple[str, Optional[list]]]:
+        """Map color distributions for ``index -> target`` pairs.
+
+        Pure with respect to the draft (reads only source paragraphs), so it
+        is safe to run outside ``review_lock``. Returns ``index ->
+        (target, segments)``; callers reuse an entry only when the target
+        still matches at apply time, otherwise they recompute inline.
+        """
+        prepared: Dict[int, tuple[str, Optional[list]]] = {}
+        for index, target in targets.items():
+            if not (0 <= index < len(self.translated_texts)):
+                continue
+            mapped = self._map_color_distribution(
+                index, target, model=model, provider=provider
+            )
+            prepared[index] = (target, mapped if mapped else None)
+        return prepared
+
+    def prepare_block_colors(
+        self,
+        edits: Dict[int, str],
+        *,
+        propagate_identical: bool = False,
+        model: str,
+        provider: str,
+    ) -> Dict[int, tuple[str, Optional[list]]]:
+        """Preview block targets and map their colors in one lock-free step."""
+        return self.map_color_targets(
+            self.preview_block_targets(edits, propagate_identical=propagate_identical),
+            model=model,
+            provider=provider,
+        )
+
+    def prepare_partial_colors(
+        self,
+        indices: List[int],
+        old_phrase: str,
+        new_phrase: str,
+        *,
+        model: str,
+        provider: str,
+    ) -> Dict[int, tuple[str, Optional[list]]]:
+        """Preview partial replacements and map their colors in one lock-free step."""
+        return self.map_color_targets(
+            self.preview_partial_replacements(indices, old_phrase, new_phrase),
+            model=model,
+            provider=provider,
+        )
 
     def apply_partial_candidates(
         self,
@@ -904,6 +1022,7 @@ class ReviewSession:
         expected_revision: int,
         model: str,
         provider: str,
+        precomputed_colors: Optional[Dict[int, tuple[str, Optional[list]]]] = None,
     ) -> List[int]:
         if expected_revision != self.revision:
             raise RuntimeError("review revision conflict")
@@ -927,10 +1046,15 @@ class ReviewSession:
 
         valid = list(replacements)
         self._history.append(self._snapshot(valid))
+        precomputed_colors = precomputed_colors or {}
         for idx, target in replacements.items():
             self.translated_texts[idx] = target
             self.edited_indices.add(idx)
-            mapped = self._map_color_distribution(idx, target, model=model, provider=provider)
+            prepared = precomputed_colors.get(idx)
+            if prepared is not None and prepared[0] == target:
+                mapped = prepared[1]
+            else:
+                mapped = self._map_color_distribution(idx, target, model=model, provider=provider)
             if mapped:
                 self.color_distributions[idx] = mapped
             else:

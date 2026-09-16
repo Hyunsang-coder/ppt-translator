@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import tempfile
+import threading
 import unittest
 from copy import deepcopy
 from pathlib import Path
@@ -1031,6 +1032,104 @@ class RecordReviewEditTestCase(unittest.TestCase):
             self.assertEqual(rows[0]["disposition"], "rejected")
             self.assertEqual(rows[0]["finding"]["type"], "consistency.phrase")
             self.assertEqual(rows[0]["promotion"]["status"], "rejected")
+
+
+class PrecomputedColorsTestCase(unittest.TestCase):
+    """Lock-free color precomputation for block/partial review edits."""
+
+    def _counting_map(self, calls):
+        def fake_map(session, index, target, *, model, provider):
+            calls.append((index, target))
+            return [ColoredSegment(text=target, group_index=0)]
+
+        return fake_map
+
+    def test_block_apply_reuses_precomputed_colors(self) -> None:
+        sess = _session("원문", 1, targets=["OLD"])
+        calls: list = []
+        with mock.patch.object(
+            ReviewSession, "_map_color_distribution", autospec=True
+        ) as m:
+            m.side_effect = self._counting_map(calls)
+            prepared = sess.prepare_block_colors(
+                {0: "NEW"}, model="m", provider="anthropic"
+            )
+            self.assertEqual(len(calls), 1)
+            changed = sess.apply_block_edit(
+                {0: "NEW"}, expected_revision=0, model="m",
+                provider="anthropic", precomputed_colors=prepared,
+            )
+            self.assertEqual(len(calls), 1)  # no inline recomputation
+        self.assertEqual(changed, [0])
+        self.assertEqual(sess.translated_texts[0], "NEW")
+        self.assertEqual(sess.revision, 1)
+
+    def test_block_apply_recomputes_on_stale_preview(self) -> None:
+        sess = _session("원문", 1, targets=["OLD"])
+        calls: list = []
+        with mock.patch.object(
+            ReviewSession, "_map_color_distribution", autospec=True
+        ) as m:
+            m.side_effect = self._counting_map(calls)
+            prepared = sess.prepare_block_colors(
+                {0: "A"}, model="m", provider="anthropic"
+            )
+            # Simulate a draft change between prepare and apply that the
+            # revision check cannot see (same revision): the stale entry
+            # must be recomputed, never applied blindly.
+            sess.translated_texts[0] = "OTHER"
+            changed = sess.apply_block_edit(
+                {0: "B"}, expected_revision=0, model="m",
+                provider="anthropic", precomputed_colors=prepared,
+            )
+            self.assertEqual(len(calls), 2)
+        self.assertEqual(changed, [0])
+        self.assertEqual(sess.translated_texts[0], "B")
+
+    def test_partial_apply_reuses_precomputed_colors(self) -> None:
+        sess = _session("원문", 1, targets=["Adjusted field drop rates"])
+        calls: list = []
+        with mock.patch.object(
+            ReviewSession, "_map_color_distribution", autospec=True
+        ) as m:
+            m.side_effect = self._counting_map(calls)
+            prepared = sess.prepare_partial_colors(
+                [0], "field drop", "World Spawn",
+                model="m", provider="anthropic",
+            )
+            self.assertEqual(len(calls), 1)
+            changed = sess.apply_partial_candidates(
+                [0], old_phrase="field drop", new_phrase="World Spawn",
+                expected_revision=0, model="m", provider="anthropic",
+                precomputed_colors=prepared,
+            )
+            self.assertEqual(len(calls), 1)
+        self.assertEqual(changed, [0])
+        self.assertEqual(sess.translated_texts[0], "Adjusted World Spawn rates")
+
+
+class ProposalLockTestCase(unittest.TestCase):
+    def test_concurrent_proposal_creation_stays_bounded(self) -> None:
+        sess = _session("원문", 1, targets=["OLD"])
+        for i in range(50):
+            sess._proposals[f"seed-{i}"] = mock.Mock(id=f"seed-{i}")
+
+        def create_many(n: int) -> None:
+            for _ in range(n):
+                sess.create_proposal(
+                    0, action="edit", target="NEW", instruction=None,
+                    propagate_identical=False, model="stub",
+                    provider="anthropic",
+                )
+
+        threads = [threading.Thread(target=create_many, args=(5,)) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(len(sess._proposals), 50)
+        self.assertEqual(len(set(sess._proposals)), 50)
 
 
 if __name__ == "__main__":
