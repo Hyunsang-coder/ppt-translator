@@ -15,7 +15,7 @@ OPENAI_API_KEY=         # Injected by Tauri, or .env for local API dev
 ANTHROPIC_API_KEY=      # Injected by Tauri, or .env for local API dev
 CORS_ALLOWED_ORIGINS=   # Comma-separated (default: http://localhost:3000,http://127.0.0.1:3000)
 SIDECAR_AUTH_TOKEN=     # Set automatically by the Tauri shell; required when binding beyond loopback
-MAX_UPLOAD_SIZE_MB=256  # Max uploaded PPT/PPTX size
+MAX_UPLOAD_SIZE_MB=1024  # Max uploaded PPT/PPTX size
 MAX_REQUEST_BODY_MB=272 # Request envelope limit; keep above the upload limit for multipart overhead
 ```
 
@@ -27,8 +27,8 @@ and supplies this token automatically for desktop runs.
 ### Tuning Variables
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MAX_UPLOAD_SIZE_MB` | 256 | Max uploaded PPT/PPTX size (capped at 512) |
-| `MAX_REQUEST_BODY_MB` | 272 | Maximum HTTP request body size (capped at 544) |
+| `MAX_UPLOAD_SIZE_MB` | 1024 | Max uploaded PPT/PPTX size (capped at 1024) |
+| `MAX_REQUEST_BODY_MB` | 272 | Maximum HTTP request body size (capped at 1056) |
 | `TRANSLATION_MAX_CONCURRENCY` | 8 | Max concurrent API calls |
 | `TRANSLATION_BATCH_SIZE` | 80 | Default batch size |
 | `TRANSLATION_MIN_BATCH_SIZE` | 60 | Min batch size |
@@ -77,8 +77,9 @@ from it, and the frontend loads the registry through the API at startup.
 | Provider | Model ID | Display Name |
 |----------|----------|--------------|
 | OpenAI | `gpt-5.6-sol` | GPT-5.6 Sol (High) |
+| OpenAI | `gpt-5.6-terra` | GPT-5.6 Terra (High) |
 | OpenAI | `gpt-5.6-luna` | GPT-5.6 Luna (High) |
-| Anthropic | `claude-opus-4-8` | Claude Opus 4.8 |
+| Anthropic | `claude-opus-5` | Claude Opus 5 |
 | Anthropic | `claude-sonnet-5` | Claude Sonnet 5 |
 | Anthropic | `claude-haiku-4-5-20251001` | Claude Haiku 4.5 |
 

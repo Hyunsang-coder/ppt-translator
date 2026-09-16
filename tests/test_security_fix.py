@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import io
+import math
 import zipfile
 
 from PIL import Image
 
 from src.chains.llm_factory import create_rate_limiter
-from src.utils.security import sanitize_html_content, validate_pptx_file
+from src.utils.security import (
+    MAX_IMAGE_PIXELS,
+    sanitize_html_content,
+    validate_pptx_file,
+)
 
 
 def _office_zip(*extra_entries: tuple[str, bytes]) -> io.BytesIO:
@@ -39,7 +44,9 @@ class TestOfficeArchiveValidation:
 
     def test_rejects_oversized_raster_image(self):
         image_buffer = io.BytesIO()
-        Image.new("1", (6500, 6500)).save(image_buffer, format="PNG")
+        # Just over the cap (1-bit PNG stays tiny on disk and in RAM).
+        side = int(math.sqrt(MAX_IMAGE_PIXELS)) + 10
+        Image.new("1", (side, side)).save(image_buffer, format="PNG")
         valid, message = validate_pptx_file(
             _office_zip(("ppt/media/oversized.png", image_buffer.getvalue()))
         )

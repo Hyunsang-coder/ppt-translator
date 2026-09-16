@@ -26,11 +26,13 @@ MAX_FILENAME_LENGTH = 200
 # ZIP metadata is attacker-controlled even when the uploaded file has a valid
 # PPTX signature. Keep these limits shared by every code path that opens an
 # Office Open XML archive so a small ZIP cannot expand without bound.
+# Sized for ~1 GiB image-heavy decks; the ratio/pixel checks below remain the
+# real bomb guards, not these totals.
 MAX_ZIP_ENTRIES = 10_000
-MAX_ZIP_ENTRY_UNCOMPRESSED_BYTES = 64 * 1024 * 1024
-MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES = 256 * 1024 * 1024
+MAX_ZIP_ENTRY_UNCOMPRESSED_BYTES = 256 * 1024 * 1024
+MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024
 MAX_ZIP_COMPRESSION_RATIO = 200
-MAX_IMAGE_PIXELS = 40_000_000
+MAX_IMAGE_PIXELS = 100_000_000
 _RASTER_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif"})
 
 

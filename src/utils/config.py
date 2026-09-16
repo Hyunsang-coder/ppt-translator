@@ -20,9 +20,10 @@ class Settings:
 
     openai_api_key: Optional[str]
     anthropic_api_key: Optional[str] = None
-    # Keep the default small enough that a malformed presentation cannot
-    # consume the sidecar's entire memory budget before validation.
-    max_upload_size_mb: int = 256
+    # Desktop-only sidecar (loopback, local user): the ceiling is 1 GiB so
+    # image-heavy decks pass. Decompression-bomb protection lives in the
+    # ZIP-content caps (security.py), not in this number.
+    max_upload_size_mb: int = 1024
     max_request_body_mb: int = 272
     batch_size: int = 80
     max_retries: int = 3
@@ -63,7 +64,7 @@ def get_settings() -> Settings:
     max_upload_raw = os.getenv("MAX_UPLOAD_SIZE_MB")
     if max_upload_raw:
         try:
-            max_upload_size_mb = max(1, min(512, int(max_upload_raw)))
+            max_upload_size_mb = max(1, min(1024, int(max_upload_raw)))
         except ValueError:
             LOGGER.warning(
                 "Invalid MAX_UPLOAD_SIZE_MB=%s; using default %d.",
@@ -71,11 +72,11 @@ def get_settings() -> Settings:
                 max_upload_size_mb,
             )
 
-    max_request_body_mb = min(544, max(base_settings.max_request_body_mb, max_upload_size_mb + 16))
+    max_request_body_mb = min(1056, max(base_settings.max_request_body_mb, max_upload_size_mb + 32))
     max_request_body_raw = os.getenv("MAX_REQUEST_BODY_MB")
     if max_request_body_raw:
         try:
-            max_request_body_mb = max(1, min(544, int(max_request_body_raw)))
+            max_request_body_mb = max(1, min(1056, int(max_request_body_raw)))
         except ValueError:
             LOGGER.warning(
                 "Invalid MAX_REQUEST_BODY_MB=%s; using default %d.",

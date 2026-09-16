@@ -11,9 +11,10 @@ the following security invariants when changing the runtime or release flow:
   is kept in Rust/frontend memory only and is sent as `X-Sidecar-Token`.
 - CORS origins are explicit. Never reintroduce `allow_origins=["*"]` or the
   removed `CORS_ALLOW_ALL` bypass.
-- The default PPT/PPTX upload limit is 256 MiB. The request-body middleware
-  runs before FastAPI multipart/JSON parsing, and per-upload limits remain in
-  place.
+- The default PPT/PPTX upload limit is 1024 MiB (desktop-only sidecar; bomb
+  protection lives in the ZIP-content caps, not this number). The request-body
+  middleware runs before FastAPI multipart/JSON parsing, and per-upload limits
+  remain in place.
 - All OOXML ZIP input must pass `validate_zip_archive()` before
   `python-pptx`, Pillow, or image compression reads entries. Preserve the
   entry-count, uncompressed-size, compression-ratio, path, and image-pixel
