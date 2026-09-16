@@ -21,12 +21,12 @@ except ModuleNotFoundError:  # pragma: no cover - Windows has no `resource`
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 from urllib.parse import quote
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.types import Message, Receive, Scope, Send
 
@@ -409,13 +409,13 @@ class FragmentEditRequest(BaseModel):
 
     action: Literal["edit", "retranslate", "ignore"] = "edit"
     # edit: the new target text (direct inline edit).
-    target: Optional[str] = None
+    target: Optional[str] = Field(None, max_length=MAX_FORM_TEXT_CHARS)
     # retranslate: free-form instruction (e.g. "더 짧게", "용어 X 사용").
-    instruction: Optional[str] = None
+    instruction: Optional[str] = Field(None, max_length=5000)
     # Propagate the change to fragments with an identical source.
     propagate_identical: bool = False
     # For ignore: the finding type being dismissed (for the rejected record).
-    finding_type: Optional[str] = None
+    finding_type: Optional[str] = Field(None, max_length=128)
 
 
 class FragmentEditResponse(BaseModel):
@@ -432,8 +432,8 @@ class FragmentProposalRequest(BaseModel):
     """Generate a direct-edit or retranslation candidate without applying it."""
 
     action: Literal["edit", "retranslate"]
-    target: Optional[str] = None
-    instruction: Optional[str] = None
+    target: Optional[str] = Field(None, max_length=MAX_FORM_TEXT_CHARS)
+    instruction: Optional[str] = Field(None, max_length=5000)
     propagate_identical: bool = False
 
 
@@ -465,8 +465,8 @@ class ApplyProposalResponse(BaseModel):
 
 class PartialApplyRequest(BaseModel):
     indices: List[int]
-    old_phrase: str
-    new_phrase: str
+    old_phrase: str = Field(max_length=5000)
+    new_phrase: str = Field(max_length=5000)
     expected_revision: int
 
 
@@ -478,7 +478,9 @@ class BlockEditRequest(BaseModel):
     """Apply new text to several paragraphs of one block in a single revision."""
 
     # fragment index -> new target text
-    edits: Dict[int, str] = Field(..., min_length=1, max_length=200)
+    edits: Dict[int, Annotated[str, Field(max_length=MAX_FORM_TEXT_CHARS)]] = Field(
+        ..., min_length=1, max_length=200
+    )
     expected_revision: int
     # Carry each edited paragraph's new text to fragments that repeat it.
     propagate_identical: bool = False
@@ -490,7 +492,7 @@ class BlockRetranslateRequest(BaseModel):
     # The block's fragment indices, in any order. `MAX_MERGE_PARAGRAPHS` on the
     # client is 4; the cap here only keeps one request from joining a whole deck.
     indices: List[int] = Field(..., min_length=2, max_length=8)
-    instruction: Optional[str] = None
+    instruction: Optional[str] = Field(None, max_length=5000)
 
 
 class BlockRetranslateResponse(BaseModel):
@@ -506,7 +508,7 @@ class ReviewDismissalEntry(BaseModel):
     """One (fragment, finding type) pair to hide from — or return to — the queue."""
 
     index: int
-    finding_type: str
+    finding_type: str = Field(max_length=128)
 
 
 class ReviewDismissalRequest(BaseModel):
@@ -605,6 +607,16 @@ async def _read_upload_limited(
             raise HTTPException(status_code=413, detail=too_large_detail)
         chunks.append(chunk)
     return b"".join(chunks)
+
+
+async def _close_upload_quietly(upload: Optional[UploadFile]) -> None:
+    """Close an upload's spooled file, ignoring already-closed/absent handles."""
+    if upload is None:
+        return
+    try:
+        await upload.close()
+    except Exception:
+        LOGGER.debug("Ignoring upload close failure", exc_info=True)
 
 
 def get_model_display_name(model_id: str) -> str:
@@ -968,6 +980,8 @@ async def parse_glossary_file(
     except Exception as exc:
         LOGGER.exception("Failed to parse glossary file: %s", exc)
         raise HTTPException(status_code=400, detail="Failed to parse glossary file")
+    finally:
+        await _close_upload_quietly(glossary_file)
 
     response_entries = [
         GlossaryEntryResponse(
@@ -1275,6 +1289,12 @@ async def create_job(
         else:
             LOGGER.exception("Failed to create translation job: %s", exc)
         raise HTTPException(status_code=500, detail="번역 작업 생성 중 오류가 발생했습니다.")
+    finally:
+        # Release Starlette's spooled temp files promptly instead of relying
+        # on garbage collection under load.
+        await _close_upload_quietly(ppt_file)
+        await _close_upload_quietly(glossary_file)
+        await _close_upload_quietly(rules_file)
 
 
 @app.get("/api/v1/jobs/{job_id}", response_model=JobStatusResponse)
@@ -1329,7 +1349,13 @@ async def download_job_result(job_id: str) -> Response:
         raise HTTPException(status_code=500, detail="No output file available")
 
     job.output_file.seek(0)
-    content = job.output_file.read()
+
+    def _iter_output():
+        while True:
+            chunk = job.output_file.read(1024 * 1024)
+            if not chunk:
+                break
+            yield chunk
 
     filename = job.output_filename or "translated.pptx"
     encoded_filename = quote(filename, safe="")
@@ -1350,8 +1376,10 @@ async def download_job_result(job_id: str) -> Response:
             }
         )
 
-    return Response(
-        content=content,
+    # Stream in 1MB chunks instead of copying the whole buffer with .read()
+    # so concurrent downloads don't multiply peak memory per request.
+    return StreamingResponse(
+        _iter_output(),
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
         headers=headers,
     )
@@ -2065,6 +2093,8 @@ async def extract_text(
     except Exception as exc:
         LOGGER.exception("Failed to extract text: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to extract text")
+    finally:
+        await _close_upload_quietly(ppt_file)
 
 
 # ============================================================================

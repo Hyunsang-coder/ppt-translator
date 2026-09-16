@@ -12,6 +12,7 @@ as a direct local development entrypoint.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 # NOTE: `api` and `uvicorn` are intentionally NOT imported at module top level.
@@ -58,8 +59,33 @@ def _emit_ready(port: int) -> None:
             continue
 
 
+def _is_loopback_host(host: str) -> bool:
+    """Return whether *host* binds only to the local machine.
+
+    Mirrors ``api._is_loopback_bind_host`` without importing the app (which
+    would defeat this module's lazy heavy-import strategy).
+    """
+    if host.lower() == "localhost":
+        return True
+    try:
+        import ipaddress
+
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def main(argv: list[str] | None = None) -> None:
     args = _parse_args(argv if argv is not None else sys.argv[1:])
+
+    # Same rule as ``api.py __main__``: never serve the unauthenticated API
+    # to the LAN. Rust always binds 127.0.0.1 with a token; this only bites
+    # when the binary is launched by hand with --host 0.0.0.0 and no token.
+    if not _is_loopback_host(args.host) and not os.environ.get("SIDECAR_AUTH_TOKEN"):
+        raise SystemExit(
+            "Refusing to bind the unauthenticated API outside loopback. "
+            "Set SIDECAR_AUTH_TOKEN before using --host for network access."
+        )
 
     # Bind the socket up front so we can report the actual port even when the
     # caller passed --port 0 (OS-assigned). uvicorn can run on a preopened sock.
