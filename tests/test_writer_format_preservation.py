@@ -1,6 +1,6 @@
 """Regression tests for hyperlink and manual line-break preservation.
 
-Covers two writer bugs where ``run.text = ...`` was used directly:
+Covers writer bugs where ``run.text = ...`` was used directly:
 
 - A hyperlinked run merged with adjacent plain-text runs (``_rpr_key``
   ignored ``<a:hlinkClick>``), turning the whole paragraph into one link.
@@ -8,6 +8,10 @@ Covers two writer bugs where ``run.text = ...`` was used directly:
   the first ``<a:t>``, so stale siblings leaked source-language text and
   raw ``\\n`` never rendered as a break. Extraction dropped post-break
   text as well (``run.text`` reads the first ``<a:t>`` only).
+- Breaks nested inside ``<a:r>`` (multiple ``<a:t>`` per run): passes XSD
+  validation but makes PowerPoint for macOS demand a file repair that
+  deletes the break and all following text. Strict OOXML allows exactly one
+  ``<a:t>`` per run, so breaks must be ``<a:p>``-level siblings.
 """
 
 from __future__ import annotations
@@ -110,17 +114,21 @@ class WriterManualBreakTestCase(unittest.TestCase):
 
         self._apply(paragraph, "Hello\nWorld", "안녕\n세계")
 
-        xml = _run_xml(paragraph.runs[0])
+        xml = etree.tostring(paragraph._p, encoding="unicode")
         self.assertNotIn("Hello", xml)
         self.assertNotIn("World", xml)
+        # Strict CT_RegularTextRun: at most one <a:t> per run, breaks as
+        # <a:p>-level siblings — never nested inside a run.
+        for r in paragraph.runs:
+            self.assertLessEqual(
+                len(r._r.findall(f"{{{_A}}}t")), 1
+            )
+            self.assertEqual(len(r._r.findall(f"{{{_A}}}br")), 0)
+        self.assertEqual(len(paragraph._p.findall(f"{{{_A}}}br")), 1)
         texts = [
-            el.text or ""
-            for el in paragraph.runs[0]._r.findall(f"{{{_A}}}t")
+            (r._r.find(f"{{{_A}}}t").text or "") for r in paragraph.runs
         ]
         self.assertEqual(texts, ["안녕", "세계"])
-        self.assertEqual(
-            len(paragraph.runs[0]._r.findall(f"{{{_A}}}br")), 1
-        )
 
     def test_single_line_translation_drops_original_break(self):
         """Flattened (single-line) translations must not leak the old lines."""
@@ -183,6 +191,61 @@ class WriterHyperlinkTestCase(unittest.TestCase):
         # text lives in the plain runs (link dropped, text preserved).
         self.assertEqual(len(linked_runs), 1)
         self.assertNotEqual(linked_runs[0].text, translation)
+
+    def _child_order(self, run) -> list:
+        return [
+            etree.QName(child).localname
+            for child in run._r
+            if isinstance(child.tag, str)
+        ]
+
+    def test_rewritten_text_stays_before_hlink(self):
+        """<a:t> must precede <a:hlinkClick> after a single-line write."""
+        prs = Presentation()
+        slide, paragraph = _add_paragraph(prs)
+        linked = paragraph.add_run()
+        linked.text = "Click"
+        _append_hyperlink(linked, slide)
+
+        info = types.SimpleNamespace(
+            paragraph=paragraph,
+            original_text="Click",
+            is_note=False,
+            slide_index=0,
+            shape_index=0,
+            paragraph_index=0,
+        )
+        PPTWriter().apply_translations(
+            [info], ["클릭"], Presentation(), text_fit_mode="none"
+        )
+
+        order = self._child_order(paragraph.runs[0])
+        self.assertIn("t", order)
+        self.assertIn("hlinkClick", order)
+        self.assertLess(order.index("t"), order.index("hlinkClick"))
+
+    def test_multiline_split_keeps_valid_run_structure(self):
+        """Split runs keep one <a:t> each, ahead of any hyperlink."""
+        from src.core.ppt_writer import _set_run_text
+
+        prs = Presentation()
+        slide, paragraph = _add_paragraph(prs)
+        linked = paragraph.add_run()
+        linked.text = "A"
+        _append_hyperlink(linked, slide)
+
+        _set_run_text(linked, "첫째\n둘째", paragraph)
+
+        brs = paragraph._p.findall(f"{{{_A}}}br")
+        self.assertEqual(len(brs), 1)
+        texts = [
+            (r._r.find(f"{{{_A}}}t").text or "") for r in paragraph.runs
+        ]
+        self.assertEqual(texts, ["첫째", "둘째"])
+        for r in paragraph.runs:
+            order = self._child_order(r)
+            self.assertEqual(order.count("t"), 1)
+            self.assertLess(order.index("t"), order.index("hlinkClick"))
 
 
 if __name__ == "__main__":

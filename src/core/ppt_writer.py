@@ -46,6 +46,21 @@ _LINE_HEIGHT_FACTOR = 1.2
 
 _A_NS = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
 
+# Child tags of <a:r>. Strict OOXML (CT_RegularTextRun) allows exactly one
+# <a:t> per run and no <a:br/> inside runs — breaks live between runs as
+# children of <a:p>. PowerPoint for macOS enforces this and demands a repair
+# (dropping the break and all following text) when it is violated.
+_R_TAG = f"{{{_A_NS['a']}}}r"
+_T_TAG = f"{{{_A_NS['a']}}}t"
+_BR_TAG = f"{{{_A_NS['a']}}}br"
+_RPR_TAG = f"{{{_A_NS['a']}}}rPr"
+_HLINK_TAGS = frozenset({
+    f"{{{_A_NS['a']}}}hlinkClick",
+    f"{{{_A_NS['a']}}}hlinkMouseOver",
+})
+# Run content replaced on every write (text + intra-run breaks).
+_RUN_CONTENT_TAGS = frozenset({_T_TAG, _BR_TAG})
+
 _NEUTRAL_SCHEME_COLORS = frozenset({
     "tx1", "tx2", "dk1", "dk2", "lt1", "lt2", "bg1", "bg2",
 })
@@ -90,8 +105,65 @@ def _rpr_key(run) -> str:
     return key
 
 
-def _set_run_text(run, text: str) -> None:
-    """Write ``text`` into a run, mapping newlines to ``<a:br/>`` breaks.
+def _new_t_element(line: str):
+    """Build a single ``<a:t>`` element preserving surrounding whitespace."""
+    t = OxmlElement("a:t")
+    t.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+    t.text = line
+    return t
+
+
+def _insert_t_before_hlink(r, t) -> None:
+    """Insert ``<a:t>`` ahead of any hyperlink elements.
+
+    Text content must precede ``<a:hlinkClick>`` / ``<a:hlinkMouseOver>``.
+    Appending unconditionally placed the text after the hyperlink whenever a
+    linked run was rewritten.
+    """
+    for child in r:
+        if isinstance(child.tag, str) and child.tag in _HLINK_TAGS:
+            child.addprevious(t)
+            return
+    r.append(t)
+
+
+def _replace_run_text_single(r, line: str) -> None:
+    """Write one line into a run, keeping ``rPr`` and hyperlinks in place."""
+    for child in list(r):
+        if isinstance(child.tag, str) and child.tag in _RUN_CONTENT_TAGS:
+            r.remove(child)
+    _insert_t_before_hlink(r, _new_t_element(line))
+
+
+def _replace_run_with_lines(paragraph, run, lines: list[str]) -> None:
+    """Replace one run with per-line runs joined by paragraph-level breaks.
+
+    Each replacement run carries exactly one ``<a:t>`` (cloned from the
+    original, so formatting and hyperlink targets are preserved) and the
+    ``<a:br/>`` elements sit between runs as children of ``<a:p>`` — the only
+    serialization PowerPoint accepts.
+    """
+    p = paragraph._p
+    r = run._r
+    new_nodes = []
+    for index, line in enumerate(lines):
+        if index > 0:
+            new_nodes.append(OxmlElement("a:br"))
+        clone = deepcopy(r)
+        for child in list(clone):
+            if isinstance(child.tag, str) and child.tag in _RUN_CONTENT_TAGS:
+                clone.remove(child)
+        _insert_t_before_hlink(clone, _new_t_element(line))
+        new_nodes.append(clone)
+    insert_at = p.index(r)
+    for offset, node in enumerate(new_nodes):
+        # insert_at precedes <a:endParaRPr>, so every node lands before it.
+        p.insert(insert_at + offset, node)
+    p.remove(r)
+
+
+def _set_run_text(run, text: str, paragraph=None) -> None:
+    """Write ``text`` into a run, mapping newlines to paragraph-level breaks.
 
     python-pptx's ``run.text`` setter only replaces the first ``<a:t>``
     element: stale ``<a:br/>`` / ``<a:t>`` siblings survive (leaking
@@ -99,8 +171,15 @@ def _set_run_text(run, text: str) -> None:
     is not rendered as a line break by PowerPoint. Rewrite the run's text
     content fully instead; formatting (``rPr``) and hyperlinks are kept.
 
+    Multi-line text splits the run: one single-``<a:t>`` run per line with
+    ``<a:br/>`` siblings under ``<a:p>``. Nesting breaks inside ``<a:r>``
+    passes XSD validation but makes PowerPoint for macOS demand a file repair
+    that deletes the break and all following text.
+
     The replacement nodes are built before touching the run so a failure
-    leaves the original content intact for the fallback below.
+    leaves the original content intact for the fallback below. When
+    ``paragraph`` is unavailable, multi-line text falls back to a raw newline
+    inside a single ``<a:t>`` (tolerated, renders as a space).
     """
     r = getattr(run, "_r", None)
     if r is None or not etree.iselement(r):
@@ -111,26 +190,14 @@ def _set_run_text(run, text: str) -> None:
         run.text = text
         return
     try:
-        ns = _A_NS["a"]
-        new_children = []
         lines = (
             (text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
         )
-        for index, line in enumerate(lines):
-            if index > 0:
-                new_children.append(OxmlElement("a:br"))
-            t = OxmlElement("a:t")
-            t.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
-            t.text = line
-            new_children.append(t)
-        for child in list(r):
-            if isinstance(child.tag, str) and child.tag in (
-                f"{{{ns}}}t",
-                f"{{{ns}}}br",
-            ):
-                r.remove(child)
-        for child in new_children:
-            r.append(child)
+        p = getattr(paragraph, "_p", None)
+        if len(lines) > 1 and etree.iselement(p):
+            _replace_run_with_lines(paragraph, run, lines)
+        else:
+            _replace_run_text_single(r, "\n".join(lines))
     except Exception:
         run.text = text
 
@@ -206,7 +273,7 @@ def _choose_fallback_group(groups) -> int:
     return max(candidates, key=lambda idx: _group_text_len(groups[idx]))
 
 
-def _apply_fallback_format(translation: str, groups, runs) -> None:
+def _apply_fallback_format(translation: str, groups, runs, paragraph=None) -> None:
     """Apply all translated text to one safe style group.
 
     This intentionally avoids distributing text by character position when
@@ -219,8 +286,8 @@ def _apply_fallback_format(translation: str, groups, runs) -> None:
     target_run = groups[group_idx][0] if groups and groups[group_idx] else runs[0]
 
     for run in runs:
-        _set_run_text(run, "")
-    _set_run_text(target_run, translation)
+        _set_run_text(run, "", paragraph)
+    _set_run_text(target_run, translation, paragraph)
 
 
 def _set_run_rpr(run, src_rpr) -> None:
@@ -270,17 +337,19 @@ def _apply_colored_segments(paragraph, colored_segments, groups, runs) -> bool:
 
         # Clear all existing runs: set text to empty
         for run in runs:
-            _set_run_text(run, "")
+            _set_run_text(run, "", paragraph)
 
-        # Assign segments to runs.
+        # Assign segments to runs. Formatting is applied before text: a
+        # multi-line segment splits its run (cloning the current rPr), so the
+        # style must already be in place before the split.
         # Strategy: for simple ordered case (segments <= existing runs),
         # reuse existing runs.  For reordered/split case, reuse what we can,
         # then the last run for remaining text.
         if len(colored_segments) <= len(runs):
             for i, seg in enumerate(colored_segments):
-                _set_run_text(runs[i], seg.text)
                 # Copy formatting from the correct group
                 _set_run_rpr(runs[i], group_rprs[seg.group_index])
+                _set_run_text(runs[i], seg.text, paragraph)
         else:
             # More segments than runs — need additional runs.
             # Use available runs first, then duplicate the last run.
@@ -290,8 +359,8 @@ def _apply_colored_segments(paragraph, colored_segments, groups, runs) -> bool:
                 else:
                     run = paragraph.add_run()
                     runs.append(run)
-                _set_run_text(run, seg.text)
                 _set_run_rpr(run, group_rprs[seg.group_index])
+                _set_run_text(run, seg.text, paragraph)
 
         return True
     except Exception:
@@ -601,21 +670,43 @@ def _estimate_text_frame_overflow_ratio(text_frame) -> float | None:
         if not runs:
             finish_line()
         else:
-            for run in runs:
-                font_pt = (
-                    run.font.size.pt
-                    if run.font.size is not None
-                    else fallback_font_pt
-                )
-                line_font_pt = max(line_font_pt, font_pt)
-                # run.text only returns the first <a:t>; use the full text
-                # so manual breaks (<a:br/>) count as line breaks.
-                for character in run_text_with_breaks(run) or "":
-                    if character in {"\n", "\v"}:
-                        finish_line()
+            # Walk the paragraph XML in order so paragraph-level breaks
+            # (<a:br/> siblings of <a:r>, the only serialization PowerPoint
+            # accepts) end the current line exactly where they appear.
+            # Run font sizes come from rPr directly: equivalent to
+            # run.font.size.pt without depending on wrapper proxies.
+            p_el = getattr(paragraph, "_p", None)
+            if p_el is not None and etree.iselement(p_el):
+                for child in p_el:
+                    if not isinstance(child.tag, str):
                         continue
-                    line_width_pt += _character_width_factor(character) * font_pt
-            finish_line()
+                    if child.tag == _BR_TAG:
+                        finish_line()
+                    elif child.tag == _R_TAG:
+                        font_pt = _run_element_font_pt(child, fallback_font_pt)
+                        line_font_pt = max(line_font_pt, font_pt)
+                        for character in _run_element_text(child) or "":
+                            if character in {"\n", "\v"}:
+                                finish_line()
+                                continue
+                            line_width_pt += _character_width_factor(character) * font_pt
+                finish_line()
+            else:  # pragma: no cover - non-pptx test doubles
+                for run in runs:
+                    font_pt = (
+                        run.font.size.pt
+                        if run.font.size is not None
+                        else fallback_font_pt
+                    )
+                    line_font_pt = max(line_font_pt, font_pt)
+                    # run.text only returns the first <a:t>; use the full text
+                    # so manual breaks (<a:br/>) count as line breaks.
+                    for character in run_text_with_breaks(run) or "":
+                        if character in {"\n", "\v"}:
+                            finish_line()
+                            continue
+                        line_width_pt += _character_width_factor(character) * font_pt
+                finish_line()
 
         required_height_pt += sum(
             wrapped_lines * font_pt * _LINE_HEIGHT_FACTOR
@@ -623,6 +714,30 @@ def _estimate_text_frame_overflow_ratio(text_frame) -> float | None:
         )
 
     return required_height_pt / usable_height_pt
+
+
+def _run_element_font_pt(r_el, fallback: float) -> float:
+    """Read a run's explicit font size from its ``rPr`` (``sz`` = 1/100 pt)."""
+    rPr = r_el.find(_RPR_TAG)
+    if rPr is None:
+        return fallback
+    try:
+        return int(rPr.get("sz")) / 100.0
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _run_element_text(r_el) -> str:
+    """Full text of a run element, mapping intra-run breaks to newlines."""
+    parts: list[str] = []
+    for child in r_el:
+        if not isinstance(child.tag, str):
+            continue
+        if child.tag == _T_TAG:
+            parts.append(child.text or "")
+        elif child.tag == _BR_TAG:
+            parts.append("\n")
+    return "".join(parts)
 
 
 def _fallback_overflow_ratio(original_len: int, translated_len: int) -> float:
@@ -787,9 +902,9 @@ class PPTWriter:
 
             if len(groups) == 1:
                 # Uniform formatting: put all text in first run, clear the rest
-                _set_run_text(runs[0], translation)
+                _set_run_text(runs[0], translation, paragraph)
                 for run in runs[1:]:
-                    _set_run_text(run, "")
+                    _set_run_text(run, "", paragraph)
             elif color_distributions is not None and para_idx in color_distributions:
                 dist = color_distributions[para_idx]
                 if dist and hasattr(dist[0], "group_index"):
@@ -798,18 +913,18 @@ class PPTWriter:
                     if applied:
                         color_applied_count += 1
                     else:
-                        _apply_fallback_format(translation, groups, runs)
+                        _apply_fallback_format(translation, groups, runs, paragraph)
                 elif len(dist) == len(groups):
                     # Legacy list[str] distribution (contiguous groups)
                     for group, group_text in zip(groups, dist):
-                        _set_run_text(group[0], group_text)
+                        _set_run_text(group[0], group_text, paragraph)
                         for run in group[1:]:
-                            _set_run_text(run, "")
+                            _set_run_text(run, "", paragraph)
                     color_applied_count += 1
                 else:
-                    _apply_fallback_format(translation, groups, runs)
+                    _apply_fallback_format(translation, groups, runs, paragraph)
             else:
-                _apply_fallback_format(translation, groups, runs)
+                _apply_fallback_format(translation, groups, runs, paragraph)
 
             # Track text frames for fitting
             if text_fit_mode != _MODE_NONE and not paragraph_info.is_note:
