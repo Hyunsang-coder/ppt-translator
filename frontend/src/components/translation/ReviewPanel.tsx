@@ -141,6 +141,8 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
     if (!complete) setReopened(false);
   }, [complete]);
   const outcomes = Object.values(queueState.resolved);
+  const showDone =
+    queueState.mode !== "list" && partialCandidates.length === 0 && complete && !reopened;
   const suggestion = useMemo(
     () => (subject && currentFinding ? suggestFix(subject.target, currentFinding.finding) : null),
     [subject, currentFinding]
@@ -671,14 +673,16 @@ export function ReviewPanel({ jobId, onClose, onDownload }: ReviewPanelProps) {
               </div>
             )}
 
-            <FinishBar
-              remaining={remaining}
-              dirty={dirty}
-              saving={saving}
-              busy={busy}
-              onSave={save}
-              onSkipAll={skipAllRemaining}
-            />
+            {!showDone && (
+              <FinishBar
+                remaining={remaining}
+                dirty={dirty}
+                saving={saving}
+                busy={busy}
+                onSave={save}
+                onSkipAll={skipAllRemaining}
+              />
+            )}
           </div>
 
           <GlossaryPane
