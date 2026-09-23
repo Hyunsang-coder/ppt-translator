@@ -46,7 +46,7 @@
 - `translation_chain.py`: LangChain pipeline with structured output (`TranslationOutput`), batch API, tenacity retry. Fail-fast validation on missing results
 - `color_distribution_chain.py`: ID-addressed semantic style mapping for final translated strings
 - `context_manager.py`: Global presentation context for consistency
-- `summarization_chain.py`: Context/instructions generation (GPT-5.6 Luna / Haiku 4.5)
+- `summarization_chain.py`: Context/instructions generation (GPT-6 Luna / Haiku 4.5)
 
 ## Utilities (`src/utils/`)
 - `config.py`: Settings from environment

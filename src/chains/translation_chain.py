@@ -167,7 +167,7 @@ def create_translation_chain(
     """Create a LangChain sequence for translation.
 
     Args:
-        model_name: Model identifier (e.g., gpt-5.6-sol, claude-sonnet-5).
+        model_name: Model identifier (e.g., gpt-6-sol, claude-sonnet-5).
         source_lang: Display name of the source language.
         target_lang: Display name of the target language.
         context: Optional background information about the presentation.

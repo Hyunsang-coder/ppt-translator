@@ -1076,7 +1076,7 @@ class TranslateColoredParagraphsServiceTestCase(unittest.TestCase):
             source_lang="한국어",
             target_lang="영어",
             provider="openai",
-            model="gpt-5.6-sol",
+            model="gpt-6-sol",
         )
 
         result = service.translate(request)
@@ -1085,7 +1085,7 @@ class TranslateColoredParagraphsServiceTestCase(unittest.TestCase):
         mock_fix_colors.assert_called_once()
         self.assertEqual(
             mock_fix_colors.call_args.kwargs["model_name"],
-            "gpt-5.6-sol",
+            "gpt-6-sol",
         )
 
 
@@ -1196,7 +1196,7 @@ class ColorDistributionModelSelectionTestCase(unittest.TestCase):
 
         model = TranslationService._color_distribution_model(
             "anthropic",
-            "claude-opus-5",
+            "claude-opus-5-5",
         )
 
         self.assertEqual(model, "claude-haiku-4-5-20251001")
